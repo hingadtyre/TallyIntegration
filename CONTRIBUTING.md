@@ -4,6 +4,8 @@ This is a conventional React and TypeScript application with a local Node.js bac
 
 The current build reviews inventory and exports Tally data read-only. Marketplace publishing remains disabled. See [README](README.md) for the delivered scope and [customer setup](docs/customer-setup.md) for HingadTyre installation steps. Tally does not need to run on the development machine.
 
+Before implementation, follow the [documentation workflow](docs/agents/documentation.md) to select the relevant requirements, decisions and integration evidence. Use the same workflow to update affected docs alongside the change and record the documentation impact at handoff.
+
 ## Start with the sample workspace
 
 Use Node.js 24 and install the pinned dependencies with `npm ci`. Then:

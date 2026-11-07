@@ -1,6 +1,6 @@
 # Inventory synchronization design interview
 
-Status: product behavior, consolidated architecture and dashboard layout approved on 2026-11-07. Local foundation implementation has begun; authenticated marketplace API access remains pending. The approved baseline is in [architecture.md](architecture.md).
+Status: design interview and supporting evidence, with product behavior, consolidated architecture and dashboard layout approved on 2026-11-07. The initial local foundation is implemented. Use [architecture.md](architecture.md) for the approved target behavior and [README](../../README.md) for delivered capabilities and remaining limitations. Candidate sections below preserve design history rather than describing a fully implemented application.
 
 ## Requested outcome
 
@@ -25,8 +25,8 @@ Synchronize stock from Tally to Flipkart initially, with support for other marke
 
 ## Observed project and account context
 
-- The repository currently has a README and agent guidance, with no application code to constrain the architecture.
-- The open Flipkart Seller Dashboard displays seller account HINGADTYRES. This is a UI display name, not a verified API seller identifier.
+- At the start of the design interview, the repository contained a README and agent guidance, with no application code constraining the architecture. The application has since been implemented to the scope recorded in README.
+- During the design interview, the Flipkart Seller Dashboard displayed seller account HINGADTYRES. This is a historical UI observation, not a verified API seller identifier.
 - Account identification does not establish API authorization. Account registration/connection remains outstanding until the setup flow and required access are verified.
 
 ## Candidate user experience
@@ -51,7 +51,7 @@ Synchronize stock from Tally to Flipkart initially, with support for other marke
 - Version proposals against source stock and rules so a stale preview cannot overwrite a newer automatic update.
 - Serialize or supersede stock jobs per destination; retries must not replay obsolete quantities.
 - Manual operations and automatic updates must use the same calculation and publication path, with explicit override and pause semantics.
-- Local Windows hosting and the TypeScript/React/Node/SQLite stack are accepted. Exact packages, job implementation, and Windows process supervision details remain to be designed.
+- Local Windows hosting and the TypeScript/React/Node/SQLite stack are accepted. Application packages have since been selected and pinned; durable publication jobs and Windows process supervision remain implementation work.
 
 ## Accepted decisions from the first interview round
 
@@ -147,7 +147,7 @@ Keep stock policy (Auto, Limited sales, Kept out of stock) separate from publica
 - A C#/.NET backend was considered for its first-party Windows Service support; the accepted TypeScript approach trades that native hosting convenience for one application language across dashboard and backend.
 - The local server should bind to loopback by default. Network/remote dashboard access is a separate future requirement.
 
-Supporting references: [TypeScript overview](https://www.typescriptlang.org/docs/handbook/typescript-from-scratch.html), [Node TypeScript execution and lack of automatic type checking](https://nodejs.org/api/typescript.html), [SQLite local use and concurrency limits](https://www.sqlite.org/whentouse.html), [Windows Service hosting requirements](https://learn.microsoft.com/en-us/windows/win32/services/service-programs), and [.NET Windows Worker Services](https://learn.microsoft.com/en-us/dotnet/core/extensions/windows-service). Select a supported Node LTS release at implementation time; package versions are not yet selected.
+Supporting references: [TypeScript overview](https://www.typescriptlang.org/docs/handbook/typescript-from-scratch.html), [Node TypeScript execution and lack of automatic type checking](https://nodejs.org/api/typescript.html), [SQLite local use and concurrency limits](https://www.sqlite.org/whentouse.html), [Windows Service hosting requirements](https://learn.microsoft.com/en-us/windows/win32/services/service-programs), and [.NET Windows Worker Services](https://learn.microsoft.com/en-us/dotnet/core/extensions/windows-service). The selected runtime range and pinned packages are now declared in [package.json](../../package.json) and [package-lock.json](../../package-lock.json).
 
 ## Future remote deployment
 
@@ -199,9 +199,9 @@ SQLite provides supported snapshot mechanisms through its [Online Backup API](ht
 
 ## Design tree and unanswered decisions
 
-### Final review
+### Completed design review
 
-The three remaining product rules (Pause precedence, approved-order allowance consumption, and report-only marketplace differences for normal Auto) are accepted. The next review is the consolidated architecture and dashboard layout, not another round of minor implementation approvals. Overall implementation authorization remains pending the user's confirmation of shared understanding.
+The final product rules (Pause precedence, approved-order allowance consumption, and report-only marketplace differences for normal Auto), consolidated architecture and dashboard layout were accepted on 2026-11-07. The user authorized implementation and the initial foundation has been delivered. Continue within that approved scope; bring back only unresolved material choices exposed by new work or integration evidence.
 
 ### Integration evidence and implementation follow-through
 
@@ -210,8 +210,8 @@ These are engineering checks or details, not additional blanket user-approval ga
 - Verify installed Tally version, source identities, units/godowns, item-by-location extraction, rename/restore behavior, and performance. Read resulting stock for sales, purchases, edited/deleted bills and adjustments.
 - Establish authenticated Flipkart access for the intended account; verify listing packages, stock location/available/pending semantics, order discovery/statuses, rate limits, and allowance activation/reconciliation.
 - Define durable job ordering, proposal versions, partial-result reporting, retry/recovery and deduplication. Unresolved integration facts may expose a concrete product trade-off later; bring back only those decisions.
-- Select supported packages and the Windows startup/restart mechanism; implement protected credential storage, backup/restore, and controlled upgrades. Keep retained operational state independent of display-log retention.
-- Review the dashboard layout and consolidated specification with the user before application implementation. Do not treat approval of an individual interview answer as approval of the complete design.
+- Maintain the selected packages and choose the Windows startup/restart mechanism; implement protected credential storage, scheduled backup/restore, and controlled upgrades. Manual verified backups are available within the current README scope. Keep retained operational state independent of display-log retention.
+- Use the approved dashboard layout and consolidated architecture as implementation inputs. Record subsequently authorized changes in the current design docs instead of reopening completed approval steps.
 - Multi-user roles, additional marketplaces and other category policies are future scope unless requested; preserve the agreed extension points without silently expanding the first release.
 
 ## Evidence to verify during integration discovery

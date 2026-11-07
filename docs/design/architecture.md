@@ -1,6 +1,6 @@
 # Tally to marketplace inventory architecture
 
-**Status: Approved implementation baseline.** The seller approved the consolidated architecture and dashboard layout on 2026-11-07. Local foundation and read-only integration work is underway. Live marketplace publishing remains unavailable until authenticated integration checks pass. The decisions below incorporate the completed design interview, including Pause, allowance consumption, and Auto publication.
+**Status: Approved target architecture.** The seller approved the consolidated architecture and dashboard layout on 2026-11-07 and authorized implementation. The initial local foundation is implemented; [README](../../README.md) records its delivered scope and remaining limitations. The diagram and workflows below include unfinished capabilities. Live marketplace publishing still requires connector and durable publication/recovery implementation as well as authenticated verification. The decisions incorporate the completed design interview, including Pause, allowance consumption, and Auto publication.
 
 ## Outcome and scope
 
@@ -37,7 +37,7 @@ flowchart LR
 | Adapters                 | Hide Tally and marketplace authentication, transport, response validation, pagination, locations and API-specific batch/results handling. Preserve source identifiers and observation times.        |
 | Storage                  | Own schema migrations, bounded transactions, observations, operational records, business history and consistent backups. Keep business policy independent of SQLite-specific queries.               |
 
-The backend continues when the dashboard closes. Windows startup, controlled shutdown, restart after failure, upgrades and protected credential access must be packaged and verified. A particular service wrapper, framework, ORM or job package is not selected. Choose supported Node and package versions during implementation; type checking does not replace validation of external responses.
+The backend continues when the dashboard closes. Windows startup, controlled shutdown, restart after failure, upgrades and protected credential access must be packaged and verified. The application runtime and dependency versions are selected in [package.json](../../package.json) and [package-lock.json](../../package-lock.json). Windows lifecycle hosting and durable publication-job implementation remain to be selected and delivered; type checking does not replace validation of external responses.
 
 ## Durable identities and state
 
@@ -130,7 +130,7 @@ Keep the dashboard behind the backend API and connectors/storage behind module b
 
 1. **Consolidated review — complete:** architecture and dashboard layout approved on 2026-11-07.
 2. **Read-only integration discovery:** verify Tally/account identities, stock locations, pack evidence and order semantics using the actual installation and authorized account.
-3. **Local foundation and review workflow:** settings, storage migrations, source observations, mapping validation, dashboard, drafts and scoped bulk review.
+3. **Initial local foundation and review workflow — delivered:** settings, storage migrations, source observations, dashboard, drafts and scoped bulk review, within the [current README scope](../../README.md). Live mapping/location evidence and the later publication workflows remain outstanding.
 4. **Manual publishing and durable recovery:** per-destination results, verification, ordering, stale-proposal protection and safe mapping removal.
 5. **Automation and allowances:** polling, Pause/Resume, deduplicated order accounting, generation/baseline reconciliation and hold enforcement.
 6. **Operational readiness:** verified Windows lifecycle, credentials, backups/restore, history/logging and controlled end-to-end acceptance.
