@@ -1,0 +1,3 @@
+# Edit this file to change the defaults used by the branch-creation skill.
+base_branch: main
+branch_prefix: dahinger-
