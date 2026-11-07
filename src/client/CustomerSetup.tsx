@@ -10,9 +10,9 @@ export function CustomerSetup() {
         <li>
           <strong>Prepare Tally on the customer's computer.</strong>
           <span>
-            Open the intended company. In supported TallyPrime versions, use F1 (Help) → Settings →
-            Advanced Configuration to enable the HTTP server, normally on port 9000. Follow Tally's
-            restart prompt if shown; menus vary by version.
+            Open the intended company. Use F1 (Help) → Settings → Connectivity → Client/Server
+            Configuration to enable the HTTP server, normally on port 9000. Older versions may use
+            Advanced Configuration. Follow the installed version's labels and restart prompt.
           </span>
         </li>
         <li>
@@ -50,7 +50,11 @@ export function CustomerSetup() {
         </li>
       </ol>
       <p>
-        <a href="https://help.tallysolutions.com/xml-integration/" target="_blank" rel="noreferrer">
+        <a
+          href="https://help.tallysolutions.com/building-tunnel-based-connectivity-for-tallyprime-integrations/"
+          target="_blank"
+          rel="noreferrer"
+        >
           Tally connection guide ↗
         </a>{' '}
         ·{' '}
