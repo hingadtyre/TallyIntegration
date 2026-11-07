@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.tools/
+.cache/
+.data/
+coverage/
+package-lock.json
+AGENTS.md
+**/AGENTS.md
+.agents/
+.codex/
+*.log
