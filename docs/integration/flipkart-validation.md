@@ -6,9 +6,19 @@ Public Orbit discovery on 2026-11-07 located listing inventory/search and shipme
 
 The local application therefore has no marketplace transport or publishing implementation yet. The pure allowance helper has tested arithmetic/deduplication behaviour, but no production activation baseline or durable order ledger is wired to it.
 
+## Accepted authorization model and remaining setup
+
+The user selected provider-managed authorization on 2026-11-08. The Stockbridge provider owns the registered Flipkart partner application and operates a small HTTPS authorization service for its callback and shared application secret. Every customer authorizes their own seller account; customers do not create or share self-access credentials for this product. The dashboard, Tally access, stock processing and SQLite database remain local. See [ADR 0003](../adr/0003-provider-managed-flipkart-authorization.md).
+
+**Provider registration, hosted authorization and customer connection are not implemented or verified.** Before onboarding the first customer, the provider must complete partner registration and approved application access, deploy the HTTPS callback service, and implement secure authorization handoff and credential lifecycle handling. Keep the shared application secret on the provider service, never in customer installations or portable backups.
+
+Once that flow is delivered, each customer starts connection from their local installation and reviews the provider application's consent on Flipkart using their own seller account. Bind the authorization result to that initiating installation and verify the authenticated seller identity before importing data. Protect per-customer credentials, verify renewal and error recovery, and do not confuse browser sign-in with application authorization. The [customer setup guide](../customer-setup.md#4-connect-the-hingadtyre-flipkart-account) separates the provider prerequisites from the customer steps.
+
+## Publication validation
+
 Before enabling publishing:
 
-1. Confirm the operating model and register/authorize the applicable application: seller-owned use can use self-access, whereas a third-party provider uses Flipkart's partner/seller-authorization flow. Having one customer does not by itself select the route. Confirm new security-sensitive access and terms if presented. Store credentials using protected machine storage, never in the browser UI or portable database backup.
+1. Complete the provider prerequisites and the intended customer's authorization above. Verify account isolation, installation binding and credential handling with authenticated evidence before using the connection for stock operations.
 2. Read authenticated account/location identities and listing details; compare the inspected sample SKU to its API package entries and catalog set evidence.
 3. Verify pack evidence for each mapping and source-to-marketplace stock locations. Shipping packages only stand for tyres where one tyre per package is confirmed.
 4. Verify approved-order discovery, complete pagination/time coverage, exact listing and location attribution, quantities, repeats and cancellation behaviour.

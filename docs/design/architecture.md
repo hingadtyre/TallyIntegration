@@ -8,7 +8,7 @@ Run on the Windows machine that can access Tally. Start with Flipkart tyre listi
 
 Every eligible duplicate listing and pack uses its mapped item's full physical stock. There is no exclusive allocation or reservation between listings. The seller accepts concurrent-sale exposure before Tally billing and synchronization. The advertised minimum of five is an agreed business policy, not proof of five physical packs or a verified platform-wide promotion rule. The reported one-unit cart restriction remains a seller-provided operating assumption.
 
-Additional marketplaces, remote hosting, and multiple users are future extensions. Account identity is explicit throughout so adding seller accounts does not require redesigning the stock model.
+Additional marketplaces, remote hosting of the inventory backend, and multiple users are future extensions. Account identity is explicit throughout so adding seller accounts does not require redesigning the stock model. The accepted provider-managed Flipkart connection adds a small hosted authorization service; it does not move the inventory backend or customer database to the cloud.
 
 ## Application boundaries
 
@@ -26,6 +26,8 @@ flowchart LR
     STORE --> DB[(Local SQLite)]
     ADAPTERS --> TALLY[Tally]
     ADAPTERS --> FK[Flipkart API]
+    ADAPTERS --> AUTH[Provider HTTPS authorization service]
+    AUTH --> CONSENT[Flipkart seller authorization]
 ```
 
 | Module                   | Responsibility                                                                                                                                                                                      |
@@ -38,6 +40,8 @@ flowchart LR
 | Storage                  | Own schema migrations, bounded transactions, observations, operational records, business history and consistent backups. Keep business policy independent of SQLite-specific queries.               |
 
 The backend continues when the dashboard closes. Windows startup, controlled shutdown, restart after failure, upgrades and protected credential access must be packaged and verified. The application runtime and dependency versions are selected in [package.json](../../package.json) and [package-lock.json](../../package-lock.json). Windows lifecycle hosting and durable publication-job implementation remain to be selected and delivered; type checking does not replace validation of external responses.
+
+The Stockbridge provider registers the Flipkart partner application and operates its HTTPS authorization service. Each customer authorizes their own seller account. Keep the shared provider application secret on the hosted service, never in an installer or customer database. Authentication must bind each authorization result to the initiating customer installation and verified seller identity. Local inventory processing remains responsible for stock rules and publication; provider registration, hosting, callback configuration, credential lifecycle and the customer connection flow still require implementation and verification. See [ADR 0003](../adr/0003-provider-managed-flipkart-authorization.md).
 
 ## Durable identities and state
 
@@ -135,6 +139,24 @@ Keep the dashboard behind the backend API and connectors/storage behind module b
 5. **Automation and allowances:** polling, Pause/Resume, deduplicated order accounting, generation/baseline reconciliation and hold enforcement.
 6. **Operational readiness:** verified Windows lifecycle, credentials, backups/restore, history/logging and controlled end-to-end acceptance.
 
+## Customer release completion
+
+On 2026-11-08, the user clarified that the first customer delivery must contain the complete setup and operating workflow. Verification against the customer's actual Tally installation happens during onboarding; it is not a reason to leave application features unfinished. The current read-only pilot does not satisfy this release requirement.
+
+- Deliver the first-release setup journey from installation through Tally connection, company and source-location selection, seller authorization, listing import, pack/location verification, mapping, reviewed publication and automatic operation. Include actionable connection errors, retry and a way to resume incomplete setup.
+- Complete the approved publication, order/allowance accounting, Pause, zero-hold, recovery and safe mapping-removal workflows. Stored settings, sample interactions and calculation helpers alone do not count as working integration features.
+- Deliver a customer package, independent persistent data location, background startup/restart, protected credentials, scheduled/manual backups, verified restore, controlled upgrades and the corresponding user guide. Customers should not need a development toolchain for routine installation.
+- Support a fresh customer installation with that customer's own seller identity and settings. Keep HingadTyre's accepted tyre policy scoped explicitly; do not silently apply it to other sellers. Flipkart tyre listings remain the first-release scope; additional marketplaces, remote hosting of the inventory backend and multi-user access remain future extensions.
+- Exercise the whole application workflow with controlled integration fixtures and failure/restart/recovery scenarios before customer setup. On the customer machine, verify actual Tally identities, units, quantities and locations, authenticated seller/listing evidence, and a customer-reviewed marketplace write before enabling routine publication. Keep development verification and customer activation evidence separate.
+
+The user accepted provider-managed Flipkart authorization on 2026-11-08: the provider owns the registered partner application and hosted HTTPS authorization service, and every customer authorizes their own account. The local dashboard, Tally access, stock processing and SQLite database remain local. See [ADR 0003](../adr/0003-provider-managed-flipkart-authorization.md) and the [multiple-customer authorization findings](../integration/customer-onboarding-research.md#multiple-customer-distribution-clarification-2026-11-08). Hosting/domain inputs and Flipkart approval of the provider application are deployment prerequisites; the existing inventory business rules remain the implementation baseline.
+
+### Open installer onboarding
+
+The user rejected invite-only enrollment on 2026-11-08. Anyone who receives the product can install it and complete the full customer setup. Do not add invitations, activation codes, a Stockbridge signup/account-approval gate, licensing activation or subscription billing to the first-release journey.
+
+The customer installs Stockbridge, opens its local dashboard, connects their own Flipkart seller account through Flipkart's consent flow, configures Tally, verifies company/location/pack mappings and begins reviewed synchronization. Required marketplace authorization and stock verification remain part of setup; the provider does not manually enroll or approve each customer. Create and bind the necessary installation/account identity as part of connection, without an extra customer registration workflow. Keep customer grants isolated, protect provider secrets and apply service-side validation/rate limits without introducing a provider approval step. A shared installer must contain no HingadTyre credentials, mappings or live database.
+
 ## Key acceptance scenarios
 
 - Four physical tyres yield two complete pair packs and advertised stock five; three-tyre packs also advertise five when one complete pack exists. Zero complete packs yield zero. Missing pack evidence blocks the affected row.
@@ -146,4 +168,4 @@ Keep the dashboard behind the backend API and connectors/storage behind module b
 - Restore an older backup after an allowance was consumed: publishing stays paused until fresh order/policy reconciliation prevents that allowance reopening. Reject unsafe/incompatible backups without replacing the active state.
 - Change an interval or backup folder in Settings: use the validated value for future work without restart, overlapping polls or silently moving old files.
 
-Decision background: [GLOSSARY](../../GLOSSARY.md), [shared-stock policy ADR](../adr/0001-shared-stock-flipkart-tyres.md), [local TypeScript/SQLite ADR](../adr/0002-local-typescript-sqlite.md), and [design interview](inventory-sync.md).
+Decision background: [GLOSSARY](../../GLOSSARY.md), [shared-stock policy ADR](../adr/0001-shared-stock-flipkart-tyres.md), [local TypeScript/SQLite ADR](../adr/0002-local-typescript-sqlite.md), [provider authorization ADR](../adr/0003-provider-managed-flipkart-authorization.md), and [design interview](inventory-sync.md).

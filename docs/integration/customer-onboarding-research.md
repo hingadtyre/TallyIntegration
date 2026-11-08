@@ -12,7 +12,7 @@ Checked against official documentation on **2026-11-07** for Stockbridge's first
 
 Tally's newer guide says native JSON integration starts with Release 7.0. Stockbridge currently uses XML; that statement does not establish a minimum supported Tally version for this adapter. Live compatibility and stock/report semantics still require verification. [Tally format/version guidance](https://help.tallysolutions.com/building-tunnel-based-connectivity-for-tallyprime-integrations/)
 
-## Flipkart: choose the correct authorization model
+## Flipkart authorization model background
 
 Seller login does not grant API access. Seller self-access details must not be shared with providers; providers managing sellers need third-party applications. [Application registration](https://seller.flipkart.com/api-docs/FMSAPI.html#application-registration)
 
@@ -27,9 +27,15 @@ Self-access uses Basic authentication with the application ID/secret to request 
 
 The guide does not establish separate inventory-read/order-read/inventory-write permission switches. Review actual consent; verify returned scope/expiry fields. [Authentication examples](https://seller.flipkart.com/api-docs/FMSAPI.html#generating-access-tokens)
 
-Application label proposal: **Stockbridge - HingadTyre**. Registering it and accepting permissions are future customer/provider actions, after the operating model is decided. A local dashboard address is not by itself the HTTPS callback required for a third-party application. Provider callback and protected credential-storage design remain implementation decisions.
+The earlier single-customer application label proposal was **Stockbridge - HingadTyre**. With the provider-managed model accepted on 2026-11-08, use **Stockbridge** as the proposed provider application label and identify each customer's seller account separately. Registration and customer consent remain future actions; no application has been registered. A local dashboard address is not by itself the HTTPS callback required for a third-party application. Provider callback deployment and protected credential storage remain implementation work.
 
 Flipkart's separate API Hub includes sandbox-host examples while the seller documentation shows production-host examples. Choose one intended environment deliberately; do not paste samples indiscriminately. Seller registration alone does not provide sandbox access; API questions can be raised through the seller/partner portal's API GA support route. [API Hub examples](https://flipkart.github.io/fk-api-platform-docs/docs/intro), [Flipkart FAQ](https://seller.flipkart.com/api-docs/FAQ.html)
+
+### Multiple-customer distribution clarification, 2026-11-08
+
+The official registration and API Hub guides were rechecked for the customer-release discussion. They distinguish seller-owned self-access from a vendor managing APIs for other sellers. Installing Stockbridge locally does not by itself establish which model applies. The reviewed guides do not explicitly classify commercially distributed local software where each seller operates it and the software provider never receives seller credentials. Obtain provider clarification before promising self-access as the onboarding route for that arrangement. [Registration and authorization](https://seller.flipkart.com/api-docs/FMSAPI.html#application-registration), [API Hub onboarding](https://flipkart.github.io/fk-api-platform-docs/docs/intro)
+
+The user accepted a provider-managed product with a small hosted HTTPS authorization/token service on 2026-11-08. This is an architectural choice, not a requirement to move Tally, stock processing or the local database to the cloud. The service protects the provider's application secret and owns the documented callback. Do not embed a shared confidential provider secret in an installer; native application copies cannot keep such a secret confidential. Native/public-client registration, PKCE and loopback/custom-scheme exceptions are not established by the reviewed Flipkart guides. See [ADR 0003](../adr/0003-provider-managed-flipkart-authorization.md). [Flipkart callback requirements](https://seller.flipkart.com/api-docs/FMSAPI.html#application-registration), [RFC 8252 section 8.5](https://www.rfc-editor.org/rfc/rfc8252#section-8.5)
 
 ## What the repository currently implements
 
@@ -40,7 +46,7 @@ Flipkart's separate API Hub includes sandbox-host examples while the seller docu
 ## Customer facts still needed
 
 - Installed Tally product/release, selected company identity, base units, source godowns and normal reporting period.
-- Whether HingadTyre operates its own installation or a provider manages API access on its behalf; resulting Flipkart application model and callback owner.
+- Provider partner-registration/approval status, application identity, HTTPS callback/domain, hosting environment and operational owner for the accepted provider-managed model.
 - Actual API eligibility, authorization screen, authenticated seller/location identifiers and response evidence for each mapping.
 - Windows account/service ownership, installation data directory, backup destination and verified restore/support procedure.
 

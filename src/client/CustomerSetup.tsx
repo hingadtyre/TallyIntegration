@@ -4,7 +4,8 @@ export function CustomerSetup() {
       <h2>Customer setup · HingadTyre</h2>
       <p>
         Complete these steps on the customer's Tally computer. Development can continue with the
-        separate sample workspace.
+        separate sample workspace. Tally discovery and manual backups are available now. Flipkart
+        connection and synchronization remain planned features.
       </p>
       <ol>
         <li>
@@ -24,16 +25,17 @@ export function CustomerSetup() {
           </span>
         </li>
         <li>
-          <strong>Authorize the HINGADTYRES seller account.</strong>
+          <strong>Future step: authorize your Flipkart seller account.</strong>
           <span>
-            The observed account and listing evidence remain relevant. API authorization is separate
-            from browser sign-in. Seller-owned and third-party integrations use different Flipkart
-            authorization routes; choose the applicable route before connecting. Credential setup is
-            still being implemented.
+            Stockbridge's provider must first complete its Flipkart application registration and
+            connection service. Once available, start connection here, sign in on Flipkart and
+            review consent for the Stockbridge application. Each customer authorizes their own
+            account, HINGADTYRES for this installation. You do not need to create or share
+            self-access credentials. This connection flow is not available yet.
           </span>
         </li>
         <li>
-          <strong>Verify stock locations and every pack mapping.</strong>
+          <strong>After connection: verify stock locations and every pack mapping.</strong>
           <span>
             Compare tyre identity, base units, set size and location. One tyre per shipping package
             is usable evidence only where verified for that listing. The first Tally connector reads
@@ -41,7 +43,7 @@ export function CustomerSetup() {
           </span>
         </li>
         <li>
-          <strong>Review before enabling synchronization.</strong>
+          <strong>Future release: review before enabling synchronization.</strong>
           <span>
             Check newly added items, normal stock changes, limited sales and zero holds. Choose a
             backup folder and test Back up now. Marketplace publishing, scheduled backups and

@@ -101,25 +101,31 @@ If discovery fails, inspect **Activity → Diagnostics** and check Tally is open
 
 ## 4. Connect the HingadTyre Flipkart account
 
-**This section describes preparation and the future connection workflow. The current app cannot complete this step. There is no working credential-entry/connect flow or listing importer, and registering an API application will not activate one.**
+**This section describes preparation and the future connection workflow. The current app cannot complete this step. The provider authorization service, customer connect flow and listing importer are not implemented, and registering an API application will not activate them.**
 
 The HINGADTYRES browser session and inspected listing evidence remain valid setup context. Browser sign-in alone does not authorize this app's API access.
 
-Choose the authorization model according to who operates the integration. Flipkart distinguishes a seller's own self-access app from a third-party vendor/partner managing sellers. For seller-owned use, its documented path is **Manage Profile → Developer Access → Create New Access**. A vendor-operated product uses Flipkart's partner application and seller authorization flow; having one customer does not itself decide the route. Keep seller self-access secrets with the seller instead of sharing them with a third-party provider. [Flipkart's application and authorization guidance](https://seller.flipkart.com/api-docs/FMSAPI.html#application-registration).
+The accepted product model uses the Stockbridge provider's registered Flipkart partner application and separate authorization from each customer. A small provider-operated HTTPS authorization service handles the callback and protects the shared application secret. The dashboard, Tally connection, stock processing and SQLite database remain on the customer's computer. Customers do not create or share seller self-access credentials for this product. See [the provider authorization decision](adr/0003-provider-managed-flipkart-authorization.md) and [Flipkart's application and authorization guidance](https://seller.flipkart.com/api-docs/FMSAPI.html#application-registration).
 
-Proposed application label: **Stockbridge - HingadTyre**. Description: **Read Tally-linked listing inventory and orders, and synchronize reviewed inventory quantities.** The customer must review the actual permissions and terms when authorizing. No application has been registered by this project yet.
+The planned customer release has no invitation, activation code or separate Stockbridge signup. Anyone receiving the installer can install it, connect their own seller account and complete setup. The provider prepares and operates the shared authorization service once; it does not approve each customer's installation. Flipkart consent and stock/mapping verification still apply to each customer.
 
-Protected credential setup is a remaining implementation step. Do not put secrets in source control, chat, dashboard screenshots or portable backups. After connecting, verify authenticated seller identity and inventory locations before importing mappings.
+### One-time provider setup before customer onboarding
 
-The intended end-to-end sequence, once implemented, is:
+These prerequisites remain outstanding. No provider application has been registered and no authorization service has been deployed by this project.
 
-1. Decide whether HingadTyre owns/operates this local application or a provider operates API access for customers. Document that decision before registering credentials.
-2. For seller-owned use, the seller follows the Developer Access path above. For a third-party product, the provider registers through Flipkart's partner portal, completes its verification, and creates an application with the required HTTPS callback. A localhost dashboard is not that callback.
-3. The customer authorizes the intended application and reviews the actual consent shown by Flipkart. Do not assume separate per-feature permission switches exist just because we need inventory and order APIs.
-4. The app stores credentials/tokens through protected storage under the account running the backend, implements renewal, and checks the authenticated seller identity. The seller password is not an app setting.
-5. Read the seller's inventory locations and existing listings, then observe current quantities. Record when each observation was read.
-6. Read approved orders with complete coverage so an exact listing's sales allowance can be consumed reliably. A decrease in shared Tally stock alone cannot identify which duplicate listing sold.
-7. Complete the mapping checks below before enabling a reviewed stock publication.
+1. Register the Stockbridge provider through Flipkart's partner process, complete its verification and obtain the required application access.
+2. Deploy and operate the HTTPS authorization service, then configure the application's required callback. The local dashboard address is not this hosted callback. Keep the shared application secret on the provider service, never in the installer or a customer database.
+3. Implement and verify a connection flow that binds each authorization result to the initiating customer installation and verifies the seller identity. Complete protected per-customer credential handling, renewal and failure recovery before making connection available.
+
+Provider hosting and credential maintenance continue after setup. Do not put secrets in source control, chat, dashboard screenshots or portable backups.
+
+### Each customer's connection and consent, once implemented
+
+1. Start the Flipkart connection from the customer's local Stockbridge setup. The connection flow opens Flipkart's authorization page for the provider application.
+2. The customer signs in to their own seller account on Flipkart and reviews the actual application, permissions and terms before authorizing it. The seller password is not a Stockbridge setting. Do not assume separate per-feature permission switches exist just because the product needs inventory and order APIs.
+3. After authorization, Stockbridge verifies the authenticated seller identity and associates it with the initiating local installation. Confirm that the connected account is the intended one, HINGADTYRES for this first customer.
+4. Read that seller's inventory locations and existing listings, then observe current quantities. Record when each observation was read and complete the mapping checks below.
+5. Verify approved-order coverage before using sales allowances. A decrease in shared Tally stock alone cannot identify which duplicate listing sold. A completed connection does not enable publication until the remaining release checks in section 6 are satisfied.
 
 Token details belong in the connector implementation rather than customer copy-and-paste commands. See [Flipkart token flows](https://seller.flipkart.com/api-docs/FMSAPI.html#generating-access-tokens) and the [onboarding research note](integration/customer-onboarding-research.md).
 

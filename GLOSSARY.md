@@ -4,6 +4,16 @@ The language used to describe Tally stock and the marketplace listings supplied 
 
 ## Language
 
+**Stockbridge customer**:
+A business using Stockbridge to synchronize its Tally inventory with its marketplace seller accounts, such as HingadTyre.
+_Avoid_: Marketplace buyer
+
+**Stockbridge provider**:
+The operator offering and maintaining Stockbridge and its registered marketplace application for customers.
+
+**Customer authorization**:
+A customer's permission for Stockbridge's registered application to access a particular marketplace seller account. This permission is separate from approval to publish a stock change.
+
 **Tally company**:
 A distinct set of business records maintained in Tally, containing its own stock items and stock balances.
 
