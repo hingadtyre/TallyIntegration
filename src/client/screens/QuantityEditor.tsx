@@ -71,7 +71,7 @@ export function QuantityEditor({
           inputMode="numeric"
           aria-label={`Proposed stock for ${listing.sku}`}
           value={value}
-          placeholder="—"
+          placeholder="-"
           disabled={disabled}
           onChange={(event) => setValue(event.target.value)}
         />

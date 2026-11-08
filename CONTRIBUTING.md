@@ -72,6 +72,7 @@ Read [GLOSSARY](GLOSSARY.md) for names and [the approved architecture](docs/desi
 
 ## Code should explain itself
 
+- Use a plain hyphen (`-`) for separators and empty-value placeholders in UI text, previews and documentation. Avoid em dashes; use a colon, comma or full stop when clearer.
 - Use business names from the glossary. Prefer an explicit function name over a boolean argument whose meaning the caller must guess.
 - Keep each screen's state near that screen. Keep transport, scheduling and filesystem work out of the stock-rule functions.
 - Use ordinary functions and explicit types. Add another module when it owns a coherent responsibility, rather than moving every helper into a separate file.

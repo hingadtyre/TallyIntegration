@@ -9,7 +9,7 @@ export function formatDateTime(value: string | null | undefined): string {
 }
 
 export function formatQuantity(value: number | null): string {
-  return value === null ? '—' : new Intl.NumberFormat().format(value);
+  return value === null ? '-' : new Intl.NumberFormat().format(value);
 }
 
 export function formatPolicy(listing: Listing): string {

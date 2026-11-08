@@ -107,7 +107,7 @@ The HINGADTYRES browser session and inspected listing evidence remain valid setu
 
 Choose the authorization model according to who operates the integration. Flipkart distinguishes a seller's own self-access app from a third-party vendor/partner managing sellers. For seller-owned use, its documented path is **Manage Profile → Developer Access → Create New Access**. A vendor-operated product uses Flipkart's partner application and seller authorization flow; having one customer does not itself decide the route. Keep seller self-access secrets with the seller instead of sharing them with a third-party provider. [Flipkart's application and authorization guidance](https://seller.flipkart.com/api-docs/FMSAPI.html#application-registration).
 
-Proposed application label: **Stockbridge — HingadTyre**. Description: **Read Tally-linked listing inventory and orders, and synchronize reviewed inventory quantities.** The customer must review the actual permissions and terms when authorizing. No application has been registered by this project yet.
+Proposed application label: **Stockbridge - HingadTyre**. Description: **Read Tally-linked listing inventory and orders, and synchronize reviewed inventory quantities.** The customer must review the actual permissions and terms when authorizing. No application has been registered by this project yet.
 
 Protected credential setup is a remaining implementation step. Do not put secrets in source control, chat, dashboard screenshots or portable backups. After connecting, verify authenticated seller identity and inventory locations before importing mappings.
 

@@ -151,7 +151,7 @@ export function MappingDialog({
               <option value="">Choose a listing</option>
               {listings.map((value) => (
                 <option key={value.id} value={value.id}>
-                  {value.sku} — {value.title}
+                  {value.sku} - {value.title}
                 </option>
               ))}
             </select>
@@ -163,7 +163,7 @@ export function MappingDialog({
                   <dt>Pack size</dt>
                   <dd>
                     {listing.packSize === null
-                      ? 'Unknown — mapping blocked'
+                      ? 'Unknown - mapping blocked'
                       : `Set of ${listing.packSize}`}
                   </dd>
                 </div>

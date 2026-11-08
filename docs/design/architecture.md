@@ -128,9 +128,9 @@ The [interview evidence](inventory-sync.md#official-source-findings) records off
 
 Keep the dashboard behind the backend API and connectors/storage behind module boundaries. Later, the backend can move to a server and SQLite can migrate to a server database such as PostgreSQL. A local Tally connector then communicates over authenticated HTTPS. This requires validated data conversion, query/transaction/job adaptation, secure access, offline recovery testing and a controlled cutover with one active publishing owner; it is not a database-URL switch.
 
-1. **Consolidated review — complete:** architecture and dashboard layout approved on 2026-11-07.
+1. **Consolidated review - complete:** architecture and dashboard layout approved on 2026-11-07.
 2. **Read-only integration discovery:** verify Tally/account identities, stock locations, pack evidence and order semantics using the actual installation and authorized account.
-3. **Initial local foundation and review workflow — delivered:** settings, storage migrations, source observations, dashboard, drafts and scoped bulk review, within the [current README scope](../../README.md). Live mapping/location evidence and the later publication workflows remain outstanding.
+3. **Initial local foundation and review workflow - delivered:** settings, storage migrations, source observations, dashboard, drafts and scoped bulk review, within the [current README scope](../../README.md). Live mapping/location evidence and the later publication workflows remain outstanding.
 4. **Manual publishing and durable recovery:** per-destination results, verification, ordering, stale-proposal protection and safe mapping removal.
 5. **Automation and allowances:** polling, Pause/Resume, deduplicated order accounting, generation/baseline reconciliation and hold enforcement.
 6. **Operational readiness:** verified Windows lifecycle, credentials, backups/restore, history/logging and controlled end-to-end acceptance.

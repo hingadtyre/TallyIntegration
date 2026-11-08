@@ -27,7 +27,7 @@ Self-access uses Basic authentication with the application ID/secret to request 
 
 The guide does not establish separate inventory-read/order-read/inventory-write permission switches. Review actual consent; verify returned scope/expiry fields. [Authentication examples](https://seller.flipkart.com/api-docs/FMSAPI.html#generating-access-tokens)
 
-Application label proposal: **Stockbridge — HingadTyre**. Registering it and accepting permissions are future customer/provider actions, after the operating model is decided. A local dashboard address is not by itself the HTTPS callback required for a third-party application. Provider callback and protected credential-storage design remain implementation decisions.
+Application label proposal: **Stockbridge - HingadTyre**. Registering it and accepting permissions are future customer/provider actions, after the operating model is decided. A local dashboard address is not by itself the HTTPS callback required for a third-party application. Provider callback and protected credential-storage design remain implementation decisions.
 
 Flipkart's separate API Hub includes sandbox-host examples while the seller documentation shows production-host examples. Choose one intended environment deliberately; do not paste samples indiscriminately. Seller registration alone does not provide sandbox access; API questions can be raised through the seller/partner portal's API GA support route. [API Hub examples](https://flipkart.github.io/fk-api-platform-docs/docs/intro), [Flipkart FAQ](https://seller.flipkart.com/api-docs/FAQ.html)
 
