@@ -91,7 +91,7 @@ export function App() {
               ? 'Sample data · separate database'
               : 'Your inventory stays on this computer.'}
           </p>
-          <div className="sidebar-version">FIRST CONNECTION MILESTONE</div>
+          <div className="sidebar-version">LOCAL INVENTORY REVIEW</div>
         </div>
       </aside>
       <div className="main-shell">
@@ -199,7 +199,7 @@ export function App() {
           <span>
             Stockbridge <span className="footer-divider">/</span> Tally → marketplace inventory
           </span>
-          <span>{busy || 'Changes stay local until reviewed publication'}</span>
+          <span>{busy || 'Local review only · marketplace publishing unavailable'}</span>
         </footer>
       </div>
       <div className="sr-only" role="status" aria-live="polite">

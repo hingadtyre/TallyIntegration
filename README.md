@@ -2,7 +2,9 @@
 
 A local Windows dashboard for reviewing Tally stock and its mapped marketplace listings. The approved product design is in [architecture.md](docs/design/architecture.md).
 
-This is the development project, not the customer's Tally machine. Use sample data here. Follow the [HingadTyre customer setup guide](docs/customer-setup.md) when installing on the customer's computer; a shorter guide is also built into **Connections**. The existing HINGADTYRES Flipkart observations remain the first customer's setup context.
+This is the development project, not the customer's Tally machine. Use sample data here. Follow the [plain-language customer setup guide](docs/customer-setup.md) for the current read-only pilot; a shorter guide is also built into **Connections**. HingadTyre remains the first customer's context, while new installations use a neutral disconnected seller label.
+
+**The complete first-customer synchronization release is not ready.** The [release-readiness audit](docs/release-readiness.md) separates missing application workflows, provider prerequisites and customer-machine verification.
 
 ## Current milestone
 
@@ -13,6 +15,14 @@ The first local foundation is implemented. It includes company-separated stock v
 The Tally adapter performs read-only XML exports. It requires stable company/item identifiers and validates the returned company context. Real installation compatibility, current-period balances and stock locations still need validation with Tally running. Unsupported quantities stay unknown; a failed read retains prior observations. See [the integration checklist](docs/integration/tally-validation.md).
 
 HINGADTYRES is recorded only as the seller name observed in the browser. It is **not an authenticated API connection**. The app stores no Flipkart credentials yet.
+
+## Packaged Windows pilot
+
+The pilot package bundles Node.js 24, the built application, runtime dependencies and an offline HTML guide. Customers extract the ZIP and use **Start Stockbridge.cmd**, **Stop Stockbridge.cmd**, **Stockbridge Status.cmd** and **Open Data Folder.cmd**. They do not install development tools or build the application. The packaged live workspace lives under `%LOCALAPPDATA%\Stockbridge\Pilot\data`, independently of the extracted application files.
+
+This is a portable, read-only pilot. It starts manually after Windows login; a signed installer, automatic startup/crash restart, controlled upgrades and full production recovery remain release work. See [packaging instructions for the provider](CONTRIBUTING.md#build-the-windows-pilot-package) and the [customer guide](docs/customer-setup.md).
+
+For the provider, `npm run package:pilot` verifies/builds a new ZIP and `npm run test:pilot -- '<absolute ZIP path>'` checks that extracted artifact with an isolated local Tally simulation. These are development/release commands; customers use the supplied launch files.
 
 ## Run on this computer
 
@@ -56,6 +66,7 @@ Tests exercise real loopback HTTP transport with Tally-shaped fixtures, stock-po
 - `src/server`: local HTTP API and inventory commands, with separate stock refresh, polling, settings, backup and diagnostics modules.
 - `src/server/storage`: SQLite schema, record conversion, validation and migrations.
 - `src/client`: React dashboard with separate screens and focused inventory components; never reads credentials or the database directly.
+- `src/desktop`: packaged Windows start/status/stop orchestration; verifies the responding instance before sending a private stop token.
 - `src/shared`: API contracts.
 
 SQLite schema version 2 stores companies, seller accounts, stock items, listings, proposals and activity as separate records. The API assembles a snapshot for the dashboard; database updates remain transactional and write only changed records. Existing version-1 databases are validated and backed up under `.data/migration-backups` before conversion. Invalid or newer databases are rejected without conversion.
@@ -64,12 +75,14 @@ This is not the final order/job ledger. Before publishing is enabled, introduce 
 
 ## Data and operational limits
 
-Use one running process per database. The backend continues while the browser is closed; closing its terminal stops it. Windows automatic startup/service packaging is still pending.
+The runtime enforces one owner per workspace before opening SQLite, using an operating-system-held named pipe on Windows (an abstract socket on Linux for development/tests). Ownership releases on process exit. Application assets resolve from the application location, independently of the current working directory. `STOCKBRIDGE_DATA_DIR` selects an absolute local data folder; source checkouts default to their own `.data` directory. Network/device paths are rejected.
+
+The backend continues while the browser is closed. The packaged Start command runs it without a persistent terminal; use Stop to shut it down cleanly. Source-checkout `npm start` remains a foreground process stopped with Ctrl+C. Shutdown drains an active Tally operation before closing SQLite. Windows automatic startup/service packaging is still pending.
 
 Tally polling defaults to 30 seconds, never overlaps, and backs off after failures. Changes apply to future polls without restart. Marketplace/catalog intervals are saved preferences; those connectors are not running yet. Refresh does not write to Tally. Live accounts and sample records never share a database.
 
-**Back up now** creates a consistent SQLite copy, runs an integrity check and writes a manifest. Changing the folder checks write access and affects future copies. Automatic daily/weekly retention and restore/import are not implemented yet; do not replace a live database manually and assume pending state is safe to resume. The approved recovery workflow must be completed before production publishing.
+**Back up now** creates a consistent SQLite copy, runs an integrity check and writes a manifest. Changing the folder checks write access and affects future copies. A [technician-assisted offline pilot restore](CONTRIBUTING.md#restore-a-pilot-backup-support-only) validates a preview/hash, takes a safety copy, preserves local settings and restores under exclusive workspace ownership. Restored observations require fresh reads and listings are paused. It is not the production order/policy reconciliation workflow and has no customer import UI. Automatic daily/weekly retention and production restore recovery remain unfinished; do not overwrite a running database manually.
 
-Activity history is retained for 90 days. Diagnostics include request references and sanitized internal error causes/call sites, and rotate at 10 MB with one previous file. Configurable time-based retention and background-run correlation are pending. Logs omit source XML, credentials and customer order payloads. `.data`, `.tools`, `.cache`, dependencies and build outputs are ignored by Git.
+Activity history is retained for 90 days. Diagnostics include request references and sanitized internal error causes/call sites, and rotate at 10 MB with one previous file. Configurable time-based retention and background-run correlation are pending. Logs omit source XML, credentials and customer order payloads. `.data`, `.tools`, `.cache`, `releases`, dependencies and build outputs are ignored by Git. The private runtime-control file is separate from SQLite backups and must not be shared in support bundles.
 
-Remaining delivery work: authenticated Flipkart setup/import, per-listing pack and location verification, durable manual publishing/read-back, activation/order reconciliation, automatic publishing, safe zero-and-verify unlink, scheduled backups, restore recovery and Windows packaging. The dashboard labels these as unavailable rather than simulating a successful external change.
+Remaining production work: authenticated Flipkart setup/import, per-listing pack and location verification, durable manual publishing/read-back, activation/order reconciliation, automatic publishing, safe zero-and-verify unlink, scheduled backups, production restore recovery and Windows service/installer lifecycle. The dashboard labels these as unavailable rather than simulating a successful external change. Follow the [release gates](docs/release-readiness.md) before describing the product as ready for synchronization.

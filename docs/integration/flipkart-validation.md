@@ -12,7 +12,7 @@ The user selected provider-managed authorization on 2026-11-08. The Stockbridge 
 
 **Provider registration, hosted authorization and customer connection are not implemented or verified.** Before onboarding the first customer, the provider must complete partner registration and approved application access, deploy the HTTPS callback service, and implement secure authorization handoff and credential lifecycle handling. Keep the shared application secret on the provider service, never in customer installations or portable backups.
 
-Once that flow is delivered, each customer starts connection from their local installation and reviews the provider application's consent on Flipkart using their own seller account. Bind the authorization result to that initiating installation and verify the authenticated seller identity before importing data. Protect per-customer credentials, verify renewal and error recovery, and do not confuse browser sign-in with application authorization. The [customer setup guide](../customer-setup.md#4-connect-the-hingadtyre-flipkart-account) separates the provider prerequisites from the customer steps.
+Once that flow is delivered, each customer starts connection from their local installation and reviews the provider application's consent on Flipkart using their own seller account. Bind the authorization result to that initiating installation and verify the authenticated seller identity before importing data. Protect per-customer credentials, verify renewal and error recovery, and do not confuse browser sign-in with application authorization. The [customer setup guide](../customer-setup.md#what-is-still-required-for-flipkart-synchronization) separates the provider prerequisites from the customer steps.
 
 ## Publication validation
 

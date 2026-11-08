@@ -17,7 +17,8 @@ export function createBackup(store: Store): { path: string; verified: true } {
     mode: state.mode,
     verified: true,
     credentialsIncluded: false,
-    restoreSupported: false,
+    restoreSupported: true,
+    restoreScope: 'offline-pilot-only',
   };
   writeFileSync(`${path}.json`, JSON.stringify(manifest, null, 2));
   store.update((current) =>

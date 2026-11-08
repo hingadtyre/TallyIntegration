@@ -13,7 +13,7 @@ export function initialState(mode: 'live' | 'demo', backupFolder: string): Snaps
       {
         id: 'flipkart-primary',
         marketplace: 'flipkart',
-        name: mode === 'demo' ? 'Sample seller · Flipkart' : 'HINGADTYRES',
+        name: mode === 'demo' ? 'Sample seller · Flipkart' : 'Flipkart seller',
         status: mode === 'demo' ? 'demo' : 'not-connected',
       },
     ],

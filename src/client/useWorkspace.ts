@@ -105,6 +105,22 @@ export function useWorkspace() {
     [runAction],
   );
 
+  const refreshTally = useCallback(
+    (companyId?: string): Promise<ActionResult<Snapshot>> =>
+      runAction(
+        'Refreshing Tally',
+        async () => {
+          const next = await requestJson<Snapshot>('/refresh', companyId ? { companyId } : {});
+          // A completed request can contain a failed Tally check and retained observations.
+          if (mounted.current) setState(next);
+          if (next.connection.tally === 'offline') throw new Error(next.connection.message);
+          return next;
+        },
+        'Refresh completed. Saved observations are shown below.',
+      ),
+    [runAction],
+  );
+
   const backUpNow = useCallback(
     () =>
       runAction(
@@ -132,6 +148,7 @@ export function useWorkspace() {
     error,
     notice,
     mutate,
+    refreshTally,
     prepareReview,
     backUpNow,
     dismissError: () => setError(''),

@@ -67,5 +67,6 @@ test('saved drafts survive restart, callers cannot mutate stored state, and back
   }
   const manifest = JSON.parse(readFileSync(`${backup.path}.json`, 'utf8'));
   assert.equal(manifest.credentialsIncluded, false);
-  assert.equal(manifest.restoreSupported, false);
+  assert.equal(manifest.restoreSupported, true);
+  assert.equal(manifest.restoreScope, 'offline-pilot-only');
 });

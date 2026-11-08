@@ -110,14 +110,7 @@ export function InventoryScreen({
         <button
           className="button secondary"
           disabled={!!busy}
-          onClick={() =>
-            void mutate(
-              '/refresh',
-              companyId ? { companyId } : {},
-              'Refreshing Tally',
-              'Refresh completed. Saved observations are shown below.',
-            )
-          }
+          onClick={() => void workspace.refreshTally(companyId || undefined)}
         >
           <Icon name="refresh" className={busy === 'Refreshing Tally' ? 'spin' : ''} />
           {busy === 'Refreshing Tally' ? 'Refreshing…' : 'Refresh Tally'}
@@ -404,8 +397,7 @@ export function InventoryScreen({
         <Icon name="info" />
         <p>
           <strong>Review before you publish.</strong> Calculations and edits are saved as drafts.
-          Publishing is unavailable until the live connections and listing metadata have been
-          verified.
+          Marketplace publishing is not available in this version.
         </p>
       </div>
       {review && <ReviewDialog state={state} review={review} onClose={() => setReview(null)} />}

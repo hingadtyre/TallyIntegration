@@ -31,24 +31,25 @@ For frontend editing, keep the built Demo backend running in one terminal, and r
 
 ## Where to make a change
 
-| Change                                         | Start here                                                 |
-| ---------------------------------------------- | ---------------------------------------------------------- |
-| Navigation and shared page frame               | `src/client/App.tsx`                                       |
-| Inventory table, filters, drafts or review     | `src/client/screens/` and `src/client/selectors.ts`        |
-| Activity, connections or settings presentation | The corresponding screen under `src/client/screens/`       |
-| Reused buttons, dialogs and formatting         | `src/client/components.tsx` and the focused client helpers |
-| Request routes and public error responses      | `src/server/http.ts`                                       |
-| Inventory commands and proposal validation     | `src/server/service.ts` and its inventory helpers          |
-| Physical stock and Flipkart tyre arithmetic    | `src/domain/stock-policy.ts`                               |
-| Allowance consumption arithmetic               | `src/domain/allowance.ts`                                  |
-| Reading Tally XML                              | `src/adapters/tally.ts`                                    |
-| Importing stock observations                   | `src/server/stock-refresh.ts`                              |
-| Poll timing, overlap and backoff               | `src/server/polling.ts`                                    |
-| Diagnostic files and internal error details    | `src/server/diagnostics.ts`                                |
-| Settings and verified backups                  | `src/server/settings.ts`, `src/server/backups.ts`          |
-| Database transactions and records              | `src/server/store.ts`, `src/server/storage/`               |
-| Creating and connecting backend modules        | `src/server/main.ts`                                       |
-| Shared request/result records                  | `src/shared/contracts.ts`                                  |
+| Change                                          | Start here                                                 |
+| ----------------------------------------------- | ---------------------------------------------------------- |
+| Navigation and shared page frame                | `src/client/App.tsx`                                       |
+| Inventory table, filters, drafts or review      | `src/client/screens/` and `src/client/selectors.ts`        |
+| Activity, connections or settings presentation  | The corresponding screen under `src/client/screens/`       |
+| Reused buttons, dialogs and formatting          | `src/client/components.tsx` and the focused client helpers |
+| Request routes and public error responses       | `src/server/http.ts`                                       |
+| Inventory commands and proposal validation      | `src/server/service.ts` and its inventory helpers          |
+| Physical stock and Flipkart tyre arithmetic     | `src/domain/stock-policy.ts`                               |
+| Allowance consumption arithmetic                | `src/domain/allowance.ts`                                  |
+| Reading Tally XML                               | `src/adapters/tally.ts`                                    |
+| Importing stock observations                    | `src/server/stock-refresh.ts`                              |
+| Poll timing, overlap and backoff                | `src/server/polling.ts`                                    |
+| Diagnostic files and internal error details     | `src/server/diagnostics.ts`                                |
+| Settings and verified backups                   | `src/server/settings.ts`, `src/server/backups.ts`          |
+| Database transactions and records               | `src/server/store.ts`, `src/server/storage/`               |
+| Runtime paths, workspace ownership and shutdown | `src/server/runtime.ts`, `src/server/main.ts`              |
+| Windows launch controls and package generation  | `src/desktop/launcher.ts`, `scripts/package-pilot.mjs`     |
+| Shared request/result records                   | `src/shared/contracts.ts`                                  |
 
 ## Trace one stock change
 
@@ -124,6 +125,59 @@ npm test -- tests/domain/stock-policy.test.ts
 These are alternative commands: run everything, the frontend folder, or one mapped source test. `npm test` compiles the TypeScript first; the small [test launcher](scripts/run-tests.mjs) then maps current test source paths to compiled JavaScript and invokes Node's test runner. It ignores stale compiled copies of moved/deleted tests and fails if a requested path matches no test sources. Keep the npm script as the entry point so tests never accidentally run against an old build.
 
 Frontend tests simulate browser interactions in jsdom. Backend tests use isolated temporary databases and local HTTP fixtures; they do not read customer data or contact real Tally/Flipkart services. Coverage of the current foundation is not evidence that unfinished marketplace publishing, customer authorization, installer or production restore flows work. Add their behavior tests when implemented, and retain the customer integration checks before activation.
+
+## Build the Windows pilot package
+
+Build on Windows x64 with Node.js 24 and the pinned dependencies installed with `npm ci`. Obtain the official Windows x64 ZIP for that exact Node version from [Node.js downloads](https://nodejs.org/en/download), verify its published checksum, and extract it to `.tools/node-v<version>-win-x64`. Alternatively, set `STOCKBRIDGE_NODE_DIR` to the extracted directory for the current PowerShell session. It must contain the matching `node.exe` and `LICENSE`; the builder verifies runtime version, platform and architecture. Do not substitute an unverified executable.
+
+From the repository root in PowerShell:
+
+```powershell
+npm run package:pilot
+```
+
+This runs the full verification and build before producing a new timestamped folder and ZIP under ignored `releases/`. It bundles the runtime, compiled application and exactly the installed production dependencies recorded in the lockfile. Source tests, npm, development tools, credentials, `.data` and repository metadata are excluded. A manifest records the commit, uncommitted-change indicator, dependency/runtime versions and file hashes; a separate `.sha256` file covers the ZIP. Existing releases are retained. Package a reviewed clean commit for a traceable distribution; a dirty package is explicitly labelled.
+
+`Read Me.html` is generated from [customer-setup.md](docs/customer-setup.md), with the repository documents rendered to a linked offline HTML tree. `marked` is a build-only dependency for this conversion; it is not shipped as a runtime dependency. Edit the Markdown sources, then rebuild the package. The renderer escapes raw HTML and the generated pages prohibit scripts.
+
+Run the extracted-package verification in PowerShell, replacing the example with the absolute ZIP path printed by the builder:
+
+```powershell
+npm run test:pilot -- 'C:\path\to\Stockbridge-Pilot-<build>.zip'
+```
+
+This checks the ZIP checksum and all manifest files, extracts into a new ignored `releases/verify-pilot-*` folder, and uses only the bundled runtime from an unrelated working folder without Node/npm on its search path. An isolated database is configured to use a local Tally simulation before startup. The check covers empty live state, dashboard assets, repeated Start, settings, stock import, verified backup, refusal to restore while running, Stop, offline restore, restart/persistence and final shutdown. It saves a `verification.json` receipt and retains the test files for inspection. It never contacts real Tally or Flipkart, and refuses to run if the dashboard port is already occupied; stop your own app first. The `--` passes the ZIP argument to the verification script.
+
+The launcher accepts `--no-browser` for automated verification. Its data-path override applies to that process/session only; normal customers use `%LOCALAPPDATA%\Stockbridge\Pilot\data` and double-click launch files. A successful automated package check still needs the real Windows/browser/customer acceptance checks recorded in the release audit.
+
+The installed runtime publishes loopback-only `/api/health`. The per-instance stop token lives only in the private runtime file and is never returned by health, written to logs or included in SQLite backups. Start/Stop verify the saved instance identity; they do not kill arbitrary process IDs. The runtime holds OS ownership before opening the database and releases it even after a crash. Windows and Linux ownership are supported; the portable package itself targets Windows x64.
+
+A portable pilot is not the complete customer release. Record artifact checks and remaining gates in [release readiness](docs/release-readiness.md), and use its implementation/provider/customer evidence distinctions. No invitation or activation-code flow belongs in this release.
+
+## Restore a pilot backup (support only)
+
+The offline tool recovers the current read-only pilot; it does not implement production order/policy reconciliation. Obtain the data owner's approval for replacement, stop Stockbridge, and retain the existing files. It requires an existing destination workspace so that this machine's saved connection and backup-folder settings can be preserved. A fresh machine should first create its empty live workspace, configure its local settings, then stop before a supervised restore. Only the current schema, matching mode and a self-contained verified backup with its adjacent manifest are accepted.
+
+Run from the extracted package folder in PowerShell. These are example paths; replace the backup filename with the owner's selected verified backup:
+
+```powershell
+$backupFile = 'D:\Stockbridge Backups\customer-approved-backup.sqlite'
+$dataFolder = Join-Path $env:LOCALAPPDATA 'Stockbridge\Pilot\data'
+.\runtime\node.exe .\scripts\restore-pilot.mjs inspect --backup $backupFile --mode live
+```
+
+`inspect` validates without replacing data and prints the backup date, schema, identities/counts and SHA-256 digest. Confirm those details with the owner. Copy the printed digest into the example below only when the intended replacement is approved:
+
+```powershell
+$previewDigest = '<SHA-256 printed by inspect>'
+.\runtime\node.exe .\scripts\restore-pilot.mjs restore --backup $backupFile --mode live --data-dir $dataFolder --expected-sha256 $previewDigest --confirm-replace
+```
+
+The digest binds the action to that inspected file; `--confirm-replace` explicitly authorizes replacement instead of a merge. The command refuses a running workspace and mismatched/invalid backups, creates a verified pre-restore safety copy under the destination's `restore-backups` folder, prepares and validates replacement data, and uses a same-volume replacement while all database handles are closed. It preserves the selected backup and the safety copy. Do not delete database working files to bypass a refusal.
+
+After success, start Stockbridge, discover/read Tally again, verify the restored company/items/mappings and make a fresh backup. Restored observations/drafts are stale, company automation is disabled, listings are paused, and seller accounts are disconnected. Marketplace publication remains unavailable. This state must go through the future production reconciliation workflow before any publisher is enabled; integrity checks alone do not restore safe allowances.
+
+From a source checkout, `npm run restore:pilot -- inspect ...` and `npm run restore:pilot -- restore ...` provide the same commands after TypeScript compilation. Packaged support uses the bundled runtime above and needs no npm installation.
 
 ## Evolve the database safely
 

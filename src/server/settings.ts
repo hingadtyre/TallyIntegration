@@ -51,6 +51,15 @@ export function saveSettings(store: Store, input: unknown): void {
     if (validateTallyUrl(state.settings.tallyUrl) !== settings.tallyUrl) {
       state.connection.tally = 'not-checked';
       state.connection.message = 'Tally address changed. Refresh required.';
+      // A selected-company refresh must not validate another company's old-source stock.
+      const tallyCompanies = state.companies.filter((company) => company.source === 'tally');
+      const tallyCompanyIds = new Set(tallyCompanies.map((company) => company.id));
+      for (const company of tallyCompanies) company.lastSuccess = null;
+      for (const item of state.items) {
+        if (!tallyCompanyIds.has(item.companyId)) continue;
+        if (item.observedAt !== null) item.version++;
+        item.observedAt = null;
+      }
       state.proposals.forEach((draft) => {
         draft.itemVersion = -1;
       });

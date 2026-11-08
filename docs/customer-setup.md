@@ -1,218 +1,224 @@
-# HingadTyre customer setup
+# Stockbridge: customer setup and daily use
 
-This repository is developed separately from the customer's Tally computer. Development uses the sample workspace and HTTP fixtures; Tally is not required on the developer's machine. HingadTyre is the first customer, and the seller account observed in Flipkart is **HINGADTYRES**. Keep this customer context for account and listing validation.
+**Version: 0.1.0 read-only pilot. Guide checked on 2026-11-08.**
 
-The current build supports local review and read-only Tally discovery. It is not ready to enable live marketplace synchronization: Flipkart authorization/import, location verification, durable publishing and production recovery remain delivery work.
+Stockbridge is intended to keep marketplace stock in step with Tally. **This version does not yet connect to Flipkart or change any Flipkart stock.** It can read Tally stock and help us check the installation. Keep using your existing process for managing marketplace stock.
 
-**Baseline checked:** commit `6a55cb2230ac6ac08635d37aa1bdc0cd496a0256`, on 2026-11-07. The instructions below distinguish the current technician-assisted pilot from the proposed customer release. They are not evidence of a completed installation on HingadTyre's computer.
+The steps below work for the current pilot. The Flipkart part of a complete setup is explained separately under **What is still required for Flipkart synchronization**. A successful Tally connection does not mean marketplace synchronization has started. The [release-readiness checklist](release-readiness.md) records the remaining development and provider work.
 
-| Capability                                                          | Available in the current build?                                                                |
-| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Run from a source checkout with Node.js 24                          | Yes, after dependency installation and build                                                   |
-| Separate sample and customer databases                              | Yes; SQLite creates them automatically                                                         |
-| Discover companies and read Tally stock                             | Implemented; compatibility and balances need verification on the customer's Tally installation |
-| Import authenticated Flipkart listings/orders                       | No                                                                                             |
-| Publish stock manually or automatically                             | No; the server rejects publishing requests                                                     |
-| Create a verified database backup                                   | Yes, manually                                                                                  |
-| Restore/import a backup, scheduled backups, Windows startup/service | Not implemented                                                                                |
-| Customer installer or ready-to-run release ZIP                      | Not built                                                                                      |
+HingadTyre is our first customer. HINGADTYRES was seen on its seller website, but that browser login is not an application connection. A fresh installation shows a neutral **Flipkart seller** label until a real connection is implemented and verified.
 
-Cloning is sufficient to obtain the code for a supervised pilot. It does not install Node, build the app, copy the developer's data, or supply the unfinished Flipkart integration. The recommended customer distribution is a versioned Windows installer, described in section 7.
+## Before you start
 
-## 1. Prepare the customer's computer
+Arrange a setup time with the person providing Stockbridge. Have these available:
 
-- Choose the Windows computer where the customer normally opens Tally and creates bills. Run this local backend on that same computer; the current connector accepts only local addresses.
-- Record the Tally product/version, company names, inventory base units and godowns used for marketplace stock. Do not combine companies with similar names.
-- Have the customer's Tally administrator available for connection configuration and the authorized HINGADTYRES seller user available for Flipkart authorization.
-- Install [Git for Windows](https://git-scm.com/install/windows) and [official Node.js 24.x](https://nodejs.org/en/download). Select **24.x** explicitly: this application's current version range excludes Node 25 and 26, even if the download page advertises a newer LTS. Reopen PowerShell after installing them.
-- Use a normal writable local folder, not a network share or a folder synchronized by OneDrive/Dropbox. The following pilot location is under the current Windows user's LocalAppData.
+- The Windows computer on which you normally run Tally and create bills. This pilot must run on that same computer. The package is for **Windows x64**, not a phone, Mac or Windows ARM installation.
+- Your normal Windows login and access to the intended Tally company. Ask your Tally administrator to help if you cannot change its connectivity settings.
+- The Stockbridge pilot ZIP supplied by the provider, its version/checksum information, and the provider's support contact. A ZIP is a folder compressed into one download. Do not download a different package because its name looks similar.
+- A browser such as the one you normally use for Flipkart. You do not need Git, Node.js, npm, a database installer or programming knowledge for the packaged pilot.
+- A place to keep backup copies. Your technician can help choose a folder on a separate drive for protection against failure of the computer's main drive.
 
-### Download the verified code
+Do not send Tally or Flipkart passwords in chat or email. This pilot has no reason to ask for a Flipkart password. When the future connection is available, seller sign-in will happen on Flipkart's own authorization page.
 
-Run on the **customer's computer in PowerShell**. These are instructions for a new installation, not commands to run against the developer's existing checkout:
+## 1. Extract the application
 
-```powershell
-node --version
-npm.cmd --version
-git --version
-```
+1. Save the supplied file whose name starts with **Stockbridge-Pilot** and ends with **.zip**.
+2. Open **File Explorer**, usually the yellow folder icon on the Windows taskbar. Open the folder containing that download.
+3. Right-click the ZIP and choose **Extract All**. Select a folder you intend to keep and choose **Extract**. Wait until extraction finishes.
+4. Open the extracted Stockbridge folder. You should see **Start Stockbridge.cmd**, **Stop Stockbridge.cmd**, **Stockbridge Status.cmd**, **Open Data Folder.cmd**, and **Read Me.html**, together with application folders.
+5. Double-click **Read Me.html** to open this guide in your browser. It works without internet after extraction, although links to external help pages require internet.
 
-The first command must report `v24.x`. If any command is unavailable, finish installing its tool before continuing.
+**Do not start the application from inside the ZIP.** Do not copy just the Start file to another folder; it needs the other files beside it. You can create a desktop shortcut to the Start file instead. Keep the whole extracted folder until your provider guides you through an update.
 
-```powershell
-$stockbridgePilot = Join-Path $env:LOCALAPPDATA 'StockbridgePilot'
-New-Item -ItemType Directory -Force -Path $stockbridgePilot | Out-Null
-Set-Location -LiteralPath $stockbridgePilot
-git clone https://github.com/hingadtyre/TallyIntegration.git app
-if ($LASTEXITCODE -ne 0) { throw 'Clone failed; stop and resolve it before continuing.' }
-Set-Location -LiteralPath (Join-Path $stockbridgePilot 'app')
-git checkout --detach 6a55cb2230ac6ac08635d37aa1bdc0cd496a0256
-if ($LASTEXITCODE -ne 0) { throw 'Could not select the verified version.' }
-```
+This is a portable pilot, not a signed Windows installer. If Windows or your organization's security software blocks it, ask your provider or IT contact to verify the supplied file. Do not disable security software to get past the message. The provider must resolve distribution/signing requirements before a routine customer release.
 
-`$stockbridgePilot` holds the installation folder; `Join-Path` combines Windows path components. `New-Item` creates the folder, `-Force` permits an existing parent, and `Out-Null` hides its directory listing. `Set-Location -LiteralPath` enters that exact folder. `git clone` downloads the source into `app`; `checkout --detach` pins the tested commit instead of following later development automatically. Detached HEAD is expected for this pilot. Each exit-code check stops the instructions after a failed Git command. The repository is public; the customer does not need write access just to download it.
+## 2. Open Tally and enable its local connection
 
-A source ZIP downloaded from that exact commit is an alternative when Git is unavailable. Extract it into a writable local folder, enter the extracted root, and continue below. A source ZIP still requires Node and the build steps; it is not a packaged customer application.
+This lets Stockbridge ask Tally for stock. It does not let Stockbridge create or edit bills.
 
-### Install, verify and start
+1. Open Tally on this computer.
+2. Load the company whose stock you want to review. Check its name carefully; similarly named companies can contain different stock.
+3. In current TallyPrime guidance, open **F1 (Help) > Settings > Connectivity > Client/Server Configuration**.
+4. Choose **HTTP Server** or **Both** and note the port number. Use **9000** if it is available. A port is simply the connection number that both applications must agree on.
+5. Save the setting. If Tally asks you to restart, follow its prompt, reopen Tally and load the company again.
+6. Keep Tally open during the next steps.
 
-From the checkout root, **PowerShell**:
+Your Tally release may have different labels. Another documented route is **Alt+Z (Exchange) > Configure > Client/Server Configuration**. Older XML guidance uses **Advanced Configuration**. If you cannot find these options, tell your technician the Tally release shown in **F1 > About** instead of changing unrelated settings. Where present, **F1 > About > Connectivity** shows the listening port.
 
-```powershell
-npm.cmd ci
-if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
-npm.cmd run verify
-if ($LASTEXITCODE -ne 0) { throw 'Verification failed; do not start the customer pilot.' }
-npm.cmd start
-```
+Only the **local HTTP connection** is needed. Do not create a public tunnel, change router port-forwarding, enable Tally.NET synchronization, or configure ODBC for this app. Your normal Tally backup remains necessary; Stockbridge's database backup is not a backup of the accounting company.
 
-`ci` installs the versions recorded in `package-lock.json`; `verify` checks formatting, code rules, TypeScript, tests and the production build. Tests use fixtures and temporary databases, not the customer's Tally. `start` launches the real workspace. Using `npm.cmd` avoids requiring PowerShell execution-policy changes to run npm. These commands assume the customer's normal internet connection; the developer machine's corporate proxy configuration is not part of the customer setup.
+Official references: [Tally's current connectivity instructions](https://help.tallysolutions.com/building-tunnel-based-connectivity-for-tallyprime-integrations/), [alternative menu and restart instructions](https://help.tallysolutions.com/set-up-for-data-synchronisation/), [older XML settings](https://help.tallysolutions.com/xml-integration/). Those pages also describe other integration arrangements; follow only the local-connection steps above for Stockbridge.
 
-Open **http://127.0.0.1:4310** in a browser on the same computer. The terminal should show the dashboard address and say marketplace publishing is disabled. Keep that terminal running. Close the browser freely; stop the backend with **Ctrl+C** when needed. No Windows startup service is installed by these commands.
+## 3. Start Stockbridge
 
-On first live start, SQLite creates `.data/live.sqlite`. Stock and listings are empty until imported. A disconnected account label, **HINGADTYRES**, appears; it is a saved setup label, not proof of API authorization. To view demonstration data separately, stop the live process and use `npm.cmd run demo`, then open port **4311**. Never copy the developer's sample database into the customer's live workspace.
+1. In the extracted application folder, double-click **Start Stockbridge.cmd**.
+2. Allow a short time for startup. The application opens your browser at **http://127.0.0.1:4310**.
+3. If the browser does not open automatically, enter that complete address in its address bar, not a web search box.
+4. Check that the dashboard says marketplace publishing is unavailable. This is expected for this pilot.
 
-For subsequent live starts, open PowerShell, enter the same checkout root and run `npm.cmd start`. The existing Windows launcher, `scripts/app.ps1 -Mode Live`, is another source-checkout option where local script execution is permitted. It needs development dependencies installed; it is not yet a launcher for a production-only package.
+The address **127.0.0.1** means this computer. It is not a public website. Open it on the same computer as the application; it will not open the same dashboard on a phone or another PC.
 
-## 2. Enable Tally's local connection
+The Start window may close after startup. Stockbridge continues running in the background. Closing the browser does not stop it. Starting it a second time opens the existing instance rather than starting a second owner of the same database.
 
-On the **customer's** computer:
+If Start reports a problem, leave the message visible and use the troubleshooting table below. Do not delete the data folder to try to repair startup.
 
-1. Open TallyPrime and load the intended company.
-2. Where available, open **F1 (Help) → Settings → Connectivity → Client/Server Configuration**, select **HTTP Server** or **Both**, and set the port to **9000** or another unused port. Another documented route is **Alt+Z (Exchange) → Configure → Client/Server Configuration**. Older XML documentation uses **F1 → Settings → Advanced Configuration**. Follow the installed release's labels; do not assume a particular release-number split between these menus.
-3. Save the configuration and follow any Tally prompt to restart; reload the company afterward. Initial Tally connectivity changes may need a Tally restart. Later changes to this app's polling intervals do not.
-4. Keep this endpoint local. This app does not need a public Tally port or a router port-forward. ODBC is not used by the XML connector.
+## 4. Connect to the correct Tally company
 
-References: [current Tally connectivity guide](https://help.tallysolutions.com/building-tunnel-based-connectivity-for-tallyprime-integrations/), [older XML configuration](https://help.tallysolutions.com/xml-integration/), [integration prerequisites](https://help.tallysolutions.com/pre-requisites-for-integrations/), [connectivity and restart guidance](https://help.tallysolutions.com/set-up-for-data-synchronisation/). Only the local HTTP connection is needed; do not follow the external tunnel, public-IP or Tally-to-Tally synchronization parts of those guides for this pilot.
+1. In Stockbridge, select **Settings** in the left navigation.
+2. Find the Tally connection address. If Tally uses port 9000, enter **http://127.0.0.1:9000/**. If your Tally port is different, change only that number to the one you recorded.
+3. Select **Save settings**. Confirm the saved message. A failed save leaves the previous settings in place.
+4. Select **Connections**, then **Check & discover companies**.
+5. Wait for the result. Successful discovery shows **Connected**, the check time and the companies found. A red error or **Offline** means the check did not succeed, even if older stock is still visible.
+6. Use the company selector at the top to choose the intended company, then open **Inventory**.
 
-## 3. Discover and verify company stock
+Keep the Tally port and dashboard port distinct: **9000** is normally Tally; **4310** is Stockbridge's browser dashboard. Putting 4310 in the Tally address is not a connection fix.
 
-1. In the app, open **Settings** and enter `http://127.0.0.1:9000/`, replacing 9000 if the customer configured another port. Save settings.
-2. Open **Connections → Check & discover companies**. Select the required company in the top bar.
-3. Compare several stock items with Tally's stock summary for the same company and date: include positive, zero, negative and newly created items. An unknown value is shown as a dash; it must not be treated as zero.
-4. Check that an unmapped item is visible, and that switching companies changes the stock shown without combining balances.
-5. Use a customer-approved test entry or an ordinary real transaction to verify changes after billing and receiving stock. Refresh should observe Tally's resulting balance, without writing back to Tally. Do not create a fictitious live bill solely for testing.
+More than one company can be loaded in Tally. Stockbridge keeps their records separate; the top selector decides which company you see. It does not combine their quantities. Background checks can read the loaded companies, regardless of which one is currently displayed.
 
-Live Tally checks default to **30 seconds after the preceding check finishes**, with longer waits after failures. Change the interval in Settings without restarting this app. Discovery can import multiple loaded companies; the dashboard selection filters which company's records are displayed. No balances are combined. Newly added Tally items arrive on a successful stock read and are saved by their stable company/item identities; the database is not a fixed list populated only at installation. Brands are not extracted by the first Tally reader, so live brand filtering will need verified brand data before it is useful.
+Changing the Tally address makes all previously read Tally observations require a fresh read. Refreshing only one company does not make another company's old-source stock current.
 
-This first adapter reads company-wide closing balances. Godown-specific extraction and source-to-marketplace location mapping must be completed before publication. Stable IDs, the company projection and balance-period semantics still need live verification; passing mock tests does not replace these checks.
+## 5. Check the stock before relying on the display
 
-If discovery fails, inspect **Activity → Diagnostics** and check Tally is open, a company is loaded, and both ports match. A failure preserves old observations and blocks review that requires fresh data. Do not replace an unknown balance with zero to bypass validation.
+Complete this with your Tally administrator or Stockbridge provider during first setup:
 
-## 4. Connect the HingadTyre Flipkart account
+1. Compare the selected company name with Tally.
+2. Compare several familiar items with the corresponding Tally stock summary, using the **same date/reporting period and units**.
+3. Include an item with stock, an item with zero, and a newly created item. If the business uses negative balances or different units, include those too.
+4. Confirm a Tally item appears even if it has no Flipkart listing. The current live pilot does not import Flipkart listings, so empty mapping/listing sections are expected.
+5. If another company is loaded, switch companies and confirm its quantities stay separate.
+6. After an ordinary sale is billed in Tally, use **Refresh Tally** and check the resulting quantity. Do the same after an ordinary stock receipt when practical. Do not create a fictitious live bill just to test the app.
+7. Ask the provider to record the verified Tally release, company/item identities, units, reporting period and results. Differences must be investigated before the display is accepted.
 
-**This section describes preparation and the future connection workflow. The current app cannot complete this step. The provider authorization service, customer connect flow and listing importer are not implemented, and registering an API application will not activate them.**
+**This version reads company-wide closing balances.** It does not yet select individual godowns for each Flipkart warehouse. A godown is a Tally stock location. If your business has several locations, the total shown must not be treated as the availability at a particular marketplace warehouse.
 
-The HINGADTYRES browser session and inspected listing evidence remain valid setup context. Browser sign-in alone does not authorize this app's API access.
+A dash **-** means the quantity is unknown or unavailable, not zero. If a read fails, the last saved quantity can remain visible. Check the connection message and observation time before interpreting it as current stock. The app must not invent zero to hide a failed read.
 
-The accepted product model uses the Stockbridge provider's registered Flipkart partner application and separate authorization from each customer. A small provider-operated HTTPS authorization service handles the callback and protects the shared application secret. The dashboard, Tally connection, stock processing and SQLite database remain on the customer's computer. Customers do not create or share seller self-access credentials for this product. See [the provider authorization decision](adr/0003-provider-managed-flipkart-authorization.md) and [Flipkart's application and authorization guidance](https://seller.flipkart.com/api-docs/FMSAPI.html#application-registration).
+Brands are not extracted by the current live Tally reader. Brand filters become useful only when reliable brand information is available; a blank brand is not a missing stock item.
 
-The planned customer release has no invitation, activation code or separate Stockbridge signup. Anyone receiving the installer can install it, connect their own seller account and complete setup. The provider prepares and operates the shared authorization service once; it does not approve each customer's installation. Flipkart consent and stock/mapping verification still apply to each customer.
+## 6. Understand refresh and background checks
 
-### One-time provider setup before customer onboarding
+- The default Tally check interval is **30 seconds after the preceding check finishes**. A slow or failed check can make the next check later; failures cause longer waits before retrying.
+- To change it, open **Settings**, change the Tally stock interval and select **Save settings**. No Stockbridge restart is needed. Start with the default unless your provider has measured a reason to change it.
+- **Refresh Tally** requests a check now for the selected company. **Connections > Check & discover companies** discovers and reads the loaded companies.
+- Newly created stock items appear after a successful read. Their records are then saved in the local database; the list is not permanently fixed at installation.
+- The dashboard periodically reads the saved state too. Allow a little time for an automatic background result to appear, or use the refresh action.
+- Marketplace and catalog intervals shown in Settings are future preferences. **They do not run Flipkart checks in this version.**
 
-These prerequisites remain outstanding. No provider application has been registered and no authorization service has been deployed by this project.
+Tally must be open with the relevant company loaded for fresh stock. Turning off the PC, sleeping it, signing out, closing Tally or stopping Stockbridge interrupts some or all of these checks. A restart of Windows does not automatically start this pilot; follow the daily startup steps below.
 
-1. Register the Stockbridge provider through Flipkart's partner process, complete its verification and obtain the required application access.
-2. Deploy and operate the HTTPS authorization service, then configure the application's required callback. The local dashboard address is not this hosted callback. Keep the shared application secret on the provider service, never in the installer or a customer database.
-3. Implement and verify a connection flow that binds each authorization result to the initiating customer installation and verifies the seller identity. Complete protected per-customer credential handling, renewal and failure recovery before making connection available.
+## 7. Set up and verify backups
 
-Provider hosting and credential maintenance continue after setup. Do not put secrets in source control, chat, dashboard screenshots or portable backups.
+Stockbridge already uses **SQLite**, a database stored in a file on your computer. You do not install a separate database server or create database tables yourself. It saves the application's observations, settings, drafts, mappings and history across restarts. It does not replace Tally or back up the customer's Tally company.
 
-### Each customer's connection and consent, once implemented
+1. Ask your provider to help choose a backup destination, preferably on a separate customer-controlled drive.
+2. In File Explorer, open that folder. Click its address bar and copy the complete folder path.
+3. In Stockbridge, open **Settings > Backup folder**. Paste the complete path, for example **D:\Stockbridge Backups** if that drive and folder belong to your computer. Do not blindly copy an example drive letter that does not exist.
+4. Select **Save settings**. Stockbridge checks that it can write there. If it fails, the previous folder remains saved; correct the folder or its access permissions and try again.
+5. Select **Back up now**. Wait for **Verified backup saved** and note the displayed location.
+6. Open that location in File Explorer. Keep both the **.sqlite** backup file and the matching **.json** information file together.
+7. Create a backup after setup, before each application update, and regularly during the pilot. Automatic backup scheduling/retention is not implemented yet.
 
-1. Start the Flipkart connection from the customer's local Stockbridge setup. The connection flow opens Flipkart's authorization page for the provider application.
-2. The customer signs in to their own seller account on Flipkart and reviews the actual application, permissions and terms before authorizing it. The seller password is not a Stockbridge setting. Do not assume separate per-feature permission switches exist just because the product needs inventory and order APIs.
-3. After authorization, Stockbridge verifies the authenticated seller identity and associates it with the initiating local installation. Confirm that the connected account is the intended one, HINGADTYRES for this first customer.
-4. Read that seller's inventory locations and existing listings, then observe current quantities. Record when each observation was read and complete the mapping checks below.
-5. Verify approved-order coverage before using sales allowances. A decrease in shared Tally stock alone cannot identify which duplicate listing sold. A completed connection does not enable publication until the remaining release checks in section 6 are satisfied.
+Use **Back up now**, not a manual copy of the database while the app is running. Some committed changes can be in a companion working file; the app's verified backup includes them correctly.
 
-Token details belong in the connector implementation rather than customer copy-and-paste commands. See [Flipkart token flows](https://seller.flipkart.com/api-docs/FMSAPI.html#generating-access-tokens) and the [onboarding research note](integration/customer-onboarding-research.md).
+Changing the backup folder affects future backups immediately. It does not move older backups. Completed backup copies can be stored elsewhere; keep the **active database** on the local computer, outside OneDrive/Dropbox and network shares. Backups contain business information, so share them only with authorized support.
 
-## 5. Validate listings and packs
+If you need to recover a backup, stop normal work and contact the provider. The pilot has no customer-facing import/restore button. Support can inspect a verified pilot backup and, with your approval, restore it while the app is stopped. This keeps a safety copy and your current connection settings, then requires fresh stock reads. Do not overwrite the active database yourself or assume that an old backup can safely resume marketplace policies. The [provider recovery procedure](../CONTRIBUTING.md#restore-a-pilot-backup-support-only) is for supervised support; it does not restore Tally accounting data or change Flipkart.
 
-This becomes a live customer step after authenticated listing import is delivered. In the current live workspace there are no imported Flipkart listings to map; sample mappings only demonstrate the workflow.
+## 8. Daily start, status and stop
 
-- Import the customer's existing listings; mapping must not create Tally stock items or Flipkart products.
-- Match the exact stock item, tyre brand/model/dimensions, base unit, listing and destination location.
-- Prefer a reliable sellable-set field. Shipping-package count can be used for this customer's one-tyre-per-package practice only after verifying it for the particular listing. SKU endings, package IDs and title digits are not pack evidence.
-- Recheck the known example `145/70R12_X3_2_2` / `VTEGYHJKPW2NFEYP`: the browser showed set of two and two packages. Compare the authenticated response. This example does not verify every listing.
-- Compare all mappings for mismatches before enabling any positive publication. Missing or conflicting evidence keeps the affected mapping blocked.
+**At the beginning of the day:**
 
-## 6. Complete the first live release
+1. Sign into the same Windows account used during setup.
+2. Open Tally and load the required company.
+3. Double-click **Start Stockbridge.cmd** in the same extracted application folder.
+4. Check the selected company, connection result and stock observation time.
+5. Continue your existing Flipkart stock-management process. This pilot does not synchronize marketplace quantities.
 
-The app currently rejects publication requests. Before releasing that capability, finish authenticated order coverage, allowance activation, durable jobs/read-back, godown/location mapping, safe recovery, scheduled backups and customer installation packaging.
+**To check whether it is running:** double-click **Stockbridge Status.cmd**. It displays whether this installation is responding, the dashboard address and the data folder. The window waits for a key so you can read it. Do not share the contents of the internal runtime-control file found in that folder.
 
-Then perform a small customer-reviewed publication and verify the result in Flipkart before expanding scope. Confirm the full shared-stock tyre rule, manual limited-sales behaviour, persistent zero hold and Pause semantics from the [approved architecture](design/architecture.md). For a listing with one remaining allowed unit, selling that unit must exhaust its allowance even while Tally still has stock; larger allowances decrease by the units sold. Cancellation or purchase must not refill an allowance automatically.
+**To stop it:** double-click **Stop Stockbridge.cmd**. Wait for the confirmation that it stopped and saved data was retained. The application finishes an active source operation before closing its database. Closing only the browser is not the stop action. If shutdown is still finishing, wait and check Status before changing application files.
 
-Choose a writable backup folder and verify **Back up now**. The current manual backup is available; scheduled retention and import/restore are pending. Closing the dashboard leaves the running backend active, but closing its terminal stops it until Windows service packaging is implemented. Tally must be open and the relevant company loaded for fresh stock reads.
+**After restarting Windows:** open Tally and use Start again. Automatic Windows startup, a Windows service and automatic crash restart are not included in this portable pilot.
 
-Record the customer/version, verified company IDs, source and marketplace locations, account identity, mapping verification date, live test outcome, backup destination and support owner. Record identifiers and outcomes, never credentials.
+## 9. Where your data lives
 
-## 7. Database and customer packaging
+Use **Open Data Folder.cmd** to open the active pilot data folder in File Explorer. For the packaged pilot it is under your Windows profile:
 
-### The database is already connected
+`%LOCALAPPDATA%\Stockbridge\Pilot\data`
 
-SQLite is a full relational database embedded in the backend. The customer does not install a separate database server or manually create tables. The app opens the file and runs its schema initialization/migrations. Current tables include companies, seller accounts, stock items, listings, proposals, settings and activity.
+`%LOCALAPPDATA%` is Windows' name for a local folder belonging to your signed-in user. You can paste the full line above into File Explorer's address bar. Different Windows logins have different folders. Switching Windows users can therefore show an empty, separate workspace.
 
-```mermaid
-flowchart LR
-    Dashboard[Browser dashboard] <--> Backend[Local Stockbridge backend]
-    Backend -->|Read-only stock requests| Tally[Tally on the same PC]
-    Backend <--> Database[(Local SQLite database)]
-    Backend -. Future connector .-> Flipkart[Flipkart API]
-```
+| File or folder                                        | What it contains                                                       |
+| ----------------------------------------------------- | ---------------------------------------------------------------------- |
+| `live.sqlite`                                         | Stockbridge's saved customer workspace; do not edit it directly        |
+| `live.sqlite-wal` and `live.sqlite-shm`, when present | SQLite's working files; do not delete while running                    |
+| `backups`                                             | Default backup folder, unless changed in Settings                      |
+| `migration-backups`                                   | Safety copies made for supported database-version upgrades             |
+| `restore-backups`                                     | Safety copies kept before a technician-assisted pilot restore          |
+| `live.diagnostics.ndjson`                             | Technical activity/error details for support                           |
+| `startup.log`                                         | Startup messages if the dashboard could not open                       |
+| `live.runtime.json`, while running                    | Private control information used by Start/Stop/Status; do not share it |
 
-For the pilot folder above:
+Application files and customer data are separate. Extracting a new application version does not itself move or erase this data. Starting from another extracted copy under the same Windows login uses this same pilot workspace; only one instance can own it at a time. Do not run two different versions against it.
 
-| Path under `%LOCALAPPDATA%\StockbridgePilot\app` | Purpose                                                                              |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| `src`, `dist`, `package.json`                    | Application source/build and package metadata                                        |
-| `.data\live.sqlite`                              | Customer observations, mappings, drafts, policies, settings and activity             |
-| `.data\demo.sqlite`                              | Separate demonstration data, only if demo mode was started                           |
-| `.data\live.diagnostics.ndjson`                  | Local technical logs                                                                 |
-| `.data\backups`                                  | Default manual backup destination; change it in Settings                             |
-| `.data\migration-backups`                        | Verified safety copies created when an existing schema needs its supported migration |
+A developer running a source checkout normally uses that checkout's **.data** folder instead. That is a different workspace. Installing this pilot does not automatically copy an earlier developer/pilot database into the new location; have the provider plan any transfer.
 
-`.gitignore` excludes `.data`, so neither cloning nor a normal Git push transfers these customer records. Restarting in the same installation reopens its database. Re-cloning into a different folder creates a different workspace; it does not restore the original mappings. Tally remains the source of physical stock, and Flipkart remains the source of its listings and observed marketplace stock. This database stores the application's own operational state and observations; it is not a backup of the customer's accounting company.
+The package contains no HingadTyre data, credentials or preconfigured mappings. Cloning the source repository or downloading another ZIP does not restore customer records. A remote/cloud database is not needed for this local persistence. Moving inventory processing to a server would require a separate, planned migration.
 
-The data path is currently derived from the backend's working directory. `npm start` from the package root and the PowerShell launcher keep that predictable. There is no configurable ProgramData/AppData migration or data-directory setting implemented yet. The database lives beside the code today because this is a source checkout; it should have a stable independent location in the customer package.
+## 10. Updates, recovery and removing the pilot
 
-### Recommended delivery: a Windows installer
+Arrange updates with the provider during the pilot:
 
-For routine customer use, deliver a versioned installer with:
+1. Create a verified backup and retain its information file.
+2. Use **Stop Stockbridge.cmd** and confirm it has stopped.
+3. Keep the current application folder and the customer data folder. Extract the new, provider-verified package into a new application folder.
+4. Have the provider confirm that the version supports your database and backup. Do not open a newer database with an older application to attempt a rollback.
+5. Start the new version, check Status, company counts, saved settings and Tally observations, then take a fresh backup.
+6. Keep the old package and safety backup until the provider confirms the update worked. Replace any desktop shortcut so it points to the new Start file.
 
-- The compiled backend/dashboard, a tested Node runtime and required runtime dependencies. Git, npm installation and compilation should not be customer tasks.
-- A shortcut opening the local dashboard and a background service with automatic startup and restart after failures. A browser close must not stop stock checks; the PC must remain running, and Tally must be open with the relevant companies loaded.
-- Application files under `%ProgramFiles%\Stockbridge`, and writable service data/logs under an explicitly permissioned `%ProgramData%\Stockbridge` subfolder. Resolve the standard Windows folders rather than hard-coding a drive letter. A per-user installation could instead use `%LOCALAPPDATA%\Stockbridge`, but its runtime/credential ownership must be consistent. [Windows folder definitions](https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid)
-- A tested upgrade procedure that backs up data, stops the old process, applies only supported migrations, starts one new process and verifies health. Uninstall must preserve customer data by default, with deletion a separate explicit choice.
-- Protected credential storage, scheduled verified backups, a tested restore flow and visible version/connection status. Source refresh and marketplace reconciliation must precede resumed publication after restore.
+There is no automatic updater or uninstall wizard. To remove application files, stop the app first and remove only its extracted application folder. The separate data folder remains. Deleting the data folder or backups is a separate decision and can permanently remove saved work; do it only after arranging a verified retained backup with the data owner.
 
-These are release requirements, not existing installer features. An interim portable ZIP is possible, but it needs a dedicated launcher, bundled runtime and stable external data path. Copying the current developer folder or shipping the existing source-checkout launcher with development dependencies removed is not a completed packaging solution.
+An application backup is not a rollback of Tally bills or marketplace orders. Production restore must reconcile those sources before publication resumes. That full recovery workflow is still a release blocker.
 
-SQLite remains suitable for one local backend. A remote database is not needed just to make data persistent. If the product later needs centralized operations or many concurrent writers, evaluate a server database such as PostgreSQL behind the backend. That migration needs schema conversion, transaction changes, authentication and recovery testing; it is not a connection-string switch. A small server can also use SQLite behind its API, so adding a second dashboard user alone does not dictate a database replacement. [SQLite deployment guidance](https://www.sqlite.org/whentouse.html)
+## 11. If something goes wrong
 
-Do not put the active SQLite file on a network share or use file synchronization as database replication. This app uses SQLite WAL mode, which requires its readers/writers to be on the same host. Multiple future clients should talk to an application API. A cloud-hosted backend would still need a connector on the customer's computer to reach local Tally. [SQLite WAL constraints](https://www.sqlite.org/wal.html)
+| What you see                                       | What to do                                                                                                                                                         |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Double-clicking Start does not work                | Extract the entire ZIP first. Check that `runtime` and `dist` are beside the launch files. If Windows blocks the file, contact the provider/IT team.               |
+| Browser says the page cannot be reached            | Run Status. If stopped, use Start. Use `http://127.0.0.1:4310` on this computer, not a phone or another PC.                                                        |
+| Startup says the address/port is in use            | Another app or Stockbridge instance may already use 4310. Contact support; do not close an unknown process or change database files.                               |
+| Startup failed or Status cannot confirm the app    | Use Open Data Folder and retain `startup.log` for support. Do not share `live.runtime.json`.                                                                       |
+| Tally is Offline or discovery fails                | Open Tally on this computer, load the company, confirm the HTTP port matches Settings, follow any Tally restart prompt, then retry Check & discover companies.     |
+| Correct company is missing                         | Load it in Tally, then discover again. Do not select another company merely because its name is similar.                                                           |
+| Stock differs from Tally                           | Compare company, date/reporting period, units and company-wide totals. Record the example and ask support to investigate; do not replace unknown values with zero. |
+| Old stock remains after a failure                  | This is the last saved observation, not a successful new read. Follow the connection error and refresh successfully.                                               |
+| New Tally item is missing                          | Confirm it belongs to the selected company and use Refresh Tally after saving it in Tally.                                                                         |
+| No Flipkart listings, or publishing is unavailable | Expected for this pilot. There is no hidden setting, password or restart that enables the unimplemented integration.                                               |
+| Backup cannot be saved                             | Check that the saved folder/drive exists, is writable and has free space. Keep the live database and any previous verified backups.                                |
+| A new Windows login shows no data                  | Stop and check the original Windows account and data folder with support before creating a second workspace.                                                       |
 
-## 8. Daily use, backup and support
+Open **Activity > Business activity** for understandable action history. Open **Activity > Diagnostics** for technical details, then use **Export diagnostics** when support requests them. Record the time of the problem, the action, the app/package version from Status/manifest, the selected company and any request reference shown in the error. Redact business details that support does not need. Never send passwords, application secrets, runtime-control files or complete order/customer payloads casually.
 
-For the current pilot, open Tally/load the company, start the app from its original folder, and open port 4310. Check the selected company and observation time. Keep the backend terminal open. After a reboot or terminal closure, start it manually again. Leaving a laptop asleep interrupts the checks.
+## What is still required for Flipkart synchronization
 
-In **Settings → Backup folder**, choose an absolute writable path, save it, then select **Back up now**. Confirm the verified result. A separate disk/location can protect against failure of the application disk; choose a customer-owned destination. Backups contain business data and need appropriate access protection. A copied backup may be moved off-machine after it is complete; the active database must stay local.
+**The current customer setup stops after the read-only checks above.** These remaining steps cannot be completed in this version, and are not instructions to search for missing buttons.
 
-Use the app's backup operation rather than copying just an active `.sqlite` file: committed changes may still be in companion WAL files, whereas the implemented backup includes them. Scheduled backups and restore/import are not implemented. Preserve the verified copy and its manifest; do not treat manually overwriting the active database as a supported recovery procedure.
+The provider must first deliver and operate the missing authorization service and complete the listing, stock-location, order, publication and recovery implementation. Flipkart must approve the provider's partner/application access, and the provider must deploy a valid HTTPS callback. These provider prerequisites are separate from the customer's Tally setup. The customer's local dashboard address is not the hosted callback.
 
-Before any technician-assisted update, create and verify a backup, stop the backend with Ctrl+C, retain the data directory, and install only a reviewed version with a compatible migration. Do not replace the entire checkout or use cleanup commands that erase ignored `.data` files. Do not downgrade a migrated database blindly. The current v1-to-v2 migration safety copy is not a general updater/rollback system.
+**Does the customer need another Flipkart application?** No separate customer application is intended. The provider registers **Stockbridge itself** with Flipkart once. Each customer will then use Stockbridge's Connect action and approve access on Flipkart's page. Registration is not the purchase of another software product; the public registration guide does not establish a registration fee. The provider may have hosting/domain costs for its authorization service. Customer stock and the local database remain on the customer's PC. See [Flipkart's third-party application registration](https://seller.flipkart.com/api-docs/FMSAPI.html#application-registration).
 
-| Symptom                                  | Check                                                                                                                |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Dashboard does not open                  | Backend terminal is running, startup succeeded, and browser uses 4310 for live or 4311 for sample on the same PC     |
-| Wrong Node version                       | Install/select 24.x; reopen the terminal and check `node --version`                                                  |
-| Company/stock does not import            | Tally is open, company loaded, configured HTTP port matches; inspect Activity → Diagnostics                          |
-| Stock differs from Tally                 | Compare the same company/date/base units; current export is company-wide, not a godown balance                       |
-| No Flipkart listings or Connect workflow | Expected current limitation; the real importer/authorization flow has not been delivered                             |
-| Publishing unavailable                   | Expected current limitation; there is no setting that enables the missing integration                                |
-| Data appears missing after reinstall     | Confirm the original installation/data path; stop before creating mappings in a second workspace and involve support |
-| Backup fails                             | Saved destination exists/is writable and has free space; retain the original live database                           |
+Once those features are implemented, tested and released, the complete customer journey will be:
 
-Use **Activity → Business activity** for user-facing history and **Activity → Diagnostics** for technical logs. Share the application version, relevant request reference, company/location identifiers and a redacted error description with support. Keep credentials and full customer payloads out of support messages.
+1. Receive the verified production package, install it, and confirm its supported background startup, backup and recovery behavior.
+2. Configure the local Tally connection, verify the company and units, and explicitly select the Tally godowns that supply the marketplace locations.
+3. Start **Connect Flipkart** in Stockbridge, sign into the correct seller account on Flipkart's own page, review the provider application and grant consent. No separate Stockbridge invitation, activation code or customer signup is planned.
+4. Confirm the authenticated seller identity and its stock locations. For HingadTyre, verify the actual HINGADTYRES account; a display label alone is insufficient.
+5. Import existing listings and current marketplace stock. Compare each listing's tyre brand/model/dimensions and verified set size with its Tally stock item. Mapping links existing records; it does not create products in either system.
+6. Verify pack evidence. For HingadTyre's one-tyre-per-shipping-package practice, package count can be a fallback only after verifying that listing. Do not guess from SKU endings or title digits.
+7. Review proposed stock for an explicitly selected small set of listings. Confirm account, location, company, set size and quantity before publishing. Verify the result in Flipkart before expanding the scope.
+8. Check automatic behavior using approved real activity: billing and stock receipt, a one-sale allowance for the exact listing, a persistent zero hold, Pause/resume, a failed connection and restart/recovery. Orders must not be deducted twice or reopen an exhausted allowance.
+9. Enable routine automation only after those checks and a supported backup/restore exercise pass. Record the provider's support contact and recovery procedure.
+
+For HingadTyre's agreed tyre rule, a listing with no complete pack must be zero. If at least one complete pack exists, its normal advertised quantity uses a minimum of five. This is a named business policy accepted for this customer/category, not evidence that five physical packs exist. Duplicate listings share the same underlying stock, so simultaneous sales before billing/synchronization remain possible. The customer and provider must review low physical stock and the agreed exposure during activation.
+
+All remaining application, provider and customer acceptance checks are tracked in [First-customer release readiness](release-readiness.md). The provider's technical workflow is in [CONTRIBUTING](../CONTRIBUTING.md); it is not required reading or a command checklist for the customer.

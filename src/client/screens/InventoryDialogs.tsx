@@ -70,8 +70,8 @@ export function ReviewDialog({
       <div className="message information">
         <Icon name="info" />
         <span>
-          Publishing is unavailable while the live connections are being verified. This review has
-          not changed any marketplace stock or active policy.
+          Marketplace publishing is not available in this version. This review has not changed any
+          marketplace stock or active policy.
         </span>
       </div>
       <div className="modal-actions">

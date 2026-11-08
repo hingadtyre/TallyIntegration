@@ -4,6 +4,7 @@ dist/
 .data/
 .cache/
 coverage/
+releases/
 *.log
 .env
 .env.*

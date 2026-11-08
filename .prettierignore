@@ -4,6 +4,7 @@ dist/
 .cache/
 .data/
 coverage/
+releases/
 package-lock.json
 AGENTS.md
 **/AGENTS.md

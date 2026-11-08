@@ -94,7 +94,16 @@ export class StockRefresh {
     const initial = this.store.read();
     if (initial.mode === 'demo') {
       this.store.update((state) => {
-        state.connection.lastChecked = new Date().toISOString();
+        const at = new Date().toISOString();
+        const demoCompanies = state.companies.filter((company) => company.source === 'demo');
+        const demoCompanyIds = new Set(demoCompanies.map((company) => company.id));
+        // An offline restore invalidates observations; explicit sample refresh can
+        // revalidate those local fixtures without inventing a real source read.
+        for (const company of demoCompanies) company.lastSuccess ??= at;
+        for (const item of state.items) {
+          if (demoCompanyIds.has(item.companyId)) item.observedAt ??= at;
+        }
+        state.connection.lastChecked = at;
         state.connection.message = 'Sample observations retained. No Tally or marketplace calls.';
         recordActivity(state, 'refresh', 'Sample data refreshed. No external calls.');
       });

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, resolve, sep } from 'node:path';
@@ -11,6 +11,28 @@ const contentTypes: Record<string, string> = {
   '.css': 'text/css',
   '.svg': 'image/svg+xml',
 };
+
+export interface RuntimeHealth {
+  application: 'stockbridge';
+  version: string;
+  mode: 'live' | 'demo';
+  instanceId: string;
+  publishingEnabled: false;
+}
+
+interface RuntimeControl {
+  health: RuntimeHealth;
+  stopToken: string;
+  requestStop(): void;
+}
+
+function requireRuntimeAuthorization(request: IncomingMessage, token: string): void {
+  const actual = Buffer.from(request.headers.authorization ?? '');
+  const expected = Buffer.from(`Bearer ${token}`);
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    throw new InputError('This action requires the current app instance authorization.', 403);
+  }
+}
 
 async function readJsonObject(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -102,7 +124,11 @@ async function sendAsset(response: ServerResponse, webRoot: string, path: string
   response.end(content);
 }
 
-export function createApp(service: InventoryService, webRoot = resolve('dist/web')) {
+export function createApp(
+  service: InventoryService,
+  webRoot = resolve('dist/web'),
+  runtime?: RuntimeControl,
+) {
   return createServer(async (request, response) => {
     const started = Date.now();
     const requestId = randomUUID();
@@ -119,6 +145,8 @@ export function createApp(service: InventoryService, webRoot = resolve('dist/web
         throw new InputError('Local access only.', 403);
       path = new URL(request.url ?? '/', 'http://localhost').pathname;
       if (path.startsWith('/api/')) {
+        if (request.method === 'GET' && path === '/api/health' && runtime)
+          return sendJson(response, 200, runtime.health);
         if (request.method === 'GET' && path === '/api/state')
           return sendJson(response, 200, service.snapshot());
         if (request.method === 'GET' && path === '/api/logs') {
@@ -131,6 +159,12 @@ export function createApp(service: InventoryService, webRoot = resolve('dist/web
         }
         if (request.method !== 'POST') throw new InputError('Route not found.', 404);
         requireDashboardRequest(request);
+        if (path === '/api/runtime/stop' && runtime) {
+          requireRuntimeAuthorization(request, runtime.stopToken);
+          await readJsonObject(request);
+          response.once('finish', () => runtime.requestStop());
+          return sendJson(response, 200, { stopping: true, instanceId: runtime.health.instanceId });
+        }
         const input = await readJsonObject(request);
         const result = await runCommand(service, path, input);
         service.log(path, `Completed in ${Date.now() - started} ms`, 'info', requestId);

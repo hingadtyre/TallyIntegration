@@ -1,72 +1,90 @@
-export function CustomerSetup() {
+export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }) {
   return (
     <section className="panel setup-panel">
-      <h2>Customer setup · HingadTyre</h2>
+      <h2>Set up this pilot</h2>
       <p>
-        Complete these steps on the customer's Tally computer. Development can continue with the
-        separate sample workspace. Tally discovery and manual backups are available now. Flipkart
-        connection and synchronization remain planned features.
+        Use Stockbridge on the same Windows computer as Tally. This version reads your stock and
+        saves verified backups. It does not connect to Flipkart or change marketplace stock.
       </p>
       <ol>
         <li>
-          <strong>Prepare Tally on the customer's computer.</strong>
+          <strong>Open your company in Tally.</strong>
           <span>
-            Open the intended company. Use F1 (Help) → Settings → Connectivity → Client/Server
-            Configuration to enable the HTTP server, normally on port 9000. Older versions may use
-            Advanced Configuration. Follow the installed version's labels and restart prompt.
+            In TallyPrime, look under F1 (Help) → Settings → Connectivity → Client/Server
+            Configuration. Enable HTTP Server or Both, usually on port 9000. Some versions use
+            Advanced Configuration instead. Follow your version's labels and any restart prompt,
+            then reopen your company. This connection stays on your computer; no internet tunnel is
+            needed.
           </span>
         </li>
         <li>
-          <strong>Enter the local address and discover companies.</strong>
+          <strong>Check the connection address.</strong>
           <span>
-            In Settings, use http://127.0.0.1:9000/ or the configured port. Then choose Check &
-            discover companies on this page. Select one company and compare its quantities with
-            Tally for the same date.
+            Open Settings. Under Connection address, enter http://127.0.0.1:9000/ and replace 9000
+            if you chose a different port in Tally. Choose Save settings, return to Connections,
+            then choose Check & discover companies. If the check fails, follow the message and try
+            again. Previously read stock stays visible.
+          </span>
+          <button className="text-button" onClick={onOpenSettings}>
+            Open Tally settings
+          </button>
+        </li>
+        <li>
+          <strong>Compare your stock with Tally.</strong>
+          <span>
+            Select the intended Tally company at the top, then open Inventory. Compare several items
+            and quantities with Tally for the same company and date. The figures are company totals,
+            not separate godown balances. A dash means unknown, not zero. Use Refresh Tally after a
+            normal stock change and check the observation time.
           </span>
         </li>
         <li>
-          <strong>Future step: authorize your Flipkart seller account.</strong>
+          <strong>Make a backup.</strong>
           <span>
-            Stockbridge's provider must first complete its Flipkart application registration and
-            connection service. Once available, start connection here, sign in on Flipkart and
-            review consent for the Stockbridge application. Each customer authorizes their own
-            account, HINGADTYRES for this installation. You do not need to create or share
-            self-access credentials. This connection flow is not available yet.
+            In Settings, keep the suggested Backup folder or enter a full writable folder path. Save
+            settings before using Back up now, then look for the verified-backup confirmation. This
+            backs up Stockbridge records, not your Tally accounting data. Automatic backups and
+            restoring a backup are not available in this version.
           </span>
-        </li>
-        <li>
-          <strong>After connection: verify stock locations and every pack mapping.</strong>
-          <span>
-            Compare tyre identity, base units, set size and location. One tyre per shipping package
-            is usable evidence only where verified for that listing. The first Tally connector reads
-            company totals; location-specific publication is pending.
-          </span>
-        </li>
-        <li>
-          <strong>Future release: review before enabling synchronization.</strong>
-          <span>
-            Check newly added items, normal stock changes, limited sales and zero holds. Choose a
-            backup folder and test Back up now. Marketplace publishing, scheduled backups and
-            restore remain unavailable in this build.
-          </span>
+          <button className="text-button" onClick={onOpenSettings}>
+            Open backup settings
+          </button>
         </li>
       </ol>
+      <h3>Starting and stopping the Windows pilot</h3>
+      <p>
+        Extract the entire supplied ZIP and double-click <strong>Start Stockbridge.cmd</strong>. It
+        opens the dashboard and keeps stock checks running in the background when you close your
+        browser. Start it again after signing in to Windows; automatic startup is not installed.
+        Keep the computer awake and Tally open with your company loaded.
+      </p>
+      <p>
+        Use <strong>Stop Stockbridge.cmd</strong> to stop the app and{' '}
+        <strong>Stockbridge Status.cmd</strong> to check whether it is running. Use{' '}
+        <strong>Open Data Folder.cmd</strong> to find its saved files and{' '}
+        <strong>Read Me.html</strong> for the full setup and troubleshooting guide.
+      </p>
+      <h3>Flipkart setup is not available yet</h3>
+      <p>
+        This version has no seller connection or listing import. Connecting your own seller account,
+        verifying stock locations and packs, reviewing the first stock update, and enabling
+        synchronization belong to a future release. No setting or browser sign-in can enable those
+        missing features in this pilot.
+      </p>
       <p>
         <a
           href="https://help.tallysolutions.com/building-tunnel-based-connectivity-for-tallyprime-integrations/"
           target="_blank"
           rel="noreferrer"
         >
-          Tally connection guide ↗
+          Tally's connection settings ↗
         </a>{' '}
         ·{' '}
-        <a
-          href="https://seller.flipkart.com/api-docs/FMSAPI.html#application-registration"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Flipkart authorization guide ↗
-        </a>
+        <a href="https://help.tallysolutions.com/xml-integration/" target="_blank" rel="noreferrer">
+          Tally's alternative configuration guide ↗
+        </a>{' '}
+        Use only the local HTTP settings in these guides; Stockbridge does not need their tunnel or
+        remote-access instructions.
       </p>
     </section>
   );

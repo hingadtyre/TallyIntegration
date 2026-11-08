@@ -86,7 +86,9 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
                 />
                 <span>seconds</span>
               </div>
-              <small>Preference saved; scheduling awaits API verification.</small>
+              <small>
+                Saved preference only. Marketplace stock checks do not run in this version.
+              </small>
             </label>
             <label className="field">
               <span>Listing metadata</span>
@@ -103,7 +105,7 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
                 />
                 <span>seconds</span>
               </div>
-              <small>Preference saved; scheduling awaits API verification.</small>
+              <small>Saved preference only. Listing imports do not run in this version.</small>
             </label>
           </div>
         </section>
@@ -122,8 +124,8 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
               onChange={(event) => setSettings({ ...settings, backupFolder: event.target.value })}
             />
             <small>
-              Save settings to apply a folder change. Existing backups stay in their original
-              folder.
+              Enter a full folder path, such as C:\Stockbridge Backups. Save settings to apply a
+              change. Existing backups stay in their original folder.
             </small>
           </label>
           <div className="backup-actions">
@@ -139,7 +141,7 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
             <small>
               Uses the saved folder: {state.settings.backupFolder}
               <br />
-              Automatic scheduling and restore are not available in this milestone.
+              Automatic backups and restore are not available in this version.
             </small>
           </div>
         </section>

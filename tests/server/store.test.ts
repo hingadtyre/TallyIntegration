@@ -12,6 +12,7 @@ test('a new live workspace is empty and a reopened workspace requires fresh sour
   assert.deepEqual(initial.proposals, []);
   assert.equal(initial.publishingEnabled, false);
   assert.equal(initial.accounts[0].status, 'not-connected');
+  assert.equal(initial.accounts[0].name, 'Flipkart seller');
   store.update((state) => {
     state.settings.tallySeconds = 45;
     state.connection.tally = 'online';
@@ -21,6 +22,17 @@ test('a new live workspace is empty and a reopened workspace requires fresh sour
   assert.equal(reopened.settings.tallySeconds, 45);
   assert.equal(reopened.connection.tally, 'not-checked');
   assert.equal(reopened.connection.nextPoll, null);
+});
+
+test('opening an existing live workspace preserves its saved seller identity', (t) => {
+  const f = fixture(t);
+  const store = f.open('live');
+  store.update((state) => {
+    state.accounts[0].name = 'HINGADTYRES';
+  });
+  const reopened = f.open('live').read();
+  assert.deepEqual(reopened.accounts, store.read().accounts);
+  assert.equal(reopened.accounts[0].name, 'HINGADTYRES');
 });
 
 test('a thrown update rolls back all changes and later valid commands still commit', (t) => {

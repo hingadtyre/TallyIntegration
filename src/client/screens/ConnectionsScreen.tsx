@@ -13,7 +13,7 @@ export function ConnectionsScreen({
   workspace: Workspace;
   onOpenSettings: () => void;
 }) {
-  const { busy, mutate } = workspace;
+  const { busy, refreshTally } = workspace;
   return (
     <>
       <div className="page-heading">
@@ -23,7 +23,7 @@ export function ConnectionsScreen({
           <p>Keep the company and seller account behind every quantity explicit.</p>
         </div>
       </div>
-      <CustomerSetup />
+      <CustomerSetup onOpenSettings={onOpenSettings} />
       <div className="connection-grid">
         <section className="panel connection-card">
           <div className="connection-card-top">
@@ -64,9 +64,7 @@ export function ConnectionsScreen({
           <button
             className="button secondary"
             disabled={!!busy}
-            onClick={() =>
-              void mutate('/refresh', {}, 'Checking Tally', 'Tally connection check completed.')
-            }
+            onClick={() => void refreshTally()}
           >
             <Icon name="refresh" />
             Check & discover companies
@@ -77,7 +75,7 @@ export function ConnectionsScreen({
             <div className="connection-card-top">
               <div className="service-logo flipkart-logo">F</div>
               <span className="badge badge-amber">
-                {value.status === 'demo' ? 'Sample account' : 'API connection pending'}
+                {value.status === 'demo' ? 'Sample account' : 'Not connected'}
               </span>
             </div>
             <h2>Flipkart</h2>
@@ -85,13 +83,13 @@ export function ConnectionsScreen({
             <p>
               {value.status === 'demo'
                 ? 'A demonstration account in the sample workspace.'
-                : 'Account name observed in the seller dashboard. API identity has not yet been verified.'}
+                : 'This is a setup label. No seller account has been connected or verified.'}
             </p>
             <div className="connection-note">
               <Icon name="info" />
               <span>
-                Signing in to the seller website does not connect this app. API authorization,
-                inventory locations, pack evidence and order access still need verification.
+                Flipkart connection, listing import and stock updates are not available in this
+                version. Signing in to the seller website does not connect this app.
               </span>
             </div>
             <div className="connection-footer">
@@ -102,23 +100,30 @@ export function ConnectionsScreen({
         ))}
       </div>
       <section className="panel setup-panel">
-        <h2>Connection checklist</h2>
+        <h2>If Tally does not connect</h2>
         <ol>
           <li>
-            <strong>Open the correct Tally company.</strong>
-            <span>The dashboard keeps each company's stock separate.</span>
+            <strong>Keep Tally open on this computer.</strong>
+            <span>Load the company you want to check before trying discovery again.</span>
           </li>
           <li>
-            <strong>Verify the seller account and inventory location.</strong>
-            <span>Every destination belongs to a specific account and location.</span>
+            <strong>Check that the ports match.</strong>
+            <span>
+              The number at the end of the connection address must match Tally's HTTP port.
+            </span>
           </li>
           <li>
-            <strong>Match the physical product and pack size.</strong>
-            <span>SKU text alone cannot establish a valid stock mapping.</span>
+            <strong>Follow Tally's restart prompt.</strong>
+            <span>
+              If Tally asks you to restart after enabling its connection, reopen your company
+              afterward.
+            </span>
           </li>
           <li>
-            <strong>Review before the first publication.</strong>
-            <span>Stock publishing remains unavailable in this connection milestone.</span>
+            <strong>Keep the error details for support.</strong>
+            <span>
+              Open Activity for the check history. Diagnostics contains details you can export.
+            </span>
           </li>
         </ol>
         <button className="text-button" onClick={() => onOpenSettings()}>

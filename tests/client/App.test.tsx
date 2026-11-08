@@ -55,7 +55,10 @@ test('an empty live workspace guides the user to connections and disables listin
   fireEvent.click(screen.getByRole('button', { name: 'View connections' }));
   assert.ok(screen.getByRole('heading', { name: 'Connections', level: 1 }));
   assert.ok(screen.getByRole('button', { name: 'Check & discover companies' }));
-  assert.ok(screen.getByText('API connection pending'));
+  assert.ok(screen.getByText('Not connected'));
+  fireEvent.click(screen.getByRole('button', { name: 'Open Tally settings' }));
+  assert.ok(screen.getByRole('heading', { name: 'Settings', level: 1 }));
+  assert.ok(screen.getByRole('textbox', { name: /Connection address/ }));
 });
 
 test('a search with no matches disables bulk actions and can reset to all company listings', async (t) => {
@@ -274,6 +277,68 @@ test('failed refresh retains the shown stock and a retry uses the selected compa
   assert.equal(refreshes, 2);
   assert.equal(screen.queryByRole('alert'), null);
 });
+
+for (const view of ['Inventory', 'Connections'] as const) {
+  test(`${view} reports an offline refresh snapshot as failure and retains saved stock`, async (t) => {
+    const state = initialState('demo', 'unused');
+    state.mode = 'live';
+    state.connection.tally = 'online';
+    const failure =
+      'Tally could not provide a verified snapshot. Check that Tally is open, its HTTP server is enabled, and the intended company is loaded. Previous observations are retained.';
+    let refreshes = 0;
+    t.mock.method(
+      globalThis,
+      'fetch',
+      async (input: string | URL | Request, options?: RequestInit) => {
+        if (String(input) === '/api/state') return response(state);
+        assert.equal(String(input), '/api/refresh');
+        assert.deepEqual(
+          JSON.parse(String(options?.body)),
+          view === 'Inventory' ? { companyId: 'demo-a' } : {},
+        );
+        refreshes++;
+        return response({
+          ...state,
+          connection: {
+            ...state.connection,
+            tally: refreshes === 1 ? 'offline' : 'online',
+            message: refreshes === 1 ? failure : 'Stock observations refreshed.',
+          },
+        });
+      },
+    );
+    render(<App />);
+    await screen.findByRole('heading', { name: 'Inventory' });
+    if (view === 'Connections')
+      fireEvent.click(screen.getByRole('button', { name: 'Connections' }));
+    const action = view === 'Inventory' ? 'Refresh Tally' : 'Check & discover companies';
+    fireEvent.click(screen.getByRole('button', { name: action }));
+
+    await waitFor(() =>
+      assert.match(
+        screen.queryByRole('alert')?.textContent ?? '',
+        /Tally could not provide a verified snapshot/,
+      ),
+    );
+    assert.equal(
+      screen.queryByText('Refresh completed. Saved observations are shown below.'),
+      null,
+    );
+    assert.equal(screen.queryByText('Tally connection check completed.'), null);
+    assert.ok(screen.getByText('Tally offline'));
+
+    if (view === 'Connections') fireEvent.click(screen.getByRole('button', { name: /^Inventory/ }));
+    const listing = screen.getByRole('row', { name: /SAMPLE-CEAT-2-2/ });
+    assert.ok(within(listing).getByText('5'));
+    if (view === 'Connections')
+      fireEvent.click(screen.getByRole('button', { name: 'Connections' }));
+    fireEvent.click(screen.getByRole('button', { name: action }));
+    await screen.findByText('Refresh completed. Saved observations are shown below.');
+    assert.equal(screen.queryByRole('alert'), null);
+    assert.ok(screen.getByText('Tally connected'));
+    assert.equal(refreshes, 2);
+  });
+}
 test('failed mapping keeps the dialog, selected listing and confirmation available for correction', async (t) => {
   const state = initialState('demo', 'unused');
   let mappingAttempts = 0;
