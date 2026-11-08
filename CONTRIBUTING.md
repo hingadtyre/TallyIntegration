@@ -8,7 +8,7 @@ Before implementation, follow the [documentation workflow](docs/agents/documenta
 
 ## Start with the sample workspace
 
-Use Node.js 24 and install the pinned dependencies with `npm ci`. Then:
+Use Node.js 24 and the npm scripts in [package.json](package.json) as the normal development commands. Install the pinned dependencies with `npm ci`. Then, from the project root in PowerShell or a compatible shell:
 
 ```sh
 npm run build
@@ -17,14 +17,17 @@ npm run demo
 
 Open `http://127.0.0.1:4311`. Sample data lives in `.data/demo.sqlite`, separate from the customer's live database. Keep one server running per workspace. Stop the server with Ctrl+C before changing the database schema or restarting with a new build.
 
-On this Windows development computer, the project-local Node runtime can be selected without changing the global installation:
+The optional Windows launcher, [scripts/app.ps1](scripts/app.ps1), selects the project-local Node runtime when available and delegates to the same npm scripts. Use it when intentionally selecting that runtime; prefer npm directly when the terminal already uses Node.js 24. The launcher neither installs dependencies nor rebuilds before starting.
 
-```powershell
-.\scripts\app.ps1 -Mode Build
-.\scripts\app.ps1 -Mode Demo
-```
+## Build and reload behavior
 
-For frontend development, keep `npm run demo` running in one terminal and run `npm run dev` in another. Vite's `/api` proxy targets the sample backend on port 4311. Changes to frontend files reload automatically; backend changes require rebuilding and restarting the sample server.
+`npm run build` compiles TypeScript and builds the browser dashboard. `npm start` and `npm run demo` execute the compiled server in `dist` and serve the built dashboard in `dist/web`. Neither run command rebuilds or watches source files, so starting without rebuilding uses the previous build.
+
+For backend changes, stop the running backend with Ctrl+C, run `npm run build`, and restart it with `npm run demo` after the build succeeds. Use `npm start` instead only for the intended real workspace. Keep one backend per database running. The database survives a normal stop/restart.
+
+For frontend editing, keep the built Demo backend running in one terminal, and run `npm run dev` in a second terminal. Open the address printed by Vite. Frontend changes reload there automatically; opening port 4311 instead shows the built dashboard, not the development page. Vite forwards `/api` requests to the Demo backend on port 4311, as configured in [vite.config.ts](vite.config.ts).
+
+`npm run dev` watches only the frontend. Backend changes, including shared code used by the backend, still need a build and backend restart. When checking the built dashboard after frontend-only changes, rebuild and refresh the browser. Stop each running development process with Ctrl+C in its own terminal.
 
 ## Where to make a change
 
@@ -92,14 +95,35 @@ npm run verify
 
 Tool versions are pinned together: TypeScript 6.0 is supported by the selected TypeScript ESLint release. The `minimatch` override selects the patched matcher used by lint tooling for [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249). Recheck and remove that override when the upstream tools depend on the patched release themselves; run the full checks after dependency changes.
 
-Windows with the project-local runtime:
+Add a regression for behaviour that could break: wrong company scope, discarded draft, duplicate allowance consumption, failed migration, overlapping polls or lost error information. Test outcomes through the module's normal interface. Formatting-only changes do not need their own tests.
 
-```powershell
-.\scripts\app.ps1 -Mode Format
-.\scripts\app.ps1 -Mode Verify
+## Test organization and scope
+
+Keep the current tools: Node's `node:test` runner and `node:assert/strict` for all tests, with React Testing Library and jsdom for frontend interactions. Test files mirror their primary source module under `tests/`:
+
+| Source module                           | Test file                                      |
+| --------------------------------------- | ---------------------------------------------- |
+| `src/domain/stock-policy.ts`            | `tests/domain/stock-policy.test.ts`            |
+| `src/domain/allowance.ts`               | `tests/domain/allowance.test.ts`               |
+| `src/adapters/tally.ts`                 | `tests/adapters/tally.test.ts`                 |
+| `src/server/service.ts`                 | `tests/server/service.test.ts`                 |
+| `src/server/storage/migrations.ts`      | `tests/server/storage/migrations.test.ts`      |
+| `src/client/App.tsx`                    | `tests/client/App.test.tsx`                    |
+| `src/client/screens/QuantityEditor.tsx` | `tests/client/screens/QuantityEditor.test.tsx` |
+
+Keep cross-module scenarios with the entry point being exercised: HTTP routes with `http`, database transactions with `store`, and full dashboard interactions with `App`. Reusable test setup belongs in `tests/support/`. A source file does not need a separate test just to exist; test meaningful public behavior and avoid duplicating cases already covered through a caller. Use descriptive scenario names, with normal operation, important validation and recovery cases where relevant. The test files are the scenario list; do not maintain a second case-by-case catalog in documentation.
+
+From the project root in PowerShell or a compatible shell:
+
+```sh
+npm test
+npm test -- tests/client
+npm test -- tests/domain/stock-policy.test.ts
 ```
 
-Add a regression for behaviour that could break: wrong company scope, discarded draft, duplicate allowance consumption, failed migration, overlapping polls or lost error information. Test outcomes through the module's normal interface. Formatting-only changes do not need their own tests.
+These are alternative commands: run everything, the frontend folder, or one mapped source test. `npm test` compiles the TypeScript first; the small [test launcher](scripts/run-tests.mjs) then maps current test source paths to compiled JavaScript and invokes Node's test runner. It ignores stale compiled copies of moved/deleted tests and fails if a requested path matches no test sources. Keep the npm script as the entry point so tests never accidentally run against an old build.
+
+Frontend tests simulate browser interactions in jsdom. Backend tests use isolated temporary databases and local HTTP fixtures; they do not read customer data or contact real Tally/Flipkart services. Coverage of the current foundation is not evidence that unfinished marketplace publishing, customer authorization, installer or production restore flows work. Add their behavior tests when implemented, and retain the customer integration checks before activation.
 
 ## Evolve the database safely
 

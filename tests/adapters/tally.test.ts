@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer, type ServerResponse } from 'node:http';
 import { test } from 'node:test';
-import { TallyClient, parseTallyQuantity, validateTallyUrl } from '../src/adapters/tally.js';
+import { TallyClient, parseTallyQuantity, validateTallyUrl } from '../../src/adapters/tally.js';
 
 const company = { externalId: 'company-a-guid', name: 'A & B Tyres' };
 const companyXml = '<COMPANY><NAME>A &amp; B Tyres</NAME><GUID>company-a-guid</GUID></COMPANY>';
@@ -36,6 +36,23 @@ async function withServer(
   }
 }
 
+test('company discovery returns every loaded company with its stable identity', async () => {
+  await withServer(
+    (_body, response) =>
+      response.end(
+        envelope(
+          companyXml + '<COMPANY NAME="Second company"><GUID>company-b-guid</GUID></COMPANY>',
+        ),
+      ),
+    async (url) => {
+      assert.deepEqual(await new TallyClient(url).listCompanies(), [
+        company,
+        { externalId: 'company-b-guid', name: 'Second company' },
+      ]);
+    },
+  );
+});
+
 test('Tally requests are exports and stock is scoped and checked against the selected company', async () => {
   const requests: string[] = [];
   await withServer(
@@ -56,6 +73,21 @@ test('Tally requests are exports and stock is scoped and checked against the sel
   assert.match(requests[1], /StockbridgeCompanyGuid : \$GUID:Company:##SVCurrentCompany/);
   assert.match(requests[1], /<NATIVEMETHOD>ClosingBalance<\/NATIVEMETHOD>/);
   assert.match(requests[1], /<METHOD>StockbridgeCompanyGuid/);
+});
+
+test('stock reads retain distinct items and unsupported quantities remain unknown', async () => {
+  const stockItems =
+    stockXml('-3.5 nos') + stockXml('1 box = 4 nos').replace('stock-guid', 'compound-stock-guid');
+  await withServer(
+    (body, response) =>
+      response.end(envelope(body.includes('<TYPE>StockItem</TYPE>') ? stockItems : companyXml)),
+    async (url) => {
+      assert.deepEqual(await new TallyClient(url).readStock(company), [
+        { externalId: 'stock-guid', name: 'A tyre', unit: 'nos', physical: -3.5 },
+        { externalId: 'compound-stock-guid', name: 'A tyre', unit: 'nos', physical: null },
+      ]);
+    },
+  );
 });
 
 test('unsupported quantity stays unknown; negative and grouped base units are retained', () => {
@@ -122,11 +154,59 @@ test('company identity changing during a read rejects the result', async () => {
   );
 });
 
+test('a selected company that is no longer loaded blocks the stock export', async () => {
+  const requests: string[] = [];
+  await withServer(
+    (body, response) => {
+      requests.push(body);
+      response.end(envelope(companyXml.replace('company-a-guid', 'other-company-guid')));
+    },
+    async (url) => {
+      await assert.rejects(new TallyClient(url).readStock(company), /no longer loaded/);
+    },
+  );
+  assert.equal(requests.length, 1);
+  assert.doesNotMatch(requests[0], /<TYPE>StockItem<\/TYPE>/);
+});
+
+test('duplicate company identities and stock item GUIDs reject the entire read', async () => {
+  for (const duplicateCompany of [
+    companyXml.replace('A &amp; B Tyres', 'Another company'),
+    companyXml.replace('company-a-guid', 'another-company-guid'),
+  ]) {
+    await withServer(
+      (_body, response) => response.end(envelope(companyXml + duplicateCompany)),
+      async (url) => {
+        await assert.rejects(new TallyClient(url).listCompanies(), /duplicate company identities/);
+      },
+    );
+  }
+  await withServer(
+    (body, response) =>
+      response.end(
+        envelope(body.includes('<TYPE>StockItem</TYPE>') ? stockXml() + stockXml() : companyXml),
+      ),
+    async (url) => {
+      await assert.rejects(
+        new TallyClient(url).readStock(company),
+        /duplicate stock item identities/,
+      );
+    },
+  );
+});
+
 test('explicit empty collections are accepted without treating a missing payload as empty inventory', async () => {
   await withServer(
     (_body, response) => response.end(envelope('')),
     async (url) => {
       assert.deepEqual(await new TallyClient(url).listCompanies(), []);
+    },
+  );
+  await withServer(
+    (body, response) =>
+      response.end(envelope(body.includes('<TYPE>StockItem</TYPE>') ? '' : companyXml)),
+    async (url) => {
+      assert.deepEqual(await new TallyClient(url).readStock(company), []);
     },
   );
   await withServer(

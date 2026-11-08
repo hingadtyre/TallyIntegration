@@ -1,40 +1,12 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { basename, join, resolve, sep } from 'node:path';
+import test from 'node:test';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import test, { type TestContext } from 'node:test';
-import type { Snapshot } from '../src/shared/contracts.js';
-import { initialState } from '../src/server/seed.js';
-import { Store } from '../src/server/store.js';
-import { readSnapshot } from '../src/server/storage/records.js';
-import { InvalidStoredState } from '../src/server/storage/validation.js';
-
-function fixture(t: TestContext) {
-  const directory = mkdtempSync(join(tmpdir(), 'stockbridge-storage-'));
-  const file = join(directory, 'state.sqlite');
-  const stores: Store[] = [];
-  t.after(() => {
-    for (const store of stores) store.close();
-    const target = resolve(directory);
-    if (
-      !target.startsWith(resolve(tmpdir()) + sep) ||
-      !basename(target).startsWith('stockbridge-storage-')
-    ) {
-      throw new Error('Refusing to remove a path outside this storage test fixture.');
-    }
-    rmSync(target, { recursive: true, force: true });
-  });
-  return {
-    directory,
-    file,
-    open(mode: Snapshot['mode'] = 'demo') {
-      const store = new Store(file, mode);
-      stores.push(store);
-      return store;
-    },
-  };
-}
+import type { Snapshot } from '../../../src/shared/contracts.js';
+import { initialState } from '../../../src/server/seed.js';
+import { InvalidStoredState } from '../../../src/server/storage/validation.js';
+import { queryFile, storageFixture as fixture } from '../../support/server-fixture.js';
 
 function legacyState(directory: string): Snapshot {
   const state = initialState('demo', join(directory, 'customer-backups'));
@@ -85,15 +57,6 @@ function createLegacy(file: string, value: unknown): void {
     database
       .prepare('INSERT INTO app_state VALUES (1, ?)')
       .run(typeof value === 'string' ? value : JSON.stringify(value));
-  } finally {
-    database.close();
-  }
-}
-
-function queryFile<T>(file: string, read: (database: DatabaseSync) => T): T {
-  const database = new DatabaseSync(file);
-  try {
-    return read(database);
   } finally {
     database.close();
   }
@@ -200,114 +163,5 @@ test('an unavailable safety-backup directory prevents migration', (t) => {
       database.prepare("SELECT name FROM sqlite_master WHERE name = 'app_metadata'").get(),
       undefined,
     );
-  });
-});
-
-test('invalid relationships and workspace-mode changes roll back the entire command', (t) => {
-  const f = fixture(t);
-  const store = f.open();
-  const before = store.read();
-  assert.throws(
-    () =>
-      store.update((state) => {
-        state.settings.tallySeconds = 90;
-        state.listings[0].itemId = 'missing-item';
-      }),
-    /missing stock item/,
-  );
-  assert.deepEqual(store.read(), before);
-  assert.throws(
-    () =>
-      store.update((state) => {
-        state.mode = 'live';
-      }),
-    /workspace mode/,
-  );
-  assert.deepEqual(store.read(), before);
-  assert.throws(() => f.open('live'), /separate databases/);
-  queryFile(f.file, (database) => {
-    database.exec('PRAGMA foreign_keys = ON');
-    assert.throws(
-      () =>
-        database
-          .prepare('UPDATE listings SET account_id = ? WHERE id = ?')
-          .run('missing', 'listing-1'),
-      /FOREIGN KEY/,
-    );
-    assert.throws(
-      () => database.prepare('UPDATE listings SET id = NULL WHERE id = ?').run('listing-1'),
-      /NOT NULL/,
-    );
-  });
-});
-
-test('two stores read committed records before applying a command', (t) => {
-  const f = fixture(t);
-  const first = f.open();
-  const second = f.open();
-  first.update((state) => {
-    state.items[0].physical = 3;
-    state.items[0].version++;
-  });
-  second.update((state) => {
-    state.settings.tallySeconds = 45;
-  });
-  assert.equal(first.read().settings.tallySeconds, 45);
-  assert.equal(second.read().items[0].physical, 3);
-  const detached = second.read();
-  detached.items[0].physical = 999;
-  assert.equal(second.read().items[0].physical, 3);
-});
-
-test('a local setting change and prepended activity leave unrelated records untouched', (t) => {
-  const f = fixture(t);
-  const store = f.open();
-  const oldEvent = {
-    id: 'old',
-    at: '2026-11-06T08:00:00.000Z',
-    level: 'info' as const,
-    operation: 'test',
-    message: 'Old event',
-  };
-  store.update((state) => {
-    state.activity.push(oldEvent);
-  });
-  queryFile(f.file, (database) => {
-    database.exec(`
-      CREATE TRIGGER protect_stock BEFORE UPDATE ON stock_items BEGIN
-        SELECT RAISE(ABORT, 'Unrelated stock record was rewritten'); END;
-      CREATE TRIGGER protect_old_event BEFORE UPDATE ON activity WHEN OLD.id = 'old' BEGIN
-        SELECT RAISE(ABORT, 'Existing history was rewritten'); END;
-    `);
-  });
-  store.update((state) => {
-    state.settings.tallySeconds = 45;
-    state.activity.unshift({
-      ...oldEvent,
-      id: 'new',
-      at: '2026-11-07T08:00:00.000Z',
-      message: 'New event',
-    });
-  });
-  assert.deepEqual(
-    store.read().activity.map((event) => event.id),
-    ['new', 'old'],
-  );
-  assert.equal(store.read().settings.tallySeconds, 45);
-});
-
-test('v2 backups preserve normalized records and remain independently readable', (t) => {
-  const f = fixture(t);
-  const store = f.open();
-  store.update((state) => {
-    state.listings[0].paused = true;
-  });
-  const expected = store.read();
-  const backup = join(f.directory, 'manual.sqlite');
-  store.backup(backup);
-  queryFile(backup, (copy) => {
-    assert.equal(copy.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok');
-    assert.equal(copy.prepare('PRAGMA user_version').get()?.user_version, 2);
-    assert.deepEqual(readSnapshot(copy), expected);
   });
 });

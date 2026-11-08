@@ -4,10 +4,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import test from 'node:test';
-import { Diagnostics } from '../src/server/diagnostics.js';
-import { createApp } from '../src/server/http.js';
-import { InventoryService } from '../src/server/service.js';
-import { Store } from '../src/server/store.js';
+import { Diagnostics } from '../../src/server/diagnostics.js';
+import { createApp } from '../../src/server/http.js';
+import { InventoryService } from '../../src/server/service.js';
+import { Store } from '../../src/server/store.js';
 
 function removeFixture(folder: string): void {
   const target = resolve(folder);
@@ -54,7 +54,7 @@ test('unexpected HTTP errors retain a sanitized cause and stack under the public
     assert.equal(entry.error.message, 'Could not open inventory store.');
     assert.equal(entry.error.cause.code, 'EACCES');
     assert.match(entry.error.cause.message, /Permission denied/);
-    assert.match(entry.error.stack, /backend-diagnostics\.test/);
+    assert.match(entry.error.stack, /diagnostics\.test/);
     assert.doesNotMatch(service.logs(), /fixture-password/);
   } finally {
     app.closeAllConnections();

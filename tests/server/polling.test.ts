@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { PollingLoop, type PollingTimers } from '../src/server/polling.js';
+import { PollingLoop, type PollingTimers } from '../../src/server/polling.js';
 
 class ManualClock implements PollingTimers {
   time = 0;

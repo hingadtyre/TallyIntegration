@@ -12,9 +12,9 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
-    "lint": "eslint src tests vite.config.ts --max-warnings 0",
+    "lint": "eslint src tests scripts/run-tests.mjs vite.config.ts --max-warnings 0",
     "verify": "npm run format:check && npm run lint && npm test && npm run build",
-    "test": "tsc -p tsconfig.json && node --test dist/tests/*.test.js",
+    "test": "tsc -p tsconfig.json && node scripts/run-tests.mjs",
     "start": "node dist/src/server/main.js",
     "demo": "node dist/src/server/main.js --demo"
   },

@@ -16,34 +16,36 @@ HINGADTYRES is recorded only as the seller name observed in the browser. It is *
 
 ## Run on this computer
 
-The project-local Node.js 24 runtime is under `.tools`; it does not replace the machine's Node installation. Dependencies are pinned in `package-lock.json`.
+Use Node.js 24 and the npm scripts in [package.json](package.json). Dependencies are pinned in `package-lock.json`; on a fresh checkout, install them with `npm ci` before building.
 
 PowerShell, from this repository:
 
 ```powershell
-.\scripts\app.ps1 -Mode Build
-.\scripts\app.ps1 -Mode Demo
+npm run build
+npm run demo
 ```
 
-Open `http://127.0.0.1:4311` for clearly marked sample data. Stop with Ctrl+C. The sample database is `.data/demo.sqlite` and never reads Tally or calls a marketplace.
+After the build succeeds, start Demo and open `http://127.0.0.1:4311` for clearly marked sample data. Stop with Ctrl+C in its terminal; closing the browser does not stop the backend. The sample database is `.data/demo.sqlite` and never reads Tally or calls a marketplace.
 
 For the real workspace on the customer's Tally computer:
 
 ```powershell
-.\scripts\app.ps1 -Mode Live
+npm start
 ```
 
 Open `http://127.0.0.1:4310`, enable Tally's local HTTP server, load the intended company, and use **Refresh Tally**. The initial live database is empty. All companies returned by the verified read are kept separate. The first connector reports company-wide stock; publication must remain unavailable until location-specific mapping is implemented and checked.
 
-On a fresh checkout, install official Node.js 24 LTS, run `npm ci`, then the commands above. This machine's corporate mirror/proxy was unavailable during setup, so dependencies were downloaded from the public npm registry using a temporary project-local configuration. No global npm configuration was changed. Configure your own session's network access as required.
+The run commands use the existing build; they do not rebuild changed source. See [the development workflow](CONTRIBUTING.md#build-and-reload-behavior) for rebuilding and frontend development with automatic reload. The optional Windows launcher, [scripts/app.ps1](scripts/app.ps1), calls the same npm scripts while selecting a project-local Node runtime when available. Prefer npm directly when Node.js 24 is already selected.
 
 ## Verify
 
 ```powershell
-.\scripts\app.ps1 -Mode Verify
+npm run verify
 ```
 
-This checks formatting, lint, TypeScript, tests and the production build. The same checks are configured in GitHub Actions. Use `-Mode Format` to apply formatting before verification. See [CONTRIBUTING](CONTRIBUTING.md) for the developer walkthrough, module map and sample development workflow.
+This checks formatting, lint, TypeScript, tests and the production build. The same checks are configured in GitHub Actions. Use `npm run format` to apply formatting before verification. See [CONTRIBUTING](CONTRIBUTING.md) for the developer walkthrough, module map and sample development workflow.
+
+Tests mirror their source modules under `tests/`. Use `npm test` for all tests, or pass a source test file/folder such as `npm test -- tests/client`. See [test organization and scope](CONTRIBUTING.md#test-organization-and-scope) for the mapping convention and what these tests establish.
 
 Tests exercise real loopback HTTP transport with Tally-shaped fixtures, stock-policy examples, company boundaries, persisted drafts, stale reviews, settings, backups and rejection of publishing. They also cover failed dashboard actions, serialized polling, diagnostic error details and database upgrades. Fixture success is not proof of live Tally/Flipkart compatibility. Postman CLI was unavailable; transport tests use Node's local HTTP server. Public API discovery was checked through Orbit and official documentation, but no seller API token was available.
 
