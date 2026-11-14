@@ -4,6 +4,7 @@ import { createServer as createOwnershipServer, type Server as OwnershipServer }
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Diagnostics } from './diagnostics.js';
+import { FlipkartConnection } from './flipkart-connection.js';
 import { createApp, type RuntimeHealth } from './http.js';
 import { InventoryService } from './service.js';
 import { Store } from './store.js';
@@ -148,14 +149,22 @@ export async function startRuntime(
   };
   let store: Store | undefined;
   let service: InventoryService | undefined;
+  let flipkart: FlipkartConnection | undefined;
   let app: ReturnType<typeof createApp> | undefined;
   let stopping: Promise<void> | undefined;
   const diagnostics = new Diagnostics(join(owner.dataDirectory, `${mode}.diagnostics.ndjson`));
+
+  async function waitForPendingWork(): Promise<void> {
+    const results = await Promise.allSettled([service?.idle(), flipkart?.idle()]);
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed?.status === 'rejected') throw failed.reason;
+  }
 
   async function cleanup(): Promise<void> {
     try {
       try {
         service?.stop();
+        flipkart?.stop();
       } finally {
         if (app?.listening) {
           await new Promise<void>((accept, reject) =>
@@ -166,7 +175,7 @@ export async function startRuntime(
     } finally {
       try {
         try {
-          await service?.idle();
+          await waitForPendingWork();
         } finally {
           store?.close();
         }
@@ -187,19 +196,25 @@ export async function startRuntime(
   try {
     store = new Store(join(owner.dataDirectory, `${mode}.sqlite`), mode);
     service = new InventoryService(store, { diagnostics });
-    app = createApp(service, paths.webRoot, {
-      health,
-      stopToken: token,
-      requestStop() {
-        void stop().catch((error) => {
-          diagnostics.error('shutdown', error);
-          console.error(
-            'Stockbridge could not finish shutting down. Check its diagnostic log before restarting.',
-          );
-          process.exitCode = 1;
-        });
+    flipkart = new FlipkartConnection(owner.dataDirectory, mode);
+    app = createApp(
+      service,
+      paths.webRoot,
+      {
+        health,
+        stopToken: token,
+        requestStop() {
+          void stop().catch((error) => {
+            diagnostics.error('shutdown', error);
+            console.error(
+              'Stockbridge could not finish shutting down. Check its diagnostic log before restarting.',
+            );
+            process.exitCode = 1;
+          });
+        },
       },
-    });
+      flipkart,
+    );
     const server = app;
     await new Promise<void>((accept, reject) => {
       server.once('error', reject);

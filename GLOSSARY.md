@@ -9,10 +9,13 @@ A business using Stockbridge to synchronize its Tally inventory with its marketp
 _Avoid_: Marketplace buyer
 
 **Stockbridge provider**:
-The operator offering and maintaining Stockbridge and its registered marketplace application for customers.
+The operator offering and maintaining Stockbridge for customers.
 
 **Customer authorization**:
-A customer's permission for Stockbridge's registered application to access a particular marketplace seller account. This permission is separate from approval to publish a stock change.
+A customer's permission for a registered application to access a particular marketplace seller account. This permission is separate from approval to publish a stock change.
+
+**Seller-owned application**:
+A marketplace API application registered by a seller for that seller's own account and use, distinct from a provider application authorized by multiple customers.
 
 **Tally company**:
 A distinct set of business records maintained in Tally, containing its own stock items and stock balances.

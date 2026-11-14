@@ -4,13 +4,169 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { join } from 'node:path';
 import { createApp } from '../../src/server/http.js';
-import type { Review, Snapshot } from '../../src/shared/contracts.js';
+import type { FlipkartConnectionStatus, Review, Snapshot } from '../../src/shared/contracts.js';
+import { FlipkartConnectionError } from '../../src/server/flipkart-connection.js';
 import { close, listen, serverFixture as fixture } from '../support/server-fixture.js';
 
 const dashboardHeaders = {
   'Content-Type': 'application/json',
   'X-Stockbridge-Request': '1',
 };
+
+test('Flipkart credential routes require dashboard requests and return only public status', async (t) => {
+  const f = fixture(t, 'live');
+  const state: FlipkartConnectionStatus = {
+    state: 'verified',
+    checkedAt: '2026-11-08T00:00:00.000Z',
+    expiresAt: '2026-11-09T00:00:00.000Z',
+    applicationIdHint: '***1234',
+    message: 'API credentials verified. Seller identity is not yet verified.',
+  };
+  let connects = 0;
+  let saves = 0;
+  let checks = 0;
+  let disconnects = 0;
+  const connection = {
+    status: async () => state,
+    connect: async (input: unknown) => {
+      assert.deepEqual(input, {
+        applicationId: 'example-app-1234',
+        applicationSecret: 'test-private-secret',
+      });
+      connects++;
+      return state;
+    },
+    save: async (input: unknown) => {
+      assert.deepEqual(input, {
+        applicationId: 'example-app-1234',
+        applicationSecret: 'test-private-secret',
+      });
+      saves++;
+      return {
+        ...state,
+        state: 'needs-attention' as const,
+        checkedAt: null,
+        expiresAt: null,
+        message: 'Credentials saved without contacting Flipkart.',
+      };
+    },
+    check: async () => {
+      checks++;
+      return state;
+    },
+    disconnect: async () => {
+      disconnects++;
+      return { ...state, state: 'not-configured' as const, applicationIdHint: null };
+    },
+  };
+  const app = createApp(f.service, f.folder, undefined, connection);
+  const address = await listen(app);
+  try {
+    const status = await fetch(`${address}/api/flipkart/connection`);
+    assert.equal(status.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await status.json(), state);
+    const post = (path: string, body: unknown, headers = dashboardHeaders) =>
+      fetch(`${address}/api/${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+    const input = { applicationId: 'example-app-1234', applicationSecret: 'test-private-secret' };
+    assert.equal(
+      (
+        await post('flipkart/connect', input, {
+          ...dashboardHeaders,
+          Origin: 'https://untrusted.example',
+        } as typeof dashboardHeaders)
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await post('flipkart/connect', input, {
+          'Content-Type': 'application/json',
+        } as typeof dashboardHeaders)
+      ).status,
+      403,
+    );
+    assert.equal((await post('flipkart/connect', { applicationId: 42 })).status, 400);
+    assert.equal((await post('flipkart/save', { applicationId: 42 })).status, 400);
+    assert.equal(
+      (
+        await post('flipkart/save', input, {
+          'Content-Type': 'application/json',
+        } as typeof dashboardHeaders)
+      ).status,
+      403,
+    );
+    assert.equal(saves, 0);
+    assert.equal(connects, 0);
+    const saved = await post('flipkart/save', input);
+    assert.equal(saved.status, 200);
+    const savedStatus = (await saved.json()) as FlipkartConnectionStatus;
+    assert.equal(savedStatus.state, 'needs-attention');
+    assert.equal(savedStatus.checkedAt, null);
+    assert.equal(savedStatus.expiresAt, null);
+    assert.doesNotMatch(JSON.stringify(savedStatus), /test-private-secret|example-app-1234/);
+    assert.equal(saves, 1);
+    assert.equal(connects, 0);
+    assert.equal(checks, 0);
+    const connected = await post('flipkart/connect', input);
+    assert.equal(connected.status, 200);
+    assert.deepEqual(await connected.json(), state);
+    assert.equal(connects, 1);
+    assert.equal((await post('flipkart/check', {})).status, 200);
+    assert.equal(checks, 1);
+    assert.equal((await post('flipkart/disconnect', {})).status, 200);
+    assert.equal(disconnects, 1);
+    assert.equal((await post('publish', {})).status, 409);
+    assert.equal((await fetch(`${address}/api/flipkart/token`)).status, 404);
+    assert.doesNotMatch(f.service.logs(), /test-private-secret|example-app-1234/);
+    assert.equal(f.service.snapshot().accounts[0].status, 'not-connected');
+    assert.equal(f.service.snapshot().publishingEnabled, false);
+  } finally {
+    await close(app);
+  }
+});
+
+test('Flipkart failures omit raw private transport data from HTTP and diagnostics', async (t) => {
+  const f = fixture(t, 'live');
+  let failure: Error = new Error('unlabelled-sensitive-credential', {
+    cause: new Error('private-token-value'),
+  });
+  const fail = async (): Promise<never> => {
+    throw failure;
+  };
+  const app = createApp(f.service, f.folder, undefined, {
+    status: fail,
+    connect: fail,
+    save: fail,
+    check: fail,
+    disconnect: fail,
+  });
+  const address = await listen(app);
+  try {
+    const unexpected = await fetch(`${address}/api/flipkart/check`, {
+      method: 'POST',
+      headers: dashboardHeaders,
+      body: '{}',
+    });
+    assert.equal(unexpected.status, 500);
+    assert.doesNotMatch(await unexpected.text(), /unlabelled-sensitive|private-token/);
+    assert.doesNotMatch(f.service.logs(), /unlabelled-sensitive|private-token/);
+    failure = new FlipkartConnectionError('Check the seller-owned application credentials.', 400);
+    const expected = await fetch(`${address}/api/flipkart/check`, {
+      method: 'POST',
+      headers: dashboardHeaders,
+      body: '{}',
+    });
+    assert.equal(expected.status, 400);
+    assert.match(await expected.text(), /Check the seller-owned application credentials/);
+    assert.equal((await fetch(`${address}/api/flipkart/check`)).status, 404);
+  } finally {
+    await close(app);
+  }
+});
 
 test('dashboard commands return saved drafts, exact reviews, mappings and settings over HTTP', async (t) => {
   const f = fixture(t);

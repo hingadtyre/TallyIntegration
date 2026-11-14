@@ -106,7 +106,9 @@ export async function runLauncher(
           : 'Stockbridge is not running.',
     );
     console.log(`Dashboard: ${dashboardUrl}\nData folder: ${dataDirectory}`);
-    console.log('Read-only pilot. Flipkart connection and stock synchronization are unavailable.');
+    console.log(
+      'Read-only pilot. Seller-owned API credentials can be checked in Connections; stock synchronization remains unavailable.',
+    );
     return;
   }
   if (action === 'stop') {

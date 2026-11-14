@@ -31,25 +31,27 @@ For frontend editing, keep the built Demo backend running in one terminal, and r
 
 ## Where to make a change
 
-| Change                                          | Start here                                                 |
-| ----------------------------------------------- | ---------------------------------------------------------- |
-| Navigation and shared page frame                | `src/client/App.tsx`                                       |
-| Inventory table, filters, drafts or review      | `src/client/screens/` and `src/client/selectors.ts`        |
-| Activity, connections or settings presentation  | The corresponding screen under `src/client/screens/`       |
-| Reused buttons, dialogs and formatting          | `src/client/components.tsx` and the focused client helpers |
-| Request routes and public error responses       | `src/server/http.ts`                                       |
-| Inventory commands and proposal validation      | `src/server/service.ts` and its inventory helpers          |
-| Physical stock and Flipkart tyre arithmetic     | `src/domain/stock-policy.ts`                               |
-| Allowance consumption arithmetic                | `src/domain/allowance.ts`                                  |
-| Reading Tally XML                               | `src/adapters/tally.ts`                                    |
-| Importing stock observations                    | `src/server/stock-refresh.ts`                              |
-| Poll timing, overlap and backoff                | `src/server/polling.ts`                                    |
-| Diagnostic files and internal error details     | `src/server/diagnostics.ts`                                |
-| Settings and verified backups                   | `src/server/settings.ts`, `src/server/backups.ts`          |
-| Database transactions and records               | `src/server/store.ts`, `src/server/storage/`               |
-| Runtime paths, workspace ownership and shutdown | `src/server/runtime.ts`, `src/server/main.ts`              |
-| Windows launch controls and package generation  | `src/desktop/launcher.ts`, `scripts/package-pilot.mjs`     |
-| Shared request/result records                   | `src/shared/contracts.ts`                                  |
+| Change                                          | Start here                                                                |
+| ----------------------------------------------- | ------------------------------------------------------------------------- |
+| Navigation and shared page frame                | `src/client/App.tsx`                                                      |
+| Inventory table, filters, drafts or review      | `src/client/screens/` and `src/client/selectors.ts`                       |
+| Activity, connections or settings presentation  | The corresponding screen under `src/client/screens/`                      |
+| Reused buttons, dialogs and formatting          | `src/client/components.tsx` and the focused client helpers                |
+| Request routes and public error responses       | `src/server/http.ts`                                                      |
+| Inventory commands and proposal validation      | `src/server/service.ts` and its inventory helpers                         |
+| Physical stock and Flipkart tyre arithmetic     | `src/domain/stock-policy.ts`                                              |
+| Allowance consumption arithmetic                | `src/domain/allowance.ts`                                                 |
+| Reading Tally XML                               | `src/adapters/tally.ts`                                                   |
+| Flipkart token transport and expiry             | `src/adapters/flipkart.ts`                                                |
+| Local protected credentials and connection      | `src/server/flipkart-credentials.ts`, `src/server/flipkart-connection.ts` |
+| Importing stock observations                    | `src/server/stock-refresh.ts`                                             |
+| Poll timing, overlap and backoff                | `src/server/polling.ts`                                                   |
+| Diagnostic files and internal error details     | `src/server/diagnostics.ts`                                               |
+| Settings and verified backups                   | `src/server/settings.ts`, `src/server/backups.ts`                         |
+| Database transactions and records               | `src/server/store.ts`, `src/server/storage/`                              |
+| Runtime paths, workspace ownership and shutdown | `src/server/runtime.ts`, `src/server/main.ts`                             |
+| Windows launch controls and package generation  | `src/desktop/launcher.ts`, `scripts/package-pilot.mjs`                    |
+| Shared request/result records                   | `src/shared/contracts.ts`                                                 |
 
 ## Trace one stock change
 
@@ -124,7 +126,19 @@ npm test -- tests/domain/stock-policy.test.ts
 
 These are alternative commands: run everything, the frontend folder, or one mapped source test. `npm test` compiles the TypeScript first; the small [test launcher](scripts/run-tests.mjs) then maps current test source paths to compiled JavaScript and invokes Node's test runner. It ignores stale compiled copies of moved/deleted tests and fails if a requested path matches no test sources. Keep the npm script as the entry point so tests never accidentally run against an old build.
 
-Frontend tests simulate browser interactions in jsdom. Backend tests use isolated temporary databases and local HTTP fixtures; they do not read customer data or contact real Tally/Flipkart services. Coverage of the current foundation is not evidence that unfinished marketplace publishing, customer authorization, installer or production restore flows work. Add their behavior tests when implemented, and retain the customer integration checks before activation.
+Frontend tests simulate browser interactions in jsdom. Backend tests use isolated temporary databases and local HTTP fixtures/injected transports; they do not read customer data or contact real Tally/Flipkart services. Coverage of the current foundation is not evidence that unfinished marketplace publishing, authenticated seller identity/import, installer or production restore flows work. Add their behavior tests when implemented, and retain the customer integration checks before activation.
+
+## Seller-owned Flipkart authentication
+
+This branch implements the seller's registered Self Access credentials, superseding the hosted-service direction for this trial in [ADR 0004](docs/adr/0004-seller-owned-flipkart-self-access.md). HingadTyre confirmed it owns Stockbridge for its own seller account, matching the documented Self Access category; its submitted application is Pending. This is not confirmation that Flipkart permits an independent-seller distribution model. Keep that separate eligibility question distinct from token transport, and keep marketplace publishing disabled until the other release gates pass.
+
+The connection module owns one credential set per live workspace. The Windows credential store uses current-user DPAPI protection with the secret passed to its OS helper through standard input, never command-line arguments or environment variables. It keeps protected data outside SQLite and ordinary backups. Do not add a plaintext or browser-storage fallback for unsupported platforms. Tests inject credential protection/transport and never use live seller secrets.
+
+`GET /api/flipkart/connection` returns public status only. `POST /api/flipkart/save` protects and replaces credentials without any Flipkart request, clears the previous token/check state, and leaves access unverified. `POST /api/flipkart/connect` verifies credentials before saving/replacement; `POST /api/flipkart/check` checks saved access after approval; `POST /api/flipkart/disconnect` removes it locally. Existing local request validation applies to mutations. Status exposes only state, a masked application hint, check/expiry times and a safe message. Neither the access token nor the saved secret may be returned through HTTP, included in a snapshot, logged, or placed in an ordinary backup. Local saved/verified states do not establish Flipkart's application approval state. Token issuance must not update the inventory account's verified identity or start publication.
+
+The transport uses Flipkart's fixed production HTTPS token endpoint with `client_credentials`, rejects redirects and validates bounded responses. It uses returned expiry values and obtains replacement tokens when needed; there is no hosted callback or provider secret in this route. Credential operations are serialized so failed replacement preserves the prior saved credentials and a disconnect cannot be undone by an older in-flight operation. Shutdown must drain those operations before releasing workspace ownership. Keep public failures useful without reflecting submitted values or upstream payloads.
+
+Verify save-only operations make no Flipkart request, successful local replacement clears prior verification, and failed saves/retries preserve the previous connection. Also verify UI states, expiry/replacement, unsupported platforms, protected persistence, concurrent disconnect and absence of secrets from responses/logs/backups. The observed application submission is Pending; live approval and token acceptance still require separate evidence. A browser login or pending registration is not proof of API access.
 
 ## Build the Windows pilot package
 
@@ -175,7 +189,7 @@ $previewDigest = '<SHA-256 printed by inspect>'
 
 The digest binds the action to that inspected file; `--confirm-replace` explicitly authorizes replacement instead of a merge. The command refuses a running workspace and mismatched/invalid backups, creates a verified pre-restore safety copy under the destination's `restore-backups` folder, prepares and validates replacement data, and uses a same-volume replacement while all database handles are closed. It preserves the selected backup and the safety copy. Do not delete database working files to bypass a refusal.
 
-After success, start Stockbridge, discover/read Tally again, verify the restored company/items/mappings and make a fresh backup. Restored observations/drafts are stale, company automation is disabled, listings are paused, and seller accounts are disconnected. Marketplace publication remains unavailable. This state must go through the future production reconciliation workflow before any publisher is enabled; integrity checks alone do not restore safe allowances.
+After success, start Stockbridge, discover/read Tally again, verify the restored company/items/mappings and make a fresh backup. Restored observations/drafts are stale, company automation is disabled, listings are paused, and inventory seller-account records are marked disconnected. The offline SQLite restore retains the destination workspace's existing Windows DPAPI credential file; it does not restore credentials from the backup. Access tokens exist only in memory, so use **Check saved access** after restarting. A moved/new workspace or another Windows user needs credential setup again. Marketplace publication remains unavailable. This state must go through the future production reconciliation workflow before any publisher is enabled; integrity checks alone do not restore safe allowances.
 
 From a source checkout, `npm run restore:pilot -- inspect ...` and `npm run restore:pilot -- restore ...` provide the same commands after TypeScript compilation. Packaged support uses the bundled runtime above and needs no npm installation.
 

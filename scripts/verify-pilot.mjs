@@ -334,7 +334,7 @@ async function verifyPilot(zip) {
           `Private/runtime input included: ${file.path}`,
         );
         assert.ok(
-          !/\.(?:sqlite(?:-wal|-shm|-journal)?|db|runtime\.json|diagnostics\.ndjson|log)$/i.test(
+          !/\.(?:sqlite(?:-wal|-shm|-journal)?|db|runtime\.json|diagnostics\.ndjson|log|credentials(?:\.[^.]+\.tmp)?)$/i.test(
             file.path,
           ),
           `Runtime records included: ${file.path}`,
@@ -460,6 +460,17 @@ async function verifyPilot(zip) {
       };
     });
     const firstInstance = readRuntimeRecord(runtimeFile);
+    await check('local_flipkart_setup_has_no_saved_credentials', async () => {
+      const status = await api('/api/flipkart/connection');
+      assert.equal(status.state, 'not-configured');
+      assert.equal(status.applicationIdHint, null);
+      assert.equal(status.expiresAt, null);
+      const checked = await api('/api/flipkart/check', {}, 409);
+      assert.match(checked.error, /Connect a seller-owned Flipkart application first/);
+      assert.ok(!existsSync(join(dataDirectory, 'flipkart-self-access.credentials')));
+      assert.equal((await api('/api/state')).publishingEnabled, false);
+      return { credentialsPresent: false, publishingEnabled: false };
+    });
     await check('dashboard_and_compiled_assets', async () => {
       const response = await fetch(dashboard, {
         signal: AbortSignal.timeout(5000),

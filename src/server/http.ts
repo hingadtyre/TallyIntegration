@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, resolve, sep } from 'node:path';
+import { FlipkartConnectionError, type FlipkartConnection } from './flipkart-connection.js';
 import type { InventoryService } from './service.js';
 import { InputError } from './validation.js';
 
@@ -24,6 +25,39 @@ interface RuntimeControl {
   health: RuntimeHealth;
   stopToken: string;
   requestStop(): void;
+}
+
+type MarketplaceConnection = Pick<
+  FlipkartConnection,
+  'status' | 'connect' | 'save' | 'check' | 'disconnect'
+>;
+
+async function runFlipkartCommand(
+  connection: MarketplaceConnection | undefined,
+  path: string,
+  input: Record<string, unknown>,
+): Promise<unknown> {
+  if (!connection) throw new InputError('Flipkart connection is unavailable in this runtime.', 503);
+  switch (path) {
+    case '/api/flipkart/connect':
+    case '/api/flipkart/save': {
+      if (typeof input.applicationId !== 'string' || typeof input.applicationSecret !== 'string')
+        throw new InputError('Enter the application ID and application secret.');
+      const credentials = {
+        applicationId: input.applicationId,
+        applicationSecret: input.applicationSecret,
+      };
+      return path === '/api/flipkart/save'
+        ? connection.save(credentials)
+        : connection.connect(credentials);
+    }
+    case '/api/flipkart/check':
+      return connection.check();
+    case '/api/flipkart/disconnect':
+      return connection.disconnect();
+    default:
+      throw new InputError('Route not found.', 404);
+  }
 }
 
 function requireRuntimeAuthorization(request: IncomingMessage, token: string): void {
@@ -128,6 +162,7 @@ export function createApp(
   service: InventoryService,
   webRoot = resolve('dist/web'),
   runtime?: RuntimeControl,
+  flipkart?: MarketplaceConnection,
 ) {
   return createServer(async (request, response) => {
     const started = Date.now();
@@ -149,6 +184,11 @@ export function createApp(
           return sendJson(response, 200, runtime.health);
         if (request.method === 'GET' && path === '/api/state')
           return sendJson(response, 200, service.snapshot());
+        if (request.method === 'GET' && path === '/api/flipkart/connection') {
+          if (!flipkart)
+            throw new InputError('Flipkart connection is unavailable in this runtime.', 503);
+          return sendJson(response, 200, await flipkart.status());
+        }
         if (request.method === 'GET' && path === '/api/logs') {
           response.writeHead(200, {
             'Content-Type': 'text/plain; charset=utf-8',
@@ -166,7 +206,9 @@ export function createApp(
           return sendJson(response, 200, { stopping: true, instanceId: runtime.health.instanceId });
         }
         const input = await readJsonObject(request);
-        const result = await runCommand(service, path, input);
+        const result = path.startsWith('/api/flipkart/')
+          ? await runFlipkartCommand(flipkart, path, input)
+          : await runCommand(service, path, input);
         service.log(path, `Completed in ${Date.now() - started} ms`, 'info', requestId);
         sendJson(response, 200, result);
         return;
@@ -178,13 +220,17 @@ export function createApp(
         !path.startsWith('/api/') &&
         error instanceof Error &&
         (error as NodeJS.ErrnoException).code === 'ENOENT';
-      const status = error instanceof InputError ? error.status : missingAsset ? 404 : 500;
+      const expectedError = error instanceof InputError || error instanceof FlipkartConnectionError;
+      const status = expectedError ? error.status : missingAsset ? 404 : 500;
       let message: string;
-      if (error instanceof InputError) message = error.message;
+      if (expectedError) message = error.message;
       else if (missingAsset) message = 'Page not found. Run the app build first.';
       else
         message = `The action could not be completed. Check Diagnostics with reference ${requestId}.`;
-      if (status >= 500) service.diagnostics.error(path, error, requestId);
+      // Credential transports/OS helpers must never leak raw payloads or nested causes to logs.
+      if (path.startsWith('/api/flipkart/'))
+        service.log('flipkart-connection', `${status}: ${message}`, 'warning', requestId);
+      else if (status >= 500) service.diagnostics.error(path, error, requestId);
       else service.log(path, `${status}: ${message}`, 'warning', requestId);
       sendJson(response, status, { error: message, requestId });
     }
