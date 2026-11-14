@@ -24,6 +24,14 @@ export interface SellerAccount {
   name: string;
   status: 'not-connected' | 'demo';
 }
+/** Token issuance is not verification of seller identity, listings or publication access. */
+export interface FlipkartConnectionStatus {
+  state: 'not-configured' | 'verified' | 'needs-attention' | 'unavailable';
+  checkedAt: string | null;
+  expiresAt: string | null;
+  applicationIdHint: string | null;
+  message: string;
+}
 export interface Listing {
   id: string;
   accountId: string;

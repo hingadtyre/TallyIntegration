@@ -1,3 +1,5 @@
 # Provider-managed Flipkart authorization with local inventory processing
 
+Superseded for the seller-owned access implementation by [ADR 0004](0004-seller-owned-flipkart-self-access.md). This paragraph preserves the earlier decision and remains the alternative for provider-managed distribution.
+
 On 2026-11-08, the user selected a provider-managed Stockbridge product for independent sellers, using the provider's registered Flipkart partner application and separate authorization from each customer. A small provider-operated HTTPS authorization service owns the callback and protects the shared application secret; the dashboard, Tally connection, stock processing and SQLite database remain on the customer's computer. This adds provider hosting and operational responsibilities in exchange for a consistent customer connection flow, without distributing shared provider secrets or relying on seller self-access credentials for a third-party product; provider registration, approved access and deployment remain prerequisites, not completed work.

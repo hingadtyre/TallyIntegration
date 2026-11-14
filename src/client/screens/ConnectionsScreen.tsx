@@ -3,6 +3,7 @@ import type { Workspace } from '../useWorkspace.js';
 import { Icon } from '../components.js';
 import { formatDateTime as time } from '../format.js';
 import { CustomerSetup } from '../CustomerSetup.js';
+import { FlipkartConnectionPanel } from './FlipkartConnectionPanel.js';
 
 export function ConnectionsScreen({
   state,
@@ -70,34 +71,7 @@ export function ConnectionsScreen({
             Check & discover companies
           </button>
         </section>
-        {state.accounts.map((value) => (
-          <section className="panel connection-card" key={value.id}>
-            <div className="connection-card-top">
-              <div className="service-logo flipkart-logo">F</div>
-              <span className="badge badge-amber">
-                {value.status === 'demo' ? 'Sample account' : 'Not connected'}
-              </span>
-            </div>
-            <h2>Flipkart</h2>
-            <p className="account-name">{value.name}</p>
-            <p>
-              {value.status === 'demo'
-                ? 'A demonstration account in the sample workspace.'
-                : 'This is a setup label. No seller account has been connected or verified.'}
-            </p>
-            <div className="connection-note">
-              <Icon name="info" />
-              <span>
-                Flipkart connection, listing import and stock updates are not available in this
-                version. Signing in to the seller website does not connect this app.
-              </span>
-            </div>
-            <div className="connection-footer">
-              <span className="status-dot muted" />
-              Marketplace writes unavailable
-            </div>
-          </section>
-        ))}
+        <FlipkartConnectionPanel mode={state.mode} />
       </div>
       <section className="panel setup-panel">
         <h2>If Tally does not connect</h2>

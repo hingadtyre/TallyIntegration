@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { render, screen, within, fireEvent, waitFor, response } from '../support/client-dom.js';
-import type { Review, Snapshot } from '../../src/shared/contracts.js';
+import type { FlipkartConnectionStatus, Review, Snapshot } from '../../src/shared/contracts.js';
 import { initialState } from '../../src/server/seed.js';
 import { App } from '../../src/client/App.js';
+
+const disconnectedFlipkart: FlipkartConnectionStatus = {
+  state: 'not-configured',
+  checkedAt: null,
+  expiresAt: null,
+  applicationIdHint: null,
+  message: 'No Flipkart API credentials are saved.',
+};
 
 test('startup shows progress until the inventory snapshot arrives', async (t) => {
   let finish!: (response: Response) => void;
@@ -36,7 +44,11 @@ test('startup failure exposes the server error and a retry action', async (t) =>
 });
 
 test('an empty live workspace guides the user to connections and disables listing actions', async (t) => {
-  t.mock.method(globalThis, 'fetch', async () => response(initialState('live', 'unused')));
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    if (String(input) === '/api/flipkart/connection') return response(disconnectedFlipkart);
+    assert.equal(String(input), '/api/state');
+    return response(initialState('live', 'unused'));
+  });
   render(<App />);
   await screen.findByRole('heading', { name: 'Start with your Tally company' });
   assert.equal(
@@ -55,7 +67,7 @@ test('an empty live workspace guides the user to connections and disables listin
   fireEvent.click(screen.getByRole('button', { name: 'View connections' }));
   assert.ok(screen.getByRole('heading', { name: 'Connections', level: 1 }));
   assert.ok(screen.getByRole('button', { name: 'Check & discover companies' }));
-  assert.ok(screen.getByText('Not connected'));
+  await screen.findByText('Not configured');
   fireEvent.click(screen.getByRole('button', { name: 'Open Tally settings' }));
   assert.ok(screen.getByRole('heading', { name: 'Settings', level: 1 }));
   assert.ok(screen.getByRole('textbox', { name: /Connection address/ }));
@@ -291,6 +303,7 @@ for (const view of ['Inventory', 'Connections'] as const) {
       'fetch',
       async (input: string | URL | Request, options?: RequestInit) => {
         if (String(input) === '/api/state') return response(state);
+        if (String(input) === '/api/flipkart/connection') return response(disconnectedFlipkart);
         assert.equal(String(input), '/api/refresh');
         assert.deepEqual(
           JSON.parse(String(options?.body)),

@@ -1641,6 +1641,41 @@ small {
   margin-top: 24px;
 }
 
+.flipkart-credentials fieldset {
+  display: grid;
+  gap: 16px;
+  border: 0;
+  padding: 0;
+  margin: 20px 0;
+  min-width: 0;
+}
+
+.flipkart-credentials legend {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+.flipkart-credentials .button {
+  justify-self: start;
+}
+
+.flipkart-connection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.connection-card .flipkart-connection-error {
+  color: #9b392d;
+  background: #fff3f0;
+  border: 1px solid #f0d4cd;
+  border-radius: 5px;
+  padding: 12px;
+  overflow-wrap: anywhere;
+}
+
 .setup-panel {
   padding: 24px;
   margin-top: 24px;

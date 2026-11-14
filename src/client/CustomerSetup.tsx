@@ -4,7 +4,8 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
       <h2>Set up this pilot</h2>
       <p>
         Use Stockbridge on the same Windows computer as Tally. This version reads your stock and
-        saves verified backups. It does not connect to Flipkart or change marketplace stock.
+        saves verified backups. On Windows, you can verify and securely save seller-owned Flipkart
+        API credentials below. Marketplace stock updates remain unavailable.
       </p>
       <ol>
         <li>
@@ -43,8 +44,9 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           <span>
             In Settings, keep the suggested Backup folder or enter a full writable folder path. Save
             settings before using Back up now, then look for the verified-backup confirmation. This
-            backs up Stockbridge records, not your Tally accounting data. Automatic backups and
-            restoring a backup are not available in this version.
+            backs up Stockbridge records, not your Tally accounting data or API credentials.
+            Automatic backups are not available. Contact support for a supervised offline pilot
+            restore.
           </span>
           <button className="text-button" onClick={onOpenSettings}>
             Open backup settings
@@ -64,12 +66,21 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
         <strong>Open Data Folder.cmd</strong> to find its saved files and{' '}
         <strong>Read Me.html</strong> for the full setup and troubleshooting guide.
       </p>
-      <h3>Flipkart setup is not available yet</h3>
+      <h3>Set up seller-owned Flipkart access</h3>
       <p>
-        This version has no seller connection or listing import. Connecting your own seller account,
-        verifying stock locations and packs, reviewing the first stock update, and enabling
-        synchronization belong to a future release. No setting or browser sign-in can enable those
-        missing features in this pilot.
+        In your seller dashboard, open Manage Profile → Developer Access → Create New Access.
+        Register an application for your own seller use, then enter its Application ID and
+        Application Secret in the Flipkart panel below. If Flipkart approval is pending, use Save
+        credentials for later to protect them on this computer without contacting Flipkart. After
+        approval, use Check saved access. Verify and save credentials checks access before saving.
+        No hosted Stockbridge authentication service is used. Sample mode does not accept
+        credentials or contact Flipkart.
+      </p>
+      <p>
+        Flipkart restricts Self Access to the seller's own use. Confirm this arrangement is
+        appropriate for your installation. A verified API credential is not proof of the seller's
+        identity or approval for a third-party product. Listing import, stock locations and packs,
+        reviewed stock updates and automatic synchronization still need implementation.
       </p>
       <p>
         <a
