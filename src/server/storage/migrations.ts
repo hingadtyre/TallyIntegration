@@ -5,7 +5,13 @@ import type { Snapshot } from '../../shared/contracts.js';
 import { initialState } from '../seed.js';
 import { backupDatabase } from './backup.js';
 import { readSnapshot, writeSnapshot } from './records.js';
-import { createSchema, CURRENT_SCHEMA_VERSION, schemaVersion } from './schema.js';
+import { readMarketplace } from './marketplace-records.js';
+import {
+  createSchema,
+  createMarketplaceSchema,
+  CURRENT_SCHEMA_VERSION,
+  schemaVersion,
+} from './schema.js';
 import { parseLegacySnapshot } from './validation.js';
 
 function requireMode(state: Snapshot, mode: Snapshot['mode']): void {
@@ -42,6 +48,7 @@ export function prepareDatabase(
   if (version > CURRENT_SCHEMA_VERSION) throw new Error('This database needs a newer application.');
   if (version === CURRENT_SCHEMA_VERSION) {
     requireMode(readSnapshot(database), mode);
+    readMarketplace(database);
     return null;
   }
   if (version === 0) {
@@ -57,25 +64,33 @@ export function prepareDatabase(
     });
     return null;
   }
-  if (version !== 1) throw new Error(`Unsupported database schema ${version}.`);
+  if (version !== 1 && version !== 2) throw new Error(`Unsupported database schema ${version}.`);
 
-  const original = legacyJson(database);
-  const state = parseLegacySnapshot(original);
+  const original = version === 1 ? legacyJson(database) : JSON.stringify(readSnapshot(database));
+  const state = version === 1 ? parseLegacySnapshot(original) : readSnapshot(database);
   requireMode(state, mode);
   const stamp = new Date().toISOString().replaceAll(':', '-');
   const backupPath = join(
     dirname(file),
     'migration-backups',
-    `before-schema-v2-${stamp}-${randomUUID().slice(0, 8)}.sqlite`,
+    `before-schema-v${CURRENT_SCHEMA_VERSION}-${stamp}-${randomUUID().slice(0, 8)}.sqlite`,
   );
   backupDatabase(database, backupPath);
   inTransaction(database, () => {
-    if (schemaVersion(database) !== 1 || legacyJson(database) !== original) {
+    if (
+      schemaVersion(database) !== version ||
+      (version === 1 ? legacyJson(database) : JSON.stringify(readSnapshot(database))) !== original
+    ) {
       throw new Error('The database changed during upgrade. Stop other app processes and retry.');
     }
-    createSchema(database);
-    writeSnapshot(database, state);
-    database.exec(`DROP TABLE app_state; PRAGMA user_version = ${CURRENT_SCHEMA_VERSION};`);
+    if (version === 1) {
+      createSchema(database);
+      writeSnapshot(database, state);
+      database.exec('DROP TABLE app_state;');
+    } else {
+      createMarketplaceSchema(database);
+    }
+    database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION};`);
   });
   return backupPath;
 }

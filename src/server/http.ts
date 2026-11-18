@@ -5,6 +5,9 @@ import { extname, resolve, sep } from 'node:path';
 import { FlipkartConnectionError, type FlipkartConnection } from './flipkart-connection.js';
 import type { InventoryService } from './service.js';
 import { InputError } from './validation.js';
+import { FlipkartListingError } from '../adapters/flipkart-listings.js';
+import { runMarketplaceCommand } from './marketplace-http.js';
+import type { MarketplaceService } from './marketplace-service.js';
 
 const contentTypes: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -163,6 +166,7 @@ export function createApp(
   webRoot = resolve('dist/web'),
   runtime?: RuntimeControl,
   flipkart?: MarketplaceConnection,
+  marketplaces?: MarketplaceService,
 ) {
   return createServer(async (request, response) => {
     const started = Date.now();
@@ -172,7 +176,7 @@ export function createApp(
     response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.flixcart.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
     );
     let path = '/';
     try {
@@ -180,6 +184,18 @@ export function createApp(
         throw new InputError('Local access only.', 403);
       path = new URL(request.url ?? '/', 'http://localhost').pathname;
       if (path.startsWith('/api/')) {
+        if (path.startsWith('/api/marketplaces')) {
+          if (!marketplaces)
+            throw new InputError('Marketplace management is unavailable in this runtime.', 503);
+          if (request.method === 'GET' && path === '/api/marketplaces')
+            return sendJson(response, 200, await marketplaces.accounts());
+          if (request.method === 'GET' && path === '/api/marketplaces/listings')
+            return sendJson(
+              response,
+              200,
+              marketplaces.page(new URL(request.url!, 'http://localhost').searchParams),
+            );
+        }
         if (request.method === 'GET' && path === '/api/health' && runtime)
           return sendJson(response, 200, runtime.health);
         if (request.method === 'GET' && path === '/api/state')
@@ -206,9 +222,13 @@ export function createApp(
           return sendJson(response, 200, { stopping: true, instanceId: runtime.health.instanceId });
         }
         const input = await readJsonObject(request);
-        const result = path.startsWith('/api/flipkart/')
-          ? await runFlipkartCommand(flipkart, path, input)
-          : await runCommand(service, path, input);
+        const result = path.startsWith('/api/marketplaces/')
+          ? await runMarketplaceCommand(marketplaces!, path, input)
+          : path.startsWith('/api/flipkart/')
+            ? marketplaces
+              ? await marketplaces.runLegacyCommand(() => runFlipkartCommand(flipkart, path, input))
+              : await runFlipkartCommand(flipkart, path, input)
+            : await runCommand(service, path, input);
         service.log(path, `Completed in ${Date.now() - started} ms`, 'info', requestId);
         sendJson(response, 200, result);
         return;
@@ -221,14 +241,20 @@ export function createApp(
         error instanceof Error &&
         (error as NodeJS.ErrnoException).code === 'ENOENT';
       const expectedError = error instanceof InputError || error instanceof FlipkartConnectionError;
-      const status = expectedError ? error.status : missingAsset ? 404 : 500;
+      const status = expectedError
+        ? error.status
+        : error instanceof FlipkartListingError
+          ? 502
+          : missingAsset
+            ? 404
+            : 500;
       let message: string;
-      if (expectedError) message = error.message;
+      if (expectedError || error instanceof FlipkartListingError) message = error.message;
       else if (missingAsset) message = 'Page not found. Run the app build first.';
       else
         message = `The action could not be completed. Check Diagnostics with reference ${requestId}.`;
       // Credential transports/OS helpers must never leak raw payloads or nested causes to logs.
-      if (path.startsWith('/api/flipkart/'))
+      if (path.startsWith('/api/flipkart/') || path.startsWith('/api/marketplaces'))
         service.log('flipkart-connection', `${status}: ${message}`, 'warning', requestId);
       else if (status >= 500) service.diagnostics.error(path, error, requestId);
       else service.log(path, `${status}: ${message}`, 'warning', requestId);

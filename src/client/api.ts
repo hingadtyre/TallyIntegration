@@ -5,6 +5,16 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'The action could not be completed.';
 }
 
+export class RequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'RequestError';
+  }
+}
+
 export async function requestJson<T>(
   path: string,
   body?: unknown,
@@ -31,7 +41,7 @@ export async function requestJson<T>(
       typeof result === 'object' && result !== null && 'error' in result
         ? String(result.error)
         : `Request failed (${response.status}).`;
-    throw new Error(message);
+    throw new RequestError(message, response.status);
   }
   return result as T;
 }

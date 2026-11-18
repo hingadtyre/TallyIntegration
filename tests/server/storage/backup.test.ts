@@ -19,7 +19,7 @@ test('a backup destination containing an apostrophe works and existing copies ar
   assert.equal(store.read().items[0].physical, 99);
   queryFile(backup, (copy) => assert.equal(readSnapshot(copy).items[0].physical, 4));
 });
-test('v2 backups preserve normalized records and remain independently readable', (t) => {
+test('v3 backups preserve normalized records and remain independently readable', (t) => {
   const f = fixture(t);
   const store = f.open();
   store.update((state) => {
@@ -30,7 +30,7 @@ test('v2 backups preserve normalized records and remain independently readable',
   store.backup(backup);
   queryFile(backup, (copy) => {
     assert.equal(copy.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok');
-    assert.equal(copy.prepare('PRAGMA user_version').get()?.user_version, 2);
+    assert.equal(copy.prepare('PRAGMA user_version').get()?.user_version, 3);
     assert.deepEqual(readSnapshot(copy), expected);
   });
 });

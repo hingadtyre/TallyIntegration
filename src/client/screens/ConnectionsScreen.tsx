@@ -3,16 +3,17 @@ import type { Workspace } from '../useWorkspace.js';
 import { Icon } from '../components.js';
 import { formatDateTime as time } from '../format.js';
 import { CustomerSetup } from '../CustomerSetup.js';
-import { FlipkartConnectionPanel } from './FlipkartConnectionPanel.js';
 
 export function ConnectionsScreen({
   state,
   workspace,
   onOpenSettings,
+  onOpenMarketplaces,
 }: {
   state: Snapshot;
   workspace: Workspace;
   onOpenSettings: () => void;
+  onOpenMarketplaces?: () => void;
 }) {
   const { busy, refreshTally } = workspace;
   return (
@@ -71,7 +72,17 @@ export function ConnectionsScreen({
             Check & discover companies
           </button>
         </section>
-        <FlipkartConnectionPanel mode={state.mode} />
+        <section className="panel connection-card">
+          <div className="service-logo flipkart-logo">F</div>
+          <h2>Marketplace accounts</h2>
+          <p>
+            Add each seller account separately in Marketplaces. Open its tile to refresh listings or
+            apply a stock or price edit.
+          </p>
+          <button className="button secondary" onClick={onOpenMarketplaces}>
+            Open Marketplaces
+          </button>
+        </section>
       </div>
       <section className="panel setup-panel">
         <h2>If Tally does not connect</h2>

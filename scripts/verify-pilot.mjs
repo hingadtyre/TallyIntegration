@@ -194,9 +194,9 @@ async function tallyFixture() {
   };
 }
 
-async function api(path, body, expectedStatus = 200) {
+async function api(path, body, expectedStatus = 200, timeoutMs = 5000) {
   const response = await fetch(dashboard + path, {
-    signal: AbortSignal.timeout(5000),
+    signal: AbortSignal.timeout(timeoutMs),
     redirect: 'error',
     ...(body === undefined
       ? {}
@@ -471,6 +471,56 @@ async function verifyPilot(zip) {
       assert.equal((await api('/api/state')).publishingEnabled, false);
       return { credentialsPresent: false, publishingEnabled: false };
     });
+    let marketplaceAccounts;
+    await check('marketplace_accounts_are_explicit_and_credentials_are_separate', async () => {
+      assert.deepEqual(await api('/api/marketplaces'), { accounts: [] });
+      marketplaceAccounts = [];
+      for (const suffix of ['0001', '0002']) {
+        const applicationSecret = `package-fixture-secret-${suffix}`;
+        secrets.add(applicationSecret);
+        // Save and status each invoke bounded Windows credential protection.
+        const account = await api(
+          '/api/marketplaces/add',
+          {
+            marketplace: 'flipkart',
+            name: `Package seller ${suffix}`,
+            applicationId: `package-fixture-${suffix}`,
+            applicationSecret,
+            verify: false,
+          },
+          200,
+          30_000,
+        );
+        assert.equal(account.sellerId, null);
+        assert.equal(account.lastRefreshedAt, null);
+        assert.equal(account.connection.applicationIdHint, `***${suffix}`);
+        assert.equal(account.connection.expiresAt, null);
+        assert.equal(JSON.stringify(account).includes(applicationSecret), false);
+        const credentials = join(
+          dataDirectory,
+          'marketplace-credentials',
+          account.id,
+          'flipkart-self-access.credentials',
+        );
+        assert.ok(existsSync(credentials));
+        assert.equal(readFileSync(credentials, 'utf8').includes(applicationSecret), false);
+        const page = await api(`/api/marketplaces/listings?accountId=${account.id}`);
+        assert.equal(page.total, 0);
+        assert.deepEqual(page.listings, []);
+        marketplaceAccounts.push(account);
+      }
+      assert.notEqual(marketplaceAccounts[0].id, marketplaceAccounts[1].id);
+      await api('/api/marketplaces/connection', {
+        accountId: marketplaceAccounts[0].id,
+        action: 'disconnect',
+      });
+      const directory = (await api('/api/marketplaces', undefined, 200, 30_000)).accounts;
+      assert.equal(directory.length, 2);
+      assert.equal(directory[0].connection.applicationIdHint, null);
+      assert.equal(directory[1].connection.applicationIdHint, '***0002');
+      assert.equal((await api('/api/state')).publishingEnabled, false);
+      return { accounts: 2, separateProtectedFiles: true, verifyRequested: false };
+    });
     await check('dashboard_and_compiled_assets', async () => {
       const response = await fetch(dashboard, {
         signal: AbortSignal.timeout(5000),
@@ -635,6 +685,14 @@ async function verifyPilot(zip) {
       assert.equal(restored.publishingEnabled, false);
       assert.ok(restored.activity.some((entry) => entry.operation === 'pilot-restore'));
       assert.ok(!existsSync(join(packageRoot, '.data')));
+      const accounts = (await api('/api/marketplaces', undefined, 200, 30_000)).accounts;
+      assert.deepEqual(
+        accounts.map((account) => ({ id: account.id, name: account.name })),
+        marketplaceAccounts.map((account) => ({ id: account.id, name: account.name })),
+      );
+      assert.equal(accounts[0].connection.applicationIdHint, null);
+      assert.equal(accounts[1].connection.applicationIdHint, '***0002');
+      assert.ok(accounts.every((account) => account.lastRefreshedAt === null));
       return {
         instanceId: health.instanceId,
         tallySeconds: 45,

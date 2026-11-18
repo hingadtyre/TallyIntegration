@@ -8,6 +8,7 @@ import { FlipkartConnection } from './flipkart-connection.js';
 import { createApp, type RuntimeHealth } from './http.js';
 import { InventoryService } from './service.js';
 import { Store } from './store.js';
+import { MarketplaceService } from './marketplace-service.js';
 
 type WorkspaceMode = 'live' | 'demo';
 
@@ -150,12 +151,17 @@ export async function startRuntime(
   let store: Store | undefined;
   let service: InventoryService | undefined;
   let flipkart: FlipkartConnection | undefined;
+  let marketplaces: MarketplaceService | undefined;
   let app: ReturnType<typeof createApp> | undefined;
   let stopping: Promise<void> | undefined;
   const diagnostics = new Diagnostics(join(owner.dataDirectory, `${mode}.diagnostics.ndjson`));
 
   async function waitForPendingWork(): Promise<void> {
-    const results = await Promise.allSettled([service?.idle(), flipkart?.idle()]);
+    const results = await Promise.allSettled([
+      service?.idle(),
+      marketplaces?.idle(),
+      flipkart?.idle(),
+    ]);
     const failed = results.find((result) => result.status === 'rejected');
     if (failed?.status === 'rejected') throw failed.reason;
   }
@@ -164,7 +170,8 @@ export async function startRuntime(
     try {
       try {
         service?.stop();
-        flipkart?.stop();
+        marketplaces?.stop();
+        if (!marketplaces) flipkart?.stop();
       } finally {
         if (app?.listening) {
           await new Promise<void>((accept, reject) =>
@@ -197,6 +204,9 @@ export async function startRuntime(
     store = new Store(join(owner.dataDirectory, `${mode}.sqlite`), mode);
     service = new InventoryService(store, { diagnostics });
     flipkart = new FlipkartConnection(owner.dataDirectory, mode);
+    marketplaces = new MarketplaceService(store, owner.dataDirectory, {
+      legacyConnection: flipkart,
+    });
     app = createApp(
       service,
       paths.webRoot,
@@ -214,6 +224,7 @@ export async function startRuntime(
         },
       },
       flipkart,
+      marketplaces,
     );
     const server = app;
     await new Promise<void>((accept, reject) => {
@@ -240,7 +251,10 @@ export async function startRuntime(
       rmSync(temporaryFile, { force: true });
     }
     service.start();
-    service.log('startup', `${mode} dashboard started; marketplace publishing disabled.`);
+    service.log(
+      'startup',
+      `${mode} dashboard started; automatic Inventory publishing disabled; explicit Marketplace Apply available.`,
+    );
     server.on('error', (error) => {
       diagnostics.error('http-server', error);
       void stop().catch((shutdownError) => diagnostics.error('shutdown', shutdownError));

@@ -6,6 +6,8 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Snapshot } from '../../../src/shared/contracts.js';
 import { initialState } from '../../../src/server/seed.js';
 import { InvalidStoredState } from '../../../src/server/storage/validation.js';
+import { createSchema } from '../../../src/server/storage/schema.js';
+import { readSnapshot, writeSnapshot } from '../../../src/server/storage/records.js';
 import { queryFile, storageFixture as fixture } from '../../support/server-fixture.js';
 
 function legacyState(directory: string): Snapshot {
@@ -67,7 +69,7 @@ test('legacy migration preserves policies, drafts, identities and history with a
   const original = legacyState(f.directory);
   createLegacy(f.file, original);
   const store = f.open();
-  assert.equal(store.schemaVersion, 2);
+  assert.equal(store.schemaVersion, 3);
   assert.deepEqual(store.read(), original);
   assert.ok(store.migrationBackupPath);
   assert.ok(existsSync(store.migrationBackupPath));
@@ -79,7 +81,7 @@ test('legacy migration preserves policies, drafts, identities and history with a
     assert.deepEqual(JSON.parse(value as string), original);
   });
   queryFile(f.file, (database) => {
-    assert.equal(database.prepare('PRAGMA user_version').get()?.user_version, 2);
+    assert.equal(database.prepare('PRAGMA user_version').get()?.user_version, 3);
     assert.equal(
       database.prepare("SELECT name FROM sqlite_master WHERE name = 'app_state'").get(),
       undefined,
@@ -97,6 +99,59 @@ test('legacy migration preserves policies, drafts, identities and history with a
   const reopened = f.open();
   assert.equal(reopened.migrationBackupPath, null);
   assert.deepEqual(reopened.read(), original);
+  assert.equal(readdirSync(join(f.directory, 'migration-backups')).length, 1);
+});
+
+function createVersionTwo(file: string, state: Snapshot): void {
+  const database = new DatabaseSync(file);
+  try {
+    createSchema(database);
+    writeSnapshot(database, state);
+    database.exec(
+      'DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
+    );
+  } finally {
+    database.close();
+  }
+}
+
+test('version two upgrades preserve all records and a verified version-two safety copy without adopting placeholders', (t) => {
+  const f = fixture(t);
+  const original = legacyState(f.directory);
+  createVersionTwo(f.file, original);
+  const store = f.open();
+  assert.equal(store.schemaVersion, 3);
+  assert.deepEqual(store.read(), original);
+  assert.deepEqual(store.readMarketplace(), { accounts: [], listings: [], changes: [] });
+  assert.ok(store.migrationBackupPath);
+  queryFile(store.migrationBackupPath, (database) => {
+    assert.equal(database.prepare('PRAGMA user_version').get()?.user_version, 2);
+    assert.deepEqual(readSnapshot(database), original);
+    assert.equal(
+      database.prepare("SELECT name FROM sqlite_master WHERE name = 'marketplace_accounts'").get(),
+      undefined,
+    );
+  });
+  assert.equal(f.open().migrationBackupPath, null);
+  assert.equal(readdirSync(join(f.directory, 'migration-backups')).length, 1);
+});
+
+test('a version-two migration failure rolls back new tables and preserves its pre-upgrade backup', (t) => {
+  const f = fixture(t);
+  const original = legacyState(f.directory);
+  createVersionTwo(f.file, original);
+  queryFile(f.file, (database) =>
+    database.exec('CREATE TABLE marketplace_listings (retained TEXT);'),
+  );
+  assert.throws(() => f.open(), /already exists/);
+  queryFile(f.file, (database) => {
+    assert.equal(database.prepare('PRAGMA user_version').get()?.user_version, 2);
+    assert.deepEqual(readSnapshot(database), original);
+    assert.equal(
+      database.prepare("SELECT name FROM sqlite_master WHERE name = 'marketplace_accounts'").get(),
+      undefined,
+    );
+  });
   assert.equal(readdirSync(join(f.directory, 'migration-backups')).length, 1);
 });
 

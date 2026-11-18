@@ -4,8 +4,9 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
       <h2>Set up this pilot</h2>
       <p>
         Use Stockbridge on the same Windows computer as Tally. This version reads your stock and
-        saves verified backups. On Windows, you can verify and securely save seller-owned Flipkart
-        API credentials below. Marketplace stock updates remain unavailable.
+        saves verified backups. In Marketplaces, add your seller-owned Flipkart accounts and refresh
+        their listings. Apply in a listing editor changes that value on Flipkart. Automatic Tally
+        publishing and Inventory proposal publishing remain unavailable.
       </p>
       <ol>
         <li>
@@ -70,17 +71,25 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
       <p>
         In your seller dashboard, open Manage Profile → Developer Access → Create New Access.
         Register an application for your own seller use, then enter its Application ID and
-        Application Secret in the Flipkart panel below. If Flipkart approval is pending, use Save
-        credentials for later to protect them on this computer without contacting Flipkart. After
-        approval, use Check saved access. Verify and save credentials checks access before saving.
-        No hosted Stockbridge authentication service is used. Sample mode does not accept
-        credentials or contact Flipkart.
+        Application Secret under Marketplaces → Add account → Flipkart. Give each account a name. If
+        Flipkart approval is pending, save credentials for later without verifying. After approval,
+        check the saved access, open its account tile and choose Refresh listings. Verify and save
+        checks access before saving. No hosted Stockbridge authentication service is used. Sample
+        mode does not accept credentials or contact Flipkart.
       </p>
       <p>
         Flipkart restricts Self Access to the seller's own use. Confirm this arrangement is
         appropriate for your installation. A verified API credential is not proof of the seller's
-        identity or approval for a third-party product. Listing import, stock locations and packs,
-        reviewed stock updates and automatic synchronization still need implementation.
+        identity or approval for a third-party product. Refresh listings verifies the seller binding
+        before editing. Tally pack/location mapping and automatic synchronization require further
+        validation and implementation.
+      </p>
+      <p>
+        Use the pencil beside stock, MRP or selling price, then Apply for that value only. For a
+        Tally-managed listing, choose Update once or Pause Tally sync and update. Pause also stops
+        automatic zero corrections until resumed. Existing holds and sales allowances require an
+        explicit policy change before a conflicting edit. If an update is uncertain, choose Check
+        result rather than repeating it. Settlement editing opens Flipkart Seller Hub.
       </p>
       <p>
         <a

@@ -4,6 +4,11 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Snapshot } from '../shared/contracts.js';
 import { backupDatabase } from './storage/backup.js';
 import { prepareDatabase } from './storage/migrations.js';
+import {
+  readMarketplace,
+  writeMarketplace,
+  type MarketplaceData,
+} from './storage/marketplace-records.js';
 import { readSnapshot, writeSnapshot } from './storage/records.js';
 import { CURRENT_SCHEMA_VERSION } from './storage/schema.js';
 
@@ -58,6 +63,37 @@ export class Store {
       if (state.mode !== this.mode)
         throw new Error('The workspace mode cannot be changed after creation.');
       writeSnapshot(this.database, state);
+      this.database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  readMarketplace(): MarketplaceData {
+    this.database.exec('BEGIN');
+    try {
+      const market = readMarketplace(this.database);
+      this.database.exec('COMMIT');
+      return market;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  /** Persist the outbound intention and any Inventory pause in one commit. */
+  updateMarketplace<T>(change: (market: MarketplaceData, state: Snapshot) => T): T {
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const state = readSnapshot(this.database);
+      const market = readMarketplace(this.database);
+      const result = change(market, state);
+      if (state.mode !== this.mode)
+        throw new Error('The workspace mode cannot be changed after creation.');
+      writeSnapshot(this.database, state);
+      writeMarketplace(this.database, market);
       this.database.exec('COMMIT');
       return result;
     } catch (error) {

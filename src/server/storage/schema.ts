@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 /** Each managed record has an explicit table. Array order is presentation state,
  * so sort_order is retained without making names or positions into identities. */
@@ -103,6 +103,49 @@ export function createSchema(database: DatabaseSync): void {
   `);
   // Activity references deliberately outlive current managed records. They are
   // historical identifiers, so deleting a record must not delete its history.
+  createMarketplaceSchema(database);
+}
+
+/** Explicit membership keeps the legacy disconnected account placeholder out of
+ * Marketplaces until the seller adds it or adopts saved credentials. */
+export function createMarketplaceSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE marketplace_accounts (
+      account_id TEXT PRIMARY KEY NOT NULL REFERENCES seller_accounts(id) DEFERRABLE INITIALLY DEFERRED,
+      name TEXT NOT NULL,
+      seller_id TEXT UNIQUE,
+      last_refreshed_at TEXT,
+      sort_order INTEGER NOT NULL CHECK (sort_order >= 0)
+    );
+    CREATE TABLE marketplace_listings (
+      account_id TEXT NOT NULL REFERENCES marketplace_accounts(account_id) DEFERRABLE INITIALLY DEFERRED,
+      id TEXT NOT NULL,
+      seller_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      sku TEXT NOT NULL,
+      version INTEGER NOT NULL CHECK (version >= 0),
+      observed_at TEXT,
+      metadata TEXT NOT NULL CHECK (json_valid(metadata)),
+      sort_order INTEGER NOT NULL CHECK (sort_order >= 0),
+      PRIMARY KEY (account_id, id),
+      UNIQUE (account_id, sku)
+    );
+    CREATE TABLE marketplace_changes (
+      id TEXT PRIMARY KEY NOT NULL,
+      account_id TEXT NOT NULL REFERENCES marketplace_accounts(account_id) DEFERRABLE INITIALLY DEFERRED,
+      listing_id TEXT NOT NULL,
+      sku TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('pending', 'sending', 'checking', 'confirmed', 'failed', 'uncertain')),
+      edit TEXT NOT NULL CHECK (json_valid(edit)),
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      sort_order INTEGER NOT NULL CHECK (sort_order >= 0)
+    );
+    CREATE INDEX marketplace_changes_destination ON marketplace_changes(account_id, listing_id, state);
+  `);
+  // Changes retain their destination even when a later refresh no longer sees
+  // the listing. Missing catalog observations must not erase publication history.
 }
 
 export function schemaVersion(database: DatabaseSync): number {

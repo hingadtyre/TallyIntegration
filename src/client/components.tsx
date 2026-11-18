@@ -6,6 +6,7 @@ export type IconName =
   | 'activity'
   | 'connections'
   | 'settings'
+  | 'marketplaces'
   | 'refresh'
   | 'search'
   | 'chevron'
@@ -18,6 +19,12 @@ export type IconName =
   | 'box'
   | 'info';
 const iconPaths: Record<IconName, ReactNode> = {
+  marketplaces: (
+    <>
+      <path d="M3 10h18l-2-6H5l-2 6ZM5 10v10h14V10M9 20v-6h6v6" />
+      <path d="M3 10a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0" />
+    </>
+  ),
   inventory: (
     <>
       <rect x="3" y="3" width="7" height="7" rx="1" />

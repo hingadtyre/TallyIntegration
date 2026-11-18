@@ -6,12 +6,18 @@ import { basename, dirname, join, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { FlipkartListingsClient } from '../../src/adapters/flipkart-listings.js';
+import { MarketplacePublication } from '../../src/server/marketplace-publication.js';
+import { MarketplaceService } from '../../src/server/marketplace-service.js';
+import type { FlipkartConnectionStatus } from '../../src/shared/contracts.js';
 import { inspectPilotBackup, restorePilotBackup } from '../../src/server/restore.js';
 import { acquireWorkspaceOwnership } from '../../src/server/runtime.js';
 import { initialState } from '../../src/server/seed.js';
 import { InventoryService } from '../../src/server/service.js';
 import { Store } from '../../src/server/store.js';
 import { readSnapshot } from '../../src/server/storage/records.js';
+import { readMarketplace, writeMarketplace } from '../../src/server/storage/marketplace-records.js';
+import { marketplaceData } from '../support/marketplace-fixture.js';
 import { queryFile } from '../support/server-fixture.js';
 
 function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
@@ -82,7 +88,7 @@ test('inspection reports date, mode and record counts without changing the backu
   const destination = readFileSync(f.destination);
   const preview = inspectPilotBackup(f.backupFile, 'live');
   assert.equal(preview.mode, 'live');
-  assert.equal(preview.schemaVersion, 2);
+  assert.equal(preview.schemaVersion, 3);
   assert.equal(preview.publishingEnabled, false);
   assert.ok(Number.isFinite(Date.parse(preview.createdAt)));
   assert.match(preview.sha256, /^[a-f0-9]{64}$/);
@@ -248,13 +254,329 @@ test('a staging failure retains the original database and its verified safety co
   assert.ok(!readdirSync(f.dataDirectory).some((name) => name.includes('.restore-')));
 });
 
-test('older schema-two backup manifests remain eligible for offline pilot inspection', (t) => {
+test('older schema-two backup manifests remain eligible and restore into schema three', async (t) => {
   const f = fixture(t);
+  queryFile(f.backupFile, (database) =>
+    database.exec(
+      'DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
+    ),
+  );
   const manifest = JSON.parse(readFileSync(`${f.backupFile}.json`, 'utf8'));
+  manifest.schemaVersion = 2;
   delete manifest.restoreScope;
   manifest.restoreSupported = false;
   writeFileSync(`${f.backupFile}.json`, JSON.stringify(manifest));
   assert.equal(inspectPilotBackup(f.backupFile, 'live').schemaVersion, 2);
+  await restorePilotBackup(restoreOptions(f));
+  queryFile(f.destination, (database) => {
+    assert.equal(database.prepare('PRAGMA user_version').get()?.user_version, 3);
+    assert.deepEqual(readMarketplace(database), { accounts: [], listings: [], changes: [] });
+  });
+});
+
+test('restoring marketplace data retains seller binding, invalidates observations and never replays unfinished edits', async (t) => {
+  const f = fixture(t);
+  const saved = marketplaceData(f.saved.accounts[0].id);
+  saved.changes = ['pending', 'sending', 'checking', 'uncertain', 'confirmed', 'failed'].map(
+    (state, index) => ({
+      ...saved.changes[0],
+      id: `change-${index}`,
+      state: state as (typeof saved.changes)[number]['state'],
+    }),
+  );
+  queryFile(f.backupFile, (database) => {
+    database.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE');
+    writeMarketplace(database, saved);
+    database.exec('COMMIT');
+  });
+  const original = readFileSync(f.backupFile);
+  await restorePilotBackup(restoreOptions(f));
+  const restored = queryFile(f.destination, readMarketplace);
+  assert.equal(restored.accounts[0].sellerId, saved.accounts[0].sellerId);
+  assert.equal(restored.accounts[0].lastRefreshedAt, null);
+  assert.equal(restored.listings[0].observedAt, null);
+  assert.equal(restored.listings[0].version, saved.listings[0].version + 1);
+  assert.deepEqual(restored.listings[0].locations, saved.listings[0].locations);
+  assert.deepEqual(
+    restored.changes.map((row) => row.state),
+    ['uncertain', 'uncertain', 'uncertain', 'uncertain', 'confirmed', 'failed'],
+  );
+  assert.match(restored.changes[0].message, /do not resend.*automatically/);
+  assert.deepEqual(readFileSync(f.backupFile), original);
+});
+
+test('an older backup cannot erase newer seller binding or unfinished update barriers', async (t) => {
+  const f = fixture(t);
+  const current = marketplaceData(f.local.accounts[0].id);
+  current.changes = ['pending', 'sending', 'checking', 'uncertain', 'confirmed', 'failed'].map(
+    (state, index) => ({
+      ...current.changes[0],
+      id: `newer-change-${index}`,
+      state: state as (typeof current.changes)[number]['state'],
+    }),
+  );
+  queryFile(f.destination, (database) => writeMarketplace(database, current));
+  queryFile(f.backupFile, (database) =>
+    writeMarketplace(database, {
+      accounts: [{ ...current.accounts[0], sellerId: null, lastRefreshedAt: null }],
+      listings: [],
+      changes: [],
+    }),
+  );
+  const result = await restorePilotBackup(restoreOptions(f));
+  const restored = queryFile(f.destination, readMarketplace);
+  assert.equal(restored.accounts[0].sellerId, current.accounts[0].sellerId);
+  assert.equal(restored.accounts[0].lastRefreshedAt, null);
+  assert.equal(restored.listings[0].observedAt, null);
+  assert.deepEqual(
+    restored.changes.map((row) => [row.id, row.state]),
+    current.changes.slice(0, 4).map((row) => [row.id, 'uncertain']),
+  );
+  assert.deepEqual(queryFile(result.safetyBackup, readMarketplace), current);
+
+  const store = new Store(f.destination, 'live');
+  try {
+    // A fresh observation alone must not clear the retained update barrier.
+    store.updateMarketplace((data) => {
+      data.listings[0].observedAt = new Date().toISOString();
+    });
+    let requests = 0;
+    const publisher = new MarketplacePublication(
+      store,
+      new FlipkartListingsClient({
+        request: async () => {
+          requests++;
+          throw new Error('A retained unfinished update must block another request.');
+        },
+      }),
+    );
+    const listing = store.readMarketplace().listings[0];
+    await assert.rejects(
+      publisher.apply(
+        listing.accountId,
+        {
+          listingId: listing.id,
+          version: listing.version,
+          edit: { kind: 'price', field: 'sellingPrice', value: 3600 },
+        },
+        'fixture-token',
+      ),
+      /Check the previous update result/,
+    );
+    assert.equal(requests, 0);
+  } finally {
+    store.close();
+  }
+});
+
+test('schema-two restore keeps later account identities needed for unfinished updates', async (t) => {
+  const f = fixture(t);
+  queryFile(f.backupFile, (database) =>
+    database.exec(
+      'DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
+    ),
+  );
+  const manifest = JSON.parse(readFileSync(`${f.backupFile}.json`, 'utf8'));
+  writeFileSync(`${f.backupFile}.json`, JSON.stringify({ ...manifest, schemaVersion: 2 }));
+  const current = marketplaceData('added-after-backup');
+  const store = new Store(f.destination, 'live');
+  try {
+    store.updateMarketplace((data, state) => {
+      state.accounts.push({
+        id: 'added-after-backup',
+        name: 'Later seller',
+        marketplace: 'flipkart',
+        status: 'not-connected',
+      });
+      Object.assign(data, current);
+    });
+  } finally {
+    store.close();
+  }
+  await restorePilotBackup(restoreOptions(f));
+  const restored = queryFile(f.destination, readMarketplace);
+  assert.equal(restored.accounts[0].id, 'added-after-backup');
+  assert.equal(restored.accounts[0].sellerId, current.accounts[0].sellerId);
+  assert.equal(restored.listings[0].accountId, 'added-after-backup');
+  assert.equal(restored.listings[0].observedAt, null);
+  assert.equal(restored.changes[0].state, 'uncertain');
+  assert.ok(
+    queryFile(f.destination, readSnapshot).accounts.some((row) => row.id === 'added-after-backup'),
+  );
+});
+
+test('old editors remain stale after restore and fresh import for existing and newer listings', async (t) => {
+  for (const includedInBackup of [true, false]) {
+    await t.test(
+      includedInBackup ? 'older listing version' : 'listing added after backup',
+      async (nested) => {
+        const f = fixture(nested);
+        const current = marketplaceData(f.local.accounts[0].id);
+        current.changes = [];
+        current.listings[0].version = 3;
+        current.listings[0].locations[0].status = 'ENABLED';
+        queryFile(f.destination, (database) => writeMarketplace(database, current));
+        const backup = structuredClone(current);
+        backup.listings[0].version = 1;
+        if (!includedInBackup) backup.listings = [];
+        queryFile(f.backupFile, (database) => writeMarketplace(database, backup));
+        await restorePilotBackup(restoreOptions(f));
+        const recovered = queryFile(f.destination, readMarketplace).listings[0];
+        assert.equal(recovered.version, 4);
+        assert.equal(recovered.observedAt, null);
+
+        const remote = structuredClone(current.listings[0]);
+        remote.locations[0].quantity = 1;
+        remote.observedAt = new Date().toISOString();
+        let writes = 0;
+        const status = async (): Promise<FlipkartConnectionStatus> => ({
+          state: 'verified',
+          applicationIdHint: 'fixture',
+          checkedAt: null,
+          expiresAt: null,
+          message: 'Fixture access',
+        });
+        const store = new Store(f.destination, 'live');
+        const service = new MarketplaceService(store, f.dataDirectory, {
+          createConnection: () => ({
+            status,
+            save: status,
+            connect: status,
+            check: status,
+            disconnect: status,
+            getAccessToken: async () => 'fixture-token',
+            stop() {},
+            async idle() {},
+          }),
+          client: {
+            listListings: async () => [structuredClone(remote)],
+            getListing: async (_token, listing) => ({
+              ...structuredClone(remote),
+              version: listing.version,
+            }),
+            async updateStock() {
+              writes++;
+            },
+            async updatePrice() {
+              writes++;
+            },
+          },
+        });
+        try {
+          await service.refresh(remote.accountId);
+          const refreshed = service.page(new URLSearchParams({ accountId: remote.accountId }))
+            .listings[0];
+          assert.equal(refreshed.version, 5);
+          assert.equal(refreshed.locations[0].quantity, 1);
+          await assert.rejects(
+            service.apply({
+              accountId: remote.accountId,
+              listingId: remote.id,
+              version: 3,
+              edit: { kind: 'stock', locationId: 'warehouse-1', quantity: 4, automation: 'once' },
+            }),
+            /listing has changed/,
+          );
+          assert.equal(writes, 0);
+        } finally {
+          service.stop();
+          await service.idle();
+          store.close();
+        }
+      },
+    );
+  }
+});
+
+test('conflicting seller bindings refuse restore and retain the current marketplace records', async (t) => {
+  const f = fixture(t);
+  const current = marketplaceData(f.local.accounts[0].id, 'current-seller');
+  queryFile(f.destination, (database) => writeMarketplace(database, current));
+  queryFile(f.backupFile, (database) =>
+    writeMarketplace(database, marketplaceData(f.saved.accounts[0].id, 'backup-seller')),
+  );
+  await assert.rejects(
+    restorePilotBackup(restoreOptions(f)),
+    /conflicts with a current marketplace seller binding/,
+  );
+  assert.deepEqual(queryFile(f.destination, readMarketplace), current);
+  assert.deepEqual(queryFile(f.destination, readSnapshot), f.local);
+});
+
+test('restore refuses to remove a newer hold or reopen a consumed sales allowance', async (t) => {
+  for (const policy of ['hold', 'limited', 'missing-destination'] as const) {
+    await t.test(policy, async (nested) => {
+      const f = fixture(nested, 'demo');
+      const store = new Store(f.destination, 'demo');
+      let current;
+      try {
+        store.update((state) => {
+          const listing = state.listings[0];
+          listing.policy = policy === 'limited' ? 'limited' : 'hold';
+          listing.remaining = policy === 'limited' ? 0 : null;
+          if (policy === 'missing-destination') listing.location = 'newer-location';
+        });
+        current = store.read();
+      } finally {
+        store.close();
+      }
+      await assert.rejects(
+        restorePilotBackup(restoreOptions(f)),
+        /remove or weaken a current stock restriction.*Reconcile marketplace policies/s,
+      );
+      assert.deepEqual(queryFile(f.destination, readSnapshot), current);
+    });
+  }
+});
+
+test('restore preserves existing paused destinations and refuses to discard a newer paused destination', async (t) => {
+  for (const includedInBackup of [true, false]) {
+    await t.test(
+      includedInBackup ? 'existing destination' : 'newer destination',
+      async (nested) => {
+        const f = fixture(nested, 'demo');
+        const store = new Store(f.destination, 'demo');
+        let current;
+        try {
+          store.update((state) => {
+            const listing = state.listings[0];
+            listing.policy = 'auto';
+            listing.remaining = null;
+            listing.paused = true;
+            if (!includedInBackup) listing.location = 'newer-paused-location';
+          });
+          current = store.read();
+        } finally {
+          store.close();
+        }
+        if (includedInBackup) {
+          await restorePilotBackup(restoreOptions(f));
+          assert.equal(queryFile(f.destination, readSnapshot).listings[0].paused, true);
+        } else {
+          await assert.rejects(
+            restorePilotBackup(restoreOptions(f)),
+            /remove a currently paused stock destination.*Reconcile marketplace policies/s,
+          );
+          assert.deepEqual(queryFile(f.destination, readSnapshot), current);
+        }
+      },
+    );
+  }
+});
+
+test('a backup manifest must match its database schema and marketplace payloads must validate', (t) => {
+  const f = fixture(t);
+  const manifest = JSON.parse(readFileSync(`${f.backupFile}.json`, 'utf8'));
+  writeFileSync(`${f.backupFile}.json`, JSON.stringify({ ...manifest, schemaVersion: 2 }));
+  assert.throws(() => inspectPilotBackup(f.backupFile, 'live'), /does not match its manifest/);
+  writeFileSync(`${f.backupFile}.json`, JSON.stringify(manifest));
+  queryFile(f.backupFile, (database) => {
+    writeMarketplace(database, marketplaceData(f.saved.accounts[0].id));
+    database
+      .prepare('UPDATE marketplace_changes SET edit = ?')
+      .run('{"kind":"stock","quantity":-1}');
+  });
+  assert.throws(() => inspectPilotBackup(f.backupFile, 'live'), /Invalid stored state/);
 });
 
 test('restored sample data can be refreshed locally without changing quantities or saved drafts', async (t) => {

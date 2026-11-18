@@ -83,5 +83,11 @@ A quantity prepared for review before publication to a marketplace. It may diffe
 **Stock publication**:
 An attempt to send a proposed stock quantity to a marketplace. A sent request and a confirmed marketplace update are distinct outcomes.
 
+**Direct stock update**:
+A seller instruction to set an absolute marketplace stock quantity for a specified listing and seller location. It is distinct from changing physical Tally stock or granting a sales allowance.
+
 **Unmapped stock item**:
 A Tally stock item with no associated listing in the marketplace account currently being viewed.
+
+**Unmapped marketplace listing**:
+A marketplace listing with no association to a Tally stock item. It still belongs to its seller account and can exist independently of Tally synchronization.

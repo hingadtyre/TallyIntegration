@@ -5,8 +5,9 @@ import { InventoryScreen } from './screens/InventoryScreen.js';
 import { ActivityScreen } from './screens/ActivityScreen.js';
 import { ConnectionsScreen } from './screens/ConnectionsScreen.js';
 import { SettingsScreen } from './screens/SettingsScreen.js';
+import { MarketplacesScreen } from './screens/MarketplacesScreen.js';
 
-type Screen = 'inventory' | 'activity' | 'connections' | 'settings';
+type Screen = 'inventory' | 'marketplaces' | 'activity' | 'connections' | 'settings';
 
 /** Navigation and company/account context only. Each screen owns its own controls. */
 export function App() {
@@ -67,20 +68,22 @@ export function App() {
         </a>
         <div className="sidebar-label">WORKSPACE</div>
         <nav aria-label="Main navigation">
-          {(['inventory', 'activity', 'connections', 'settings'] as Screen[]).map((value) => (
-            <button
-              key={value}
-              className={`nav-item ${screen === value ? 'active' : ''}`}
-              aria-current={screen === value ? 'page' : undefined}
-              onClick={() => selectScreen(value)}
-            >
-              <Icon name={value} />
-              <span>{value[0].toUpperCase() + value.slice(1)}</span>
-              {value === 'inventory' && companyItems.length > 0 && (
-                <span className="nav-count">{companyItems.length}</span>
-              )}
-            </button>
-          ))}
+          {(['inventory', 'marketplaces', 'activity', 'connections', 'settings'] as Screen[]).map(
+            (value) => (
+              <button
+                key={value}
+                className={`nav-item ${screen === value ? 'active' : ''}`}
+                aria-current={screen === value ? 'page' : undefined}
+                onClick={() => selectScreen(value)}
+              >
+                <Icon name={value} />
+                <span>{value[0].toUpperCase() + value.slice(1)}</span>
+                {value === 'inventory' && companyItems.length > 0 && (
+                  <span className="nav-count">{companyItems.length}</span>
+                )}
+              </button>
+            ),
+          )}
         </nav>
         <div className="sidebar-bottom">
           <div className="local-indicator">
@@ -96,38 +99,47 @@ export function App() {
       </aside>
       <div className="main-shell">
         <header className="topbar">
-          <div className="company-picker">
-            <span className="company-icon">{company?.name.charAt(0) || 'T'}</span>
-            <label>
-              <span>Tally company</span>
-              <select
-                aria-label="Tally company"
-                value={companyId}
-                onChange={(event) => changeCompany(event.target.value)}
-              >
-                {!state.companies.length && <option value="">No company connected</option>}
-                {state.companies.map((value) => (
-                  <option key={value.id} value={value.id}>
-                    {value.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+          {screen === 'marketplaces' ? (
+            <div className="marketplace-context">
+              <Icon name="marketplaces" />
+              <span>Marketplace management</span>
+            </div>
+          ) : (
+            <div className="company-picker">
+              <span className="company-icon">{company?.name.charAt(0) || 'T'}</span>
+              <label>
+                <span>Tally company</span>
+                <select
+                  aria-label="Tally company"
+                  value={companyId}
+                  onChange={(event) => changeCompany(event.target.value)}
+                >
+                  {!state.companies.length && <option value="">No company connected</option>}
+                  {state.companies.map((value) => (
+                    <option key={value.id} value={value.id}>
+                      {value.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
           <div className="topbar-right">
-            <span
-              className={`connection-pill ${state.connection.tally === 'online' ? 'online' : 'offline'}`}
-            >
-              <span className="status-dot" />
-              Tally{' '}
-              {state.mode === 'demo'
-                ? 'sample'
-                : state.connection.tally === 'online'
-                  ? 'connected'
-                  : state.connection.tally === 'offline'
-                    ? 'offline'
-                    : 'not checked'}
-            </span>
+            {screen !== 'marketplaces' && (
+              <span
+                className={`connection-pill ${state.connection.tally === 'online' ? 'online' : 'offline'}`}
+              >
+                <span className="status-dot" />
+                Tally{' '}
+                {state.mode === 'demo'
+                  ? 'sample'
+                  : state.connection.tally === 'online'
+                    ? 'connected'
+                    : state.connection.tally === 'offline'
+                      ? 'offline'
+                      : 'not checked'}
+              </span>
+            )}
             <span className="avatar" title="Local workspace">
               D
             </span>
@@ -184,11 +196,18 @@ export function App() {
           <div hidden={screen !== 'activity'}>
             <ActivityScreen state={state} companyId={companyId} active={screen === 'activity'} />
           </div>
+          {screen === 'marketplaces' && (
+            <MarketplacesScreen
+              mode={state.mode}
+              onOpenInventory={() => selectScreen('inventory')}
+            />
+          )}
           <div hidden={screen !== 'connections'}>
             <ConnectionsScreen
               state={state}
               workspace={workspace}
               onOpenSettings={() => selectScreen('settings')}
+              onOpenMarketplaces={() => selectScreen('marketplaces')}
             />
           </div>
           <div hidden={screen !== 'settings'}>
@@ -199,7 +218,14 @@ export function App() {
           <span>
             Stockbridge <span className="footer-divider">/</span> Tally → marketplace inventory
           </span>
-          <span>{busy || 'Local review only · marketplace publishing unavailable'}</span>
+          <span>
+            {busy ||
+              (screen === 'marketplaces'
+                ? state.mode === 'demo'
+                  ? 'Sample simulation · no external changes'
+                  : 'Marketplace edits apply individually'
+                : 'Tally inventory review · automatic publishing unavailable')}
+          </span>
         </footer>
       </div>
       <div className="sr-only" role="status" aria-live="polite">

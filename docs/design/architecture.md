@@ -1,6 +1,14 @@
 # Tally to marketplace inventory architecture
 
-**Status: Approved target architecture.** The seller approved the consolidated architecture and dashboard layout on 2026-11-07 and authorized implementation. The initial local foundation is implemented; [README](../../README.md) records its delivered scope and remaining limitations. The diagram and workflows below include unfinished capabilities. Live marketplace publishing still requires connector and durable publication/recovery implementation as well as authenticated verification. The decisions incorporate the completed design interview, including Pause, allowance consumption, and Auto publication.
+**Status: Approved target architecture.** The seller approved the consolidated architecture and dashboard layout on 2026-11-07 and authorized implementation. The initial local foundation is implemented; [README](../../README.md) records its delivered scope and remaining limitations. The diagram and workflows below include unfinished capabilities. Direct marketplace stock/price Apply is implemented with account binding, durable attempts and readback; live verification remains outstanding. Inventory proposal publishing, automatic Tally synchronization and production order reconciliation remain unfinished. The decisions incorporate the completed design interview, including Pause, allowance consumption, and Auto publication.
+
+## Current marketplace management delivery
+
+The seller approved the separate [account/listing flow](marketplace-listings.md) on 2026-11-18. Marketplaces works independently of Tally setup and shows explicitly added accounts with separate protected credentials, seller bindings and all-state listing imports. Search and status filters cover the last complete import. Live Apply sends only the selected stock/location or price edit; fresh reads check conflicts and the result. Sample mode makes no external request.
+
+Holds and allowances constrain direct stock edits. Positive live Limited sales updates are blocked while order reconciliation is unfinished. The seller can explicitly return the destination to Auto before applying; this removes the hold/allowance, retains Pause and sends no stock by itself. Price-only edits leave automation unchanged. Inventory proposals and automatic Tally writes remain unavailable.
+
+Schema 3 persists observations and direct-update attempts. Account operations serialize writes; incomplete attempts become uncertain after restart and are not automatically replayed. Fresh import is required after restart or credential operations before Apply or Check result. Offline restore preserves seller bindings, clears freshness and retains uncertain outcomes. These protections do not implement the future order ledger, allowance activation or full production reconciliation described below.
 
 ## Outcome and scope
 
@@ -9,6 +17,8 @@ Run on the Windows machine that can access Tally. Start with Flipkart tyre listi
 Every eligible duplicate listing and pack uses its mapped item's full physical stock. There is no exclusive allocation or reservation between listings. The seller accepts concurrent-sale exposure before Tally billing and synchronization. The advertised minimum of five is an agreed business policy, not proof of five physical packs or a verified platform-wide promotion rule. The reported one-unit cart restriction remains a seller-provided operating assumption.
 
 Additional marketplaces, remote hosting of the inventory backend, and multiple users are future extensions. Account identity is explicit throughout so adding seller accounts does not require redesigning the stock model. The current seller-owned self-access branch keeps authentication on the customer's Windows computer; the earlier provider-managed model remains an alternative if Flipkart requires it for distribution. See [ADR 0004](../adr/0004-seller-owned-flipkart-self-access.md).
+
+The seller approved the separate [marketplace listing-management flow](marketplace-listings.md) with account tiles and multiple Flipkart accounts. It is implemented as described above and preserves the Inventory policy rules below.
 
 ## Application boundaries
 
@@ -42,7 +52,7 @@ flowchart LR
 
 The backend continues when the dashboard closes. Windows startup, controlled shutdown, restart after failure, upgrades and protected credential access must be packaged and verified. The application runtime and dependency versions are selected in [package.json](../../package.json) and [package-lock.json](../../package-lock.json). Windows lifecycle hosting and durable publication-job implementation remain to be selected and delivered; type checking does not replace validation of external responses.
 
-The seller-owned route accepts an application registered by that seller under Flipkart Self Access. The local backend requests tokens directly from the fixed Flipkart HTTPS endpoint, protects the application credentials with Windows current-user encryption tied to the workspace, and keeps access tokens only in backend memory. No provider secret, hosted callback or authentication database is required for this route. Public connection status confirms token issuance only; it does not establish seller identity or enable publication. One local credential set is supported initially; authenticated seller identity and multiple-account binding must be implemented before importing account-scoped data. Keep credentials out of SQLite, portable backups, browser storage, logs and installers; local disconnect removes saved credentials but does not revoke the application at Flipkart. The provider-managed alternative in [ADR 0003](../adr/0003-provider-managed-flipkart-authorization.md) is retained, and the distribution eligibility distinction is recorded in [ADR 0004](../adr/0004-seller-owned-flipkart-self-access.md).
+The seller-owned route accepts an application registered by that seller under Flipkart Self Access. The local backend requests tokens directly from fixed HTTPS endpoints and protects each account’s credentials with Windows current-user encryption outside SQLite and portable backups. Tokens remain in memory. No hosted callback or provider secret is required. Token issuance alone does not establish seller identity; complete listing import binds and verifies the seller before direct edits. Credential changes and restart require another successful import. Local disconnect removes saved access without revoking the application at Flipkart. The [provider-managed alternative](../adr/0003-provider-managed-flipkart-authorization.md) and [distribution eligibility distinction](../adr/0004-seller-owned-flipkart-self-access.md) remain separate.
 
 ## Durable identities and state
 
@@ -142,7 +152,7 @@ Keep the dashboard behind the backend API and connectors/storage behind module b
 
 ## Customer release completion
 
-On 2026-11-08, the user clarified that the first customer delivery must contain the complete setup and operating workflow. Verification against the customer's actual Tally installation happens during onboarding; it is not a reason to leave application features unfinished. The current read-only pilot does not satisfy this release requirement.
+On 2026-11-08, the user clarified that the first customer delivery must contain the complete setup and operating workflow. Verification against the customer's actual Tally installation happens during onboarding; it is not a reason to leave application features unfinished. The current pilot with direct marketplace management does not yet satisfy this complete synchronization release requirement.
 
 - Deliver the first-release setup journey from installation through Tally connection, company and source-location selection, seller authorization, listing import, pack/location verification, mapping, reviewed publication and automatic operation. Include actionable connection errors, retry and a way to resume incomplete setup.
 - Complete the approved publication, order/allowance accounting, Pause, zero-hold, recovery and safe mapping-removal workflows. Stored settings, sample interactions and calculation helpers alone do not count as working integration features.
@@ -156,7 +166,7 @@ The user initially accepted provider-managed authorization on 2026-11-08, then r
 
 The user rejected invite-only enrollment on 2026-11-08. Anyone who receives the product can install it and complete the full customer setup. Do not add invitations, activation codes, a Stockbridge signup/account-approval gate, licensing activation or subscription billing to the first-release journey.
 
-The customer installs Stockbridge, opens its local dashboard, enters credentials for an eligible seller-owned Flipkart application, configures Tally, verifies company/location/pack mappings and begins reviewed synchronization when those remaining workflows are delivered. Required marketplace authorization and stock verification remain part of setup; the provider does not manually enroll or approve each customer. Bind the eventual imported seller identity to the local credentials without an extra Stockbridge signup workflow. A shared installer must contain no HingadTyre credentials, mappings or live database.
+The customer installs Stockbridge, opens its local dashboard, enters credentials for an eligible seller-owned Flipkart application, configures Tally, verifies company/location/pack mappings and begins reviewed synchronization when those remaining workflows are delivered. Required marketplace authorization and stock verification remain part of setup; the provider does not manually enroll or approve each customer. Bind the imported seller identity to the local credentials without an extra Stockbridge signup workflow. A shared installer must contain no HingadTyre credentials, mappings or live database.
 
 ## Key acceptance scenarios
 

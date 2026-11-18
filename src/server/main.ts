@@ -4,7 +4,11 @@ const mode = process.argv.includes('--demo') ? 'demo' : 'live';
 try {
   const runtime = await startRuntime({ mode });
   console.log(`Stockbridge ${mode} dashboard: ${runtime.record.url}`);
-  console.log('Marketplace publishing is disabled. Press Ctrl+C to stop.');
+  console.log(
+    mode === 'demo'
+      ? 'Inventory publication and automatic stock updates are unavailable. Marketplaces Apply simulates changes only. Press Ctrl+C to stop.'
+      : 'Inventory publication and automatic stock updates are unavailable. Use Marketplaces Apply for individual stock and price edits. Press Ctrl+C to stop.',
+  );
   const stop = () => {
     void runtime.stop().catch((error: unknown) => {
       console.error(

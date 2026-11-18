@@ -67,10 +67,26 @@ test('an empty live workspace guides the user to connections and disables listin
   fireEvent.click(screen.getByRole('button', { name: 'View connections' }));
   assert.ok(screen.getByRole('heading', { name: 'Connections', level: 1 }));
   assert.ok(screen.getByRole('button', { name: 'Check & discover companies' }));
-  await screen.findByText('Not configured');
+  assert.ok(screen.getByRole('button', { name: 'Open Marketplaces' }));
   fireEvent.click(screen.getByRole('button', { name: 'Open Tally settings' }));
   assert.ok(screen.getByRole('heading', { name: 'Settings', level: 1 }));
   assert.ok(screen.getByRole('textbox', { name: /Connection address/ }));
+});
+
+test('Marketplaces opens without a Tally company and hides the company selector', async (t) => {
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    if (String(input) === '/api/marketplaces') return response({ accounts: [] });
+    assert.equal(String(input), '/api/state');
+    return response(initialState('live', 'unused'));
+  });
+  render(<App />);
+  await screen.findByRole('heading', { name: 'Start with your Tally company' });
+  fireEvent.click(screen.getByRole('button', { name: 'Marketplaces' }));
+  await screen.findByRole('heading', { name: 'Add your first marketplace account' });
+  assert.equal(screen.queryByLabelText('Tally company'), null);
+  assert.ok(screen.getByText('Marketplace edits apply individually'));
+  fireEvent.click(screen.getByRole('button', { name: /^Inventory/ }));
+  assert.ok(screen.getByLabelText('Tally company'));
 });
 
 test('a search with no matches disables bulk actions and can reset to all company listings', async (t) => {

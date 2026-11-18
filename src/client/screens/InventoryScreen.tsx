@@ -371,7 +371,7 @@ export function InventoryScreen({
                         { companyId, listingIds: [listing.id], paused: !listing.paused },
                         'Saving automation setting',
                         listing.paused
-                          ? 'Pause removed. Marketplace publication is still unavailable in this milestone.'
+                          ? 'Pause removed. Automatic Inventory publication is still unavailable.'
                           : 'Automatic publication paused for this listing. Its underlying stock policy is preserved.',
                       )
                     }
@@ -396,8 +396,11 @@ export function InventoryScreen({
       <div className="info-strip">
         <Icon name="info" />
         <p>
-          <strong>Review before you publish.</strong> Calculations and edits are saved as drafts.
-          Marketplace publishing is not available in this version.
+          <strong>Inventory edits stay as drafts.</strong> Inventory publication and automatic stock
+          updates remain unavailable.{' '}
+          {state.mode === 'demo'
+            ? 'Marketplaces Apply simulates individual stock and price edits in this sample workspace.'
+            : 'Use Marketplaces Apply for individual stock and price edits.'}
         </p>
       </div>
       {review && <ReviewDialog state={state} review={review} onClose={() => setReview(null)} />}
