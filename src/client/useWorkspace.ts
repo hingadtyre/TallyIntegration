@@ -105,6 +105,20 @@ export function useWorkspace() {
     [runAction],
   );
 
+  const refreshSnapshot = useCallback(
+    () =>
+      runAction(
+        'Loading saved inventory',
+        async () => {
+          const next = await requestJson<Snapshot>('/state');
+          if (mounted.current) setState(next);
+          return next;
+        },
+        '',
+      ),
+    [runAction],
+  );
+
   const refreshTally = useCallback(
     (companyId?: string): Promise<ActionResult<Snapshot>> =>
       runAction(
@@ -148,6 +162,7 @@ export function useWorkspace() {
     error,
     notice,
     mutate,
+    refreshSnapshot,
     refreshTally,
     prepareReview,
     backUpNow,

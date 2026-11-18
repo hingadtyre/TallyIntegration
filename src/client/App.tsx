@@ -47,6 +47,7 @@ export function App() {
   function selectScreen(value: Screen) {
     setScreen(value);
     workspace.dismissNotice();
+    if (screen === 'marketplaces' && value === 'inventory') void workspace.refreshSnapshot();
   }
   return (
     <div className="app-shell">
@@ -141,7 +142,7 @@ export function App() {
               </span>
             )}
             <span className="avatar" title="Local workspace">
-              D
+              <Icon name="box" />
             </span>
           </div>
         </header>

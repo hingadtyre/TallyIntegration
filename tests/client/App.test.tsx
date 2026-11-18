@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { render, screen, within, fireEvent, waitFor, response } from '../support/client-dom.js';
 import type { FlipkartConnectionStatus, Review, Snapshot } from '../../src/shared/contracts.js';
+import type {
+  MarketplaceAccount,
+  MarketplaceListingView,
+} from '../../src/shared/marketplace-contracts.js';
 import { initialState } from '../../src/server/seed.js';
 import { App } from '../../src/client/App.js';
 
@@ -51,6 +55,12 @@ test('an empty live workspace guides the user to connections and disables listin
   });
   render(<App />);
   await screen.findByRole('heading', { name: 'Start with your Tally company' });
+  assert.deepEqual(
+    within(screen.getByRole('combobox', { name: 'Seller account' }))
+      .getAllByRole('option')
+      .map((option) => option.textContent),
+    ['No seller account'],
+  );
   assert.equal(
     (screen.getByRole('button', { name: 'Calculate' }) as HTMLButtonElement).disabled,
     true,
@@ -87,6 +97,136 @@ test('Marketplaces opens without a Tally company and hides the company selector'
   assert.ok(screen.getByText('Marketplace edits apply individually'));
   fireEvent.click(screen.getByRole('button', { name: /^Inventory/ }));
   assert.ok(screen.getByLabelText('Tally company'));
+});
+
+test('returning to Inventory immediately loads an added account and its imported listings', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let state: Snapshot = {
+    ...initialState('demo', 'unused'),
+    mode: 'live',
+    accounts: [],
+    listings: [],
+  };
+  const account: MarketplaceAccount = {
+    id: 'new-account',
+    name: 'New store',
+    marketplace: 'flipkart',
+    sellerId: 'new-seller',
+    lastRefreshedAt: null,
+    connection: disconnectedFlipkart,
+  };
+  const listing: MarketplaceListingView = {
+    id: 'marketplace-listing',
+    accountId: account.id,
+    sellerId: account.sellerId!,
+    productId: 'imported-product',
+    sku: 'IMPORTED-TYRE',
+    title: 'Imported tyre',
+    imageUrl: null,
+    status: 'ACTIVE',
+    mrp: 1200,
+    sellingPrice: 1000,
+    locations: [{ id: 'warehouse-1', quantity: 4, status: 'ENABLED' }],
+    observedAt: '2026-11-18T10:00:00Z',
+    version: 1,
+    stockPolicies: [],
+  };
+  let imported = false;
+  let stateReads = 0;
+  t.mock.method(
+    globalThis,
+    'fetch',
+    async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/state') {
+        stateReads++;
+        assert.equal(options?.method, undefined);
+        return response(state);
+      }
+      if (path === '/api/marketplaces') return response({ accounts: [] });
+      if (path === '/api/marketplaces/add') {
+        state = {
+          ...state,
+          accounts: [
+            {
+              id: account.id,
+              name: account.name,
+              marketplace: 'flipkart',
+              status: 'not-connected',
+            },
+          ],
+        };
+        return response(account);
+      }
+      if (path.startsWith('/api/marketplaces/listings?'))
+        return response({
+          listings: imported ? [listing] : [],
+          total: imported ? 1 : 0,
+          page: 1,
+          pageSize: 20,
+          lastRefreshedAt: imported ? listing.observedAt : null,
+          changes: [],
+        });
+      assert.equal(path, '/api/marketplaces/refresh');
+      assert.deepEqual(JSON.parse(String(options?.body)), { accountId: account.id });
+      imported = true;
+      state = {
+        ...state,
+        listings: [
+          {
+            id: 'inventory-listing',
+            accountId: account.id,
+            sku: listing.sku,
+            title: listing.title,
+            location: 'warehouse-1',
+            itemId: null,
+            packSize: null,
+            packEvidence: 'Pack evidence has not been verified.',
+            verified: false,
+            observed: 4,
+            observedAt: listing.observedAt,
+            policy: 'auto',
+            remaining: null,
+            paused: false,
+            version: 1,
+          },
+        ],
+      };
+      return response({ account: { ...account, lastRefreshedAt: listing.observedAt } });
+    },
+  );
+  render(<App />);
+  await screen.findByRole('heading', { name: 'Inventory' });
+  fireEvent.click(screen.getByRole('button', { name: 'Marketplaces' }));
+  await screen.findByRole('heading', { name: 'Add your first marketplace account' });
+  fireEvent.click(screen.getByRole('button', { name: 'Add account' }));
+  fireEvent.click(screen.getByRole('button', { name: /Flipkart/ }));
+  fireEvent.change(screen.getByLabelText('Account name'), { target: { value: account.name } });
+  fireEvent.change(screen.getByLabelText('Application ID'), { target: { value: 'test-id' } });
+  fireEvent.change(screen.getByLabelText('Application Secret'), {
+    target: { value: 'test-secret' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Save without verification' }));
+  const tile = await screen.findByRole('article', { name: account.name });
+  fireEvent.click(within(tile).getByRole('button', { name: 'Open listings' }));
+  await waitFor(() =>
+    assert.equal(
+      (screen.getByRole('button', { name: 'Refresh listings' }) as HTMLButtonElement).disabled,
+      false,
+    ),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh listings' }));
+  await screen.findByText(listing.title);
+  assert.equal(stateReads, 1);
+
+  fireEvent.click(screen.getByRole('button', { name: /^Inventory/ }));
+  await screen.findByRole('option', { name: `Flipkart · ${account.name}` });
+  assert.equal(stateReads, 2);
+  assert.equal((screen.getByLabelText('Seller account') as HTMLSelectElement).value, account.id);
+  const parent = screen.getByRole('row', { name: /Bridgestone Sturdo/ });
+  fireEvent.click(within(parent).getByRole('button', { name: 'Map listing' }));
+  const dialog = screen.getByRole('dialog', { name: 'Map an existing listing' });
+  assert.ok(within(dialog).getByRole('option', { name: `${listing.sku} - ${listing.title}` }));
 });
 
 test('a search with no matches disables bulk actions and can reset to all company listings', async (t) => {

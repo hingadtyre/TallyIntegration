@@ -28,6 +28,12 @@ test('changing Tally address requires each company to be refreshed before its st
   });
   await f.service.refresh();
   f.store.update((state) => {
+    state.accounts.push({
+      id: 'flipkart-primary',
+      name: 'Fixture seller',
+      marketplace: 'flipkart',
+      status: 'not-connected',
+    });
     state.listings.push({
       id: 'company-b-listing',
       accountId: 'flipkart-primary',

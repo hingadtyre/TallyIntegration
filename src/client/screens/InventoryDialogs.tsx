@@ -190,7 +190,8 @@ export function MappingDialog({
               </label>
               {!listing.verified && (
                 <p className="text-amber">
-                  The listing's pack metadata must be verified before mapping.
+                  The listing's pack metadata must be verified before mapping. Pack verification for
+                  new API imports is not available in this version.
                 </p>
               )}
             </>

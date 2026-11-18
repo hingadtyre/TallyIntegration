@@ -124,25 +124,40 @@ export class MarketplaceService {
   }
 
   /** Existing protected credentials are adopted without moving or re-encrypting their file. */
+  private async adoptLegacyAccount(): Promise<void> {
+    if (
+      this.mode !== 'live' ||
+      this.store.readMarketplace().accounts.some((row) => row.id === 'flipkart-primary')
+    )
+      return;
+    const oldStatus = await this.connection('flipkart-primary').status();
+    if (!oldStatus.applicationIdHint) return;
+    this.store.updateMarketplace((data, state) => {
+      const existing = state.accounts.find((row) => row.id === 'flipkart-primary');
+      const account = existing ?? {
+        id: 'flipkart-primary',
+        name: 'Flipkart seller',
+        marketplace: 'flipkart' as const,
+        status: 'not-connected' as const,
+      };
+      if (!existing) state.accounts.push(account);
+      if (!data.accounts.some((row) => row.id === account.id))
+        data.accounts.push({
+          id: account.id,
+          name: account.name,
+          sellerId: null,
+          lastRefreshedAt: null,
+        });
+    });
+  }
+
+  async initialize(): Promise<void> {
+    return this.serial('account-directory', () => this.adoptLegacyAccount());
+  }
+
   async accounts(): Promise<{ accounts: MarketplaceAccount[] }> {
     return this.serial('account-directory', async () => {
-      if (
-        this.mode === 'live' &&
-        !this.store.readMarketplace().accounts.some((row) => row.id === 'flipkart-primary')
-      ) {
-        const oldStatus = await this.connection('flipkart-primary').status();
-        if (oldStatus.applicationIdHint)
-          this.store.updateMarketplace((data, state) => {
-            const existing = state.accounts.find((row) => row.id === 'flipkart-primary');
-            if (existing && !data.accounts.some((row) => row.id === existing.id))
-              data.accounts.push({
-                id: existing.id,
-                name: existing.name,
-                sellerId: null,
-                lastRefreshedAt: null,
-              });
-          });
-      }
+      await this.adoptLegacyAccount();
       return {
         accounts: await Promise.all(
           this.store.readMarketplace().accounts.map((account) => this.publicAccount(account)),

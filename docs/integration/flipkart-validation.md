@@ -1,10 +1,42 @@
 # Flipkart connection and listing validation
 
-**Updated 2026-11-18. Implemented and locally exercised with fixtures; current account approval, real token access, listing import and marketplace writes remain unverified.**
+**Updated 2026-11-18. An authorized read-only API check verified token access, standard listing discovery and package arrays for ten listings. The application import path still needs corrections identified below; marketplace writes remain unverified.**
+
+## Live read-only package check on 2026-11-18
+
+The user supplied their seller-owned credentials and requested an inspection of existing listings. Requests went directly to Flipkart's production API from a temporary local script. No Stockbridge account was added, no customer database was changed, and no stock/price/write endpoint was called. Credentials and tokens were not saved in the repository or the diagnostic evidence.
+
+| Check                                                               | Observed result                                                                                                                                                                                                           |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Token with `scope=Seller_Api,Default`                               | HTTP 400, `invalid_scope`.                                                                                                                                                                                                |
+| Token with `scope=Seller_Api`                                       | HTTP 200, bearer token with `Seller_Api` scope.                                                                                                                                                                           |
+| `POST /sellers/listings/v3/product/search`, first ACTIVE batch      | HTTP 404. This is the endpoint currently used by the application.                                                                                                                                                         |
+| `POST /sellers/listings/v3/search`, `{"filters":{},"page_id":null}` | HTTP 200; `listings` was an array of 217 records, and `has_more` was false. Each discovery row supplied `listing_id`, `product_id` and `sku_id`. This was an unfiltered discovery result, not a count of active listings. |
+| `POST /sellers/listings/v3/details`, ten selected SKUs              | HTTP 200; all ten were present under `available`, with shipping package arrays containing one, two or four entries. No separate structured `Set of`/pack-size attribute appeared in the inspected responses.              |
+
+Examples returned by the live details call:
+
+| Seller SKU         | Product/FSN        | Shipping package count |
+| ------------------ | ------------------ | ---------------------- |
+| `145/70R12_X3_2_2` | `VTEGYHJKPW2NFEYP` | 2                      |
+| `265/65R17_4`      | `VTEGYZZYAFH2SNJ8` | 4                      |
+| `275/40ZR19_1`     | `VTEHRD5YPNHHAZRG` | 1                      |
+
+Count the entries in `available[sku].packages`; do not use package names, IDs, their order, SKU suffixes or the title's `4 Wheeler` as the quantity. One returned SKU contained a leading space, so preserve SKU strings exactly when sending details requests. The user's one-tyre-per-shipping-package rule makes package count the agreed fallback for applicable tyre listings. These observations establish data availability, not physical verification of every listing or completed mapping. One sampled listing omitted locations; this was not treated as stock zero. The response did not provide an authenticated seller ID, so it does not satisfy the application's seller-binding requirement.
+
+The [Postman collection and guide](../../postman/README.md) provide authentication, standard discovery and details requests with directly editable raw JSON bodies. The only script runs after the token response: it clears the old `access_token` and saves a nonempty token from an HTTP 200 JSON response. Both listing requests use `{{access_token}}`; there are no pre-request scripts or test assertions. The blank environment contains only `client_id`, `client_secret` and `access_token`; existing filled environments are retained. The details body contains two example SKUs that are not guaranteed to exist and can be replaced with up to ten exact seller SKUs. Token renewal, pagination and listing response review are manual.
+
+Postman Desktop 12.35.5 completed the token request in a **previous scripted revision** on 2026-11-18: HTTP 200 and all three response checks passed after selecting the intended local environment and supplying its credential values. Those checks and its pre-request scripts have since been removed; only the minimal token-copy response script remains. The earlier blank response came from a pre-request stop in that previous revision. The current files passed structural checks for JSON, literal request bodies, shared token references and exactly one response script with no pre-request scripts or test assertions; the complete current workflow has not been verified live. The search and details results above came from the separate script.
+
+The simplified token request was subsequently sent in Postman Desktop 12.35.5 on 2026-11-18 and returned HTTP 200. The interface showed no tests for that request, matching the retained token-copy-only script. This check did not rerun search or details.
+
+The [official authentication examples](https://seller.flipkart.com/api-docs/FMSAPI.html#client-credentials-flow-for-self-access-application) use `Seller_Api` alone, although the introductory request still shows the rejected combined scope. The [listing search](https://flipkart.github.io/fk-api-platform-docs/docs/mp-api_versioned/listing-search) schema depicts a singular object, while the live response was an array. The [details documentation](https://flipkart.github.io/fk-api-platform-docs/docs/mp-api_versioned/get-listing-details) documents shipping `packages[]`, not a dedicated sellable-set field.
+
+**Application follow-up remains:** correct the token scope; reconcile discovery with the working standard search without weakening seller-identity checks; import and verify package evidence before mapping. This diagnostic did not modify those application flows or enable synchronization. Successful authentication establishes usable API access at the time of this check; the Seller Hub approval label itself was not inspected.
 
 ## Historical account evidence
 
-On 2026-11-08, the user submitted **Stockbridge Local** in HINGADTYRES **Profile > Developer Access > Self Access**, with description **Tally stock integration** and [the project website](https://github.com/hingadtyre/TallyIntegration). It displayed **Pending** then; current approval has not been checked. The confirmation mentioned contact within seven working days, which was displayed guidance rather than a guarantee. No usable secret or real token was verified.
+On 2026-11-08, the user submitted **Stockbridge Local** in HINGADTYRES **Profile > Developer Access > Self Access**, with description **Tally stock integration** and [the project website](https://github.com/hingadtyre/TallyIntegration). It displayed **Pending** then. The confirmation mentioned contact within seven working days, which was displayed guidance rather than a guarantee. No usable secret or real token was verified at that time; the later read-only check above establishes current token access.
 
 The seller browser displayed HINGADTYRES and one set-of-two tyre listing was matched to two shipping packages. Neither establishes authenticated API identity or a general pack-size rule. Earlier public discovery found listing and shipment candidates; official documentation is authoritative, and shipment lookup by existing identifiers does not establish complete order discovery.
 

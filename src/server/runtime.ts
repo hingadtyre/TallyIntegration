@@ -207,6 +207,7 @@ export async function startRuntime(
     marketplaces = new MarketplaceService(store, owner.dataDirectory, {
       legacyConnection: flipkart,
     });
+    await marketplaces.initialize();
     app = createApp(
       service,
       paths.webRoot,

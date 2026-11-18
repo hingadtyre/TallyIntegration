@@ -3,6 +3,68 @@ import test from 'node:test';
 import { InputError } from '../../src/server/service.js';
 import { serverFixture as fixture } from '../support/server-fixture.js';
 
+test('live selectors hide an unused legacy seller without changing its saved name or real companies', (t) => {
+  const f = fixture(t, 'live');
+  f.store.update((state) => {
+    state.accounts.push({
+      id: 'flipkart-primary',
+      marketplace: 'flipkart',
+      name: 'HINGADTYRES',
+      status: 'not-connected',
+    });
+    state.companies.push({
+      id: 'tally:actual-company',
+      name: 'HINGADTYRES',
+      source: 'tally',
+      automation: false,
+      lastSuccess: null,
+    });
+  });
+  assert.deepEqual(f.service.snapshot().accounts, []);
+  assert.equal(f.service.snapshot().companies[0].name, 'HINGADTYRES');
+  assert.equal(f.store.read().accounts[0].name, 'HINGADTYRES');
+  f.store.updateMarketplace((marketplace) => {
+    marketplace.accounts.push({
+      id: 'flipkart-primary',
+      name: 'HINGADTYRES',
+      sellerId: null,
+      lastRefreshedAt: null,
+    });
+  });
+  assert.equal(f.service.snapshot().accounts[0].name, 'HINGADTYRES');
+});
+
+test('a legacy seller with saved listing records remains available without losing its history', (t) => {
+  const f = fixture(t, 'live');
+  f.store.update((state) => {
+    state.accounts.push({
+      id: 'saved-seller',
+      marketplace: 'flipkart',
+      name: 'Existing business',
+      status: 'not-connected',
+    });
+    state.listings.push({
+      id: 'saved-listing',
+      accountId: 'saved-seller',
+      sku: 'EXISTING-SKU',
+      title: 'Existing product',
+      location: 'saved-location',
+      itemId: null,
+      packSize: null,
+      packEvidence: '',
+      verified: false,
+      observed: null,
+      observedAt: null,
+      policy: 'auto',
+      remaining: null,
+      paused: false,
+      version: 1,
+    });
+  });
+  assert.equal(f.service.snapshot().accounts[0].name, 'Existing business');
+  assert.equal(f.service.snapshot().listings[0].sku, 'EXISTING-SKU');
+});
+
 test('a verified unmapped listing can use an existing item without creating source records', (t) => {
   const f = fixture(t);
   const before = f.service.snapshot();
@@ -106,6 +168,12 @@ test('aged stock blocks proposals and review even while the Tally connection rem
   });
   await f.service.refresh();
   f.store.update((state) => {
+    state.accounts.push({
+      id: 'flipkart-primary',
+      name: 'Fixture seller',
+      marketplace: 'flipkart',
+      status: 'not-connected',
+    });
     state.listings.push({
       id: 'live-listing',
       accountId: 'flipkart-primary',

@@ -8,6 +8,8 @@ The steps below work for the current pilot. The Flipkart part of a complete setu
 
 HingadTyre is our first customer. HINGADTYRES was seen on its seller website, but that browser login is not an application connection. A fresh live Marketplaces page shows **Add account**, with no prefilled seller tiles. A token check alone does not identify the seller; **Refresh listings** verifies seller identity and imports that account’s listings.
 
+On a fresh live setup, the selectors show **No company connected** and, once Inventory is available, **No seller account** until you connect your own data. Tally discovery supplies company names. Adding a marketplace account supplies its seller label. Older unused placeholder labels are hidden; genuine saved company/account names and existing listings are retained. **Sample workspace** is a separate demonstration mode with generic example names.
+
 ## Before you start
 
 Arrange a setup time with the person providing Stockbridge. Have these available:
@@ -116,6 +118,12 @@ You can use this view without connecting or selecting a Tally company.
 6. On an account tile, use **Check connection**, **Update credentials** or **Disconnect locally** as needed. Local disconnect removes that account's saved access, not the application or stock in Flipkart. After restarting Stockbridge or changing/checking credentials, refresh listings again before editing or checking an update result.
 
 Credentials are protected for the current Windows user outside the database and its backups. A new computer or Windows login needs connection setup again. Tokens are held only while Stockbridge runs. Sample accounts use no credentials and make no Flipkart requests. If a previously saved listing disappears from a successful refresh, its stock becomes unavailable and editing is blocked; its identity and unfinished update history remain for review.
+
+### How imported listings relate to Inventory
+
+After **Refresh listings**, return to **Inventory**, select your Tally company and the intended seller account, and use **Map listing** on the Tally stock item. Returning from Marketplaces refreshes the saved account/listing data immediately; it does not call Tally or Flipkart again. The picker offers only that seller account's unmapped listing destinations. An existing mapping is not replaced implicitly.
+
+**Current limitation:** imported listings have no verified pack size yet. The picker shows **Unknown - mapping blocked**, and Save mapping stays disabled. This version does not yet provide the missing pack-verification workflow. Do not guess the set size from the SKU or treat a successful listing import as a completed Tally mapping. You can still browse listings and use the supported direct marketplace editors independently.
 
 ### Apply a stock or price change
 

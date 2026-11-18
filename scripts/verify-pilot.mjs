@@ -448,13 +448,12 @@ async function verifyPilot(zip) {
       assert.deepEqual(state.items, []);
       assert.deepEqual(state.listings, []);
       assert.deepEqual(state.proposals, []);
-      assert.equal(state.accounts[0].name, 'Flipkart seller');
-      assert.equal(state.accounts[0].status, 'not-connected');
+      assert.deepEqual(state.accounts, []);
       assert.equal(state.settings.tallyUrl, fixture.url);
       assert.ok(!existsSync(join(packageRoot, '.data')));
       return {
         health,
-        neutralAccount: state.accounts[0].name,
+        sellerAccounts: state.accounts.length,
         dataDirectory,
         tallyEndpoint: fixture.url,
       };

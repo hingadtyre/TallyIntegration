@@ -13,6 +13,8 @@ import { serverFixture } from '../support/server-fixture.js';
 function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
   const base = serverFixture(t, mode);
   const credentials = new Map<string, string>();
+  const statusChecks: string[] = [];
+  const transportCalls: string[] = [];
   const remote = new Map<string, MarketplaceListing[]>();
   const writes: Array<{
     token: string;
@@ -25,13 +27,16 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
   let failRead = false;
   let failImport = false;
   function createConnection(id: string): AccountConnection {
-    const status = async (): Promise<FlipkartConnectionStatus> => ({
-      state: credentials.has(id) ? 'verified' : 'not-configured',
-      applicationIdHint: credentials.has(id) ? '***test' : null,
-      checkedAt: null,
-      expiresAt: null,
-      message: 'Fixture status',
-    });
+    const status = async (): Promise<FlipkartConnectionStatus> => {
+      statusChecks.push(id);
+      return {
+        state: credentials.has(id) ? 'verified' : 'not-configured',
+        applicationIdHint: credentials.has(id) ? '***test' : null,
+        checkedAt: null,
+        expiresAt: null,
+        message: 'Fixture status',
+      };
+    };
     const save = async (input: unknown) => {
       credentials.set(id, (input as { applicationId: string }).applicationId);
       return status();
@@ -56,10 +61,12 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
   }
   const client: ListingTransport = {
     async listListings(token, accountId) {
+      transportCalls.push('listListings');
       if (failImport) throw new FlipkartListingError('Import failed.');
       return structuredClone(remote.get(token) ?? []).map((row) => ({ ...row, accountId }));
     },
     async getListing(token, listing) {
+      transportCalls.push('getListing');
       if (failRead) throw new FlipkartListingError('Read failed.');
       const result = remote.get(token)?.find((row) => row.id === listing.id);
       if (!result) throw new FlipkartListingError('Listing unavailable.');
@@ -71,6 +78,7 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
       };
     },
     async updateStock(token, listing, locationId, quantity) {
+      transportCalls.push('updateStock');
       writes.push({ token, kind: 'stock', quantity });
       if (failWrite === 'before') throw new FlipkartListingError('Flipkart rejected this stock.');
       remote
@@ -83,6 +91,7 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
       }
     },
     async updatePrice(token, listing, mrp, price) {
+      transportCalls.push('updatePrice');
       writes.push({ token, kind: 'price', mrp, price });
       const result = remote.get(token)!.find((row) => row.id === listing.id)!;
       result.mrp = mrp;
@@ -143,6 +152,8 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
       return service;
     },
     credentials,
+    statusChecks,
+    transportCalls,
     remote,
     writes,
     add,
@@ -167,7 +178,9 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
 
 test('live account tiles are empty until added; multiple credentials and same-SKU catalogs stay isolated', async (t) => {
   const f = fixture(t);
+  await f.service.initialize();
   assert.deepEqual(await f.service.accounts(), { accounts: [] });
+  assert.deepEqual(f.store.read().accounts, []);
   const first = await f.add();
   const second = await f.add('seller-b');
   assert.equal((await f.service.accounts()).accounts.length, 2);
@@ -179,6 +192,65 @@ test('live account tiles are empty until added; multiple credentials and same-SK
   assert.equal(f.listing(second.id).locations[0].quantity, 5);
   assert.deepEqual(f.writes, [{ token: 'seller-a', kind: 'stock', quantity: 2 }]);
   assert.ok(!JSON.stringify(await f.service.accounts()).includes('test-only'));
+});
+
+test('initialization adopts saved legacy credentials without a seeded seller account or external requests', async (t) => {
+  const f = fixture(t);
+  f.credentials.set('flipkart-primary', 'legacy-test-only');
+  await f.service.initialize();
+  await f.service.initialize();
+  assert.deepEqual(f.store.read().accounts, [
+    {
+      id: 'flipkart-primary',
+      name: 'Flipkart seller',
+      marketplace: 'flipkart',
+      status: 'not-connected',
+    },
+  ]);
+  assert.deepEqual(f.store.readMarketplace().accounts, [
+    {
+      id: 'flipkart-primary',
+      name: 'Flipkart seller',
+      sellerId: null,
+      lastRefreshedAt: null,
+    },
+  ]);
+  assert.deepEqual(f.statusChecks, ['flipkart-primary']);
+  assert.deepEqual(f.transportCalls, []);
+  assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.store.readMarketplace().listings, []);
+  assert.equal(f.credentials.get('flipkart-primary'), 'legacy-test-only');
+});
+
+test('legacy credential adoption preserves a saved seller name', async (t) => {
+  const f = fixture(t);
+  f.store.update((state) => {
+    state.accounts.push({
+      id: 'flipkart-primary',
+      name: 'Saved seller name',
+      marketplace: 'flipkart',
+      status: 'not-connected',
+    });
+  });
+  f.credentials.set('flipkart-primary', 'legacy-test-only');
+  const { accounts } = await f.service.accounts();
+  assert.equal(accounts.length, 1);
+  assert.equal(accounts[0].name, 'Saved seller name');
+  assert.equal(accounts[0].sellerId, null);
+  assert.equal(f.store.read().accounts[0].name, 'Saved seller name');
+});
+
+test('initialization does not read credentials for explicitly added accounts', async (t) => {
+  const f = fixture(t);
+  const first = await f.add();
+  const second = await f.add('seller-b');
+  f.statusChecks.length = 0;
+  await f.service.initialize();
+  assert.deepEqual(f.statusChecks, ['flipkart-primary']);
+  assert.deepEqual(
+    f.store.readMarketplace().accounts.map((account) => account.id),
+    [first.id, second.id],
+  );
 });
 
 test('price Apply preserves companion price and leaves stock/pause policies unchanged', async (t) => {

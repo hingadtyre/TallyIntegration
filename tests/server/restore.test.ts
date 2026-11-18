@@ -59,7 +59,14 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
   let local;
   try {
     current.update((state) => {
-      state.accounts[0].name = 'Current seller';
+      state.accounts = [
+        {
+          id: 'flipkart-primary',
+          name: 'Current seller',
+          marketplace: 'flipkart',
+          status: mode === 'demo' ? 'demo' : 'not-connected',
+        },
+      ];
       state.settings.tallyUrl = 'http://127.0.0.1:9010/';
       state.settings.tallySeconds = 45;
       state.settings.backupFolder = join(directory, 'local-backups');

@@ -56,6 +56,15 @@ export class InventoryService {
 
   snapshot(): Snapshot {
     const state = this.store.read();
+    if (state.mode === 'live') {
+      const visibleAccounts = new Set(
+        this.store.readMarketplace().accounts.map((account) => account.id),
+      );
+      // Older releases saved a placeholder seller before any account was added.
+      // Hide unused records from the selector without deleting names or history.
+      for (const listing of state.listings) visibleAccounts.add(listing.accountId);
+      state.accounts = state.accounts.filter((account) => visibleAccounts.has(account.id));
+    }
     state.proposals.forEach((draft) => {
       draft.stale = isStaleProposal(state, draft);
     });

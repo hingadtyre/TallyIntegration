@@ -9,14 +9,7 @@ export function initialState(mode: 'live' | 'demo', backupFolder: string): Snaps
     listings: [],
     proposals: [],
     activity: [],
-    accounts: [
-      {
-        id: 'flipkart-primary',
-        marketplace: 'flipkart',
-        name: mode === 'demo' ? 'Sample seller · Flipkart' : 'Flipkart seller',
-        status: mode === 'demo' ? 'demo' : 'not-connected',
-      },
-    ],
+    accounts: [],
     settings: {
       tallyUrl: 'http://127.0.0.1:9000/',
       tallySeconds: 30,
@@ -35,6 +28,14 @@ export function initialState(mode: 'live' | 'demo', backupFolder: string): Snaps
     },
   };
   if (mode === 'live') return state;
+  state.accounts = [
+    {
+      id: 'flipkart-primary',
+      marketplace: 'flipkart',
+      name: 'Sample seller · Flipkart',
+      status: 'demo',
+    },
+  ];
   state.companies = [
     {
       id: 'demo-a',

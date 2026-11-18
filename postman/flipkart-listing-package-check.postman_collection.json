@@ -1,0 +1,143 @@
+{
+  "info": {
+    "name": "Flipkart - Read-only listing package check",
+    "description": "Three read-only requests: get an access token, search listings, and get listing details. One token response script saves access_token for both listing requests. Edit raw JSON bodies directly. No pre-request scripts or tests. See postman/README.md.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "01 - Get access token",
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.environment.set(\"access_token\", \"\");",
+              "if (pm.response.code === 200) {",
+              "  try {",
+              "    const data = pm.response.json();",
+              "    if (data && typeof data.access_token === \"string\" && data.access_token.trim()) {",
+              "      pm.environment.set(\"access_token\", data.access_token);",
+              "    }",
+              "  } catch (_) {}",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "basic",
+          "basic": [
+            {
+              "key": "username",
+              "value": "{{client_id}}",
+              "type": "string"
+            },
+            {
+              "key": "password",
+              "value": "{{client_secret}}",
+              "type": "string"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://api.flipkart.net/oauth-service/oauth/token?grant_type=client_credentials&scope=Seller_Api",
+        "description": "Uses client_id and client_secret from the selected environment. The response script clears the old access_token, then saves a nonempty access_token only from an HTTP 200 JSON response. Both listing requests use that environment value."
+      },
+      "response": []
+    },
+    {
+      "name": "02 - Search listings",
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "POST",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{access_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://api.flipkart.net/sellers/listings/v3/search",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"filters\": {},\n  \"page_id\": null\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Uses {{access_token}} from the selected environment. Edit the raw JSON body directly. Use page_id null for the first page; copy next_page_id from a response to request another page."
+      },
+      "response": []
+    },
+    {
+      "name": "03 - Get listing details",
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "POST",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{access_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://api.flipkart.net/sellers/listings/v3/details",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"sku_ids\": [\"12208\", \"195/55R16_A_Alnac4G_S2\"]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Uses {{access_token}} from the selected environment. Replace the sample sku_ids directly in the raw JSON body with up to ten exact seller SKUs. These example identifiers are not guaranteed to exist. Shipping package count is not automatically sale pack size."
+      },
+      "response": []
+    }
+  ]
+}

@@ -7,6 +7,14 @@ import { queryFile, storageFixture as fixture } from '../../support/server-fixtu
 
 test('a legacy account placeholder is not a marketplace account until explicitly added', (t) => {
   const store = fixture(t).open('live');
+  store.update((state) => {
+    state.accounts.push({
+      id: 'flipkart-primary',
+      name: 'Legacy seller',
+      marketplace: 'flipkart',
+      status: 'not-connected',
+    });
+  });
   assert.equal(store.read().accounts[0].id, 'flipkart-primary');
   assert.deepEqual(store.readMarketplace(), { accounts: [], listings: [], changes: [] });
 });

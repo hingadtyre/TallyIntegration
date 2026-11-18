@@ -203,6 +203,12 @@ test('a failed source refresh retains observations and drafts but blocks review'
       requests.some((body) => body.includes('<SVCURRENTCOMPANY>Company A</SVCURRENTCOMPANY>')),
     );
     f.store.update((state) => {
+      state.accounts.push({
+        id: 'flipkart-primary',
+        name: 'Fixture seller',
+        marketplace: 'flipkart',
+        status: 'not-connected',
+      });
       const listing: Listing = {
         id: 'live-listing',
         accountId: 'flipkart-primary',

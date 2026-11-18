@@ -122,7 +122,7 @@ test('Flipkart credential routes require dashboard requests and return only publ
     assert.equal((await post('publish', {})).status, 409);
     assert.equal((await fetch(`${address}/api/flipkart/token`)).status, 404);
     assert.doesNotMatch(f.service.logs(), /test-private-secret|example-app-1234/);
-    assert.equal(f.service.snapshot().accounts[0].status, 'not-connected');
+    assert.deepEqual(f.service.snapshot().accounts, []);
     assert.equal(f.service.snapshot().publishingEnabled, false);
   } finally {
     await close(app);

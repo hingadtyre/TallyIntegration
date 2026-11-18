@@ -4,6 +4,8 @@ A local Windows dashboard for reviewing Tally stock and managing Flipkart seller
 
 This is the development project, not the customer's Tally machine. Use sample data here. Follow the [plain-language customer setup guide](docs/customer-setup.md); a shorter guide is also built into **Connections**. A new live **Marketplaces** page starts with **Add account**, without sample seller tiles.
 
+A fresh live workspace has no company or seller account in its selectors. Tally company names come from discovery; seller names appear after adding an account. Unused placeholder seller records from older versions are hidden without deleting saved names or history. Existing accounts with listings remain visible. Demo mode uses generic, clearly marked sample data.
+
 **The complete first-customer synchronization release is not ready.** The [release-readiness audit](docs/release-readiness.md) separates missing application workflows, provider prerequisites and customer-machine verification.
 
 ## Current milestone
@@ -14,11 +16,15 @@ The first local foundation is implemented. It includes company-separated stock v
 
 Inventory proposals and automatic Tally-to-Flipkart publishing remain disabled: `/api/publish` is still rejected, and Inventory drafts do not change stock. Direct edits preserve holds and sales allowances. Positive stock under Limited sales is blocked in live mode until order reconciliation exists or the seller explicitly returns that destination to Auto policy. Changing policy does not itself publish; Pause is retained.
 
+Imported listings appear in the selected seller account's Inventory mapping picker after returning from Marketplaces. Mapping is restricted to unmapped listings and requires verified pack-size evidence. New API imports have unknown, unverified pack sizes, and the verification workflow is unfinished, so their mapping cannot yet be completed. Listing import and direct marketplace edits do not require a Tally mapping.
+
+A [live read-only API check on 2026-11-18](docs/integration/flipkart-validation.md#live-read-only-package-check-on-2026-11-18) authenticated successfully, discovered 217 listings through standard listing search and confirmed shipping packages for ten sampled listings. It also exposed application compatibility gaps: the current combined token scope was rejected and the current product-search endpoint returned 404. The [Postman collection](postman/README.md) uses the working requests; the app's authorization/discovery flow and pack verification still need those findings integrated.
+
 The Tally adapter performs read-only XML exports. It requires stable company/item identifiers and validates the returned company context. Real installation compatibility, current-period balances and stock locations still need validation with Tally running. Unsupported quantities stay unknown; a failed read retains prior observations. See [the integration checklist](docs/integration/tally-validation.md).
 
 In **Marketplaces > Add account**, choose Flipkart and enter a name and the seller-owned Self Access Application ID and Secret. **Save without verification** protects them locally without contacting Flipkart; **Verify and save** checks token access first. Each added account has its own Windows-protected credential folder outside SQLite/backups. Previously saved primary credentials are adopted without moving the file. Token requests go directly to Flipkart; this route needs no hosted Stockbridge authentication service. See [the self-access decision](docs/adr/0004-seller-owned-flipkart-self-access.md) and [setup steps](docs/customer-setup.md#optional-verify-seller-owned-flipkart-api-access).
 
-**API credentials verified** means token access only. A successful complete listing refresh must bind the actual seller before edits or result checks, again after a process restart or credential operation. Credentials for a different seller cannot replace an existing binding; add that seller separately. Empty accounts cannot establish a new seller identity. Historical evidence: **Stockbridge Local** was submitted in HINGADTYRES on 2026-11-08 and displayed **Pending** then. Its current approval state, real token access and live listing/write contracts have not been verified. HingadTyre's confirmed internal own-account use matches the documented Self Access category; this does not establish independent-seller distribution eligibility.
+**API credentials verified** means token access only. A successful complete listing refresh must bind the actual seller before edits or result checks, again after a process restart or credential operation. Credentials for a different seller cannot replace an existing binding; add that seller separately. Empty accounts cannot establish a new seller identity. Historical evidence: **Stockbridge Local** was submitted in HINGADTYRES on 2026-11-08 and displayed **Pending** then. The standalone API and Postman checks later verified token access; the current Seller Hub approval label, application import and marketplace writes remain unverified. HingadTyre's confirmed internal own-account use matches the documented Self Access category; this does not establish independent-seller distribution eligibility.
 
 ## Packaged Windows pilot
 
@@ -61,7 +67,7 @@ This checks formatting, lint, TypeScript, tests and the production build. The sa
 
 Tests mirror their source modules under `tests/`. Use `npm test` for all tests, or pass a source test file/folder such as `npm test -- tests/client`. See [test organization and scope](CONTRIBUTING.md#test-organization-and-scope) for the mapping convention and what these tests establish.
 
-Tests exercise real loopback HTTP transport with Tally-shaped fixtures, stock-policy examples, company boundaries, persisted drafts, stale reviews, settings, backups and rejection of publishing. They also cover failed dashboard actions, serialized polling, diagnostic error details and database upgrades. Fixture success is not proof of live Tally/Flipkart compatibility. Postman CLI was unavailable; transport tests use Node's local HTTP server. Public API discovery was checked through Orbit and official documentation, but no seller API token was available.
+Tests exercise real loopback HTTP transport with Tally-shaped fixtures, stock-policy examples, company boundaries, persisted drafts, stale reviews, settings, backups and rejection of publishing. They also cover failed dashboard actions, serialized polling, diagnostic error details and database upgrades. Fixture success is not proof of live Tally/Flipkart compatibility. Transport tests use Node's local HTTP server and no seller credentials. Separately authorized live API and Postman checks are recorded in [Flipkart validation](docs/integration/flipkart-validation.md).
 
 ## Structure
 
