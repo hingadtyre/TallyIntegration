@@ -6,6 +6,8 @@ The current build reviews inventory and exports Tally data read-only. Marketplac
 
 Before implementation, follow the [documentation workflow](docs/agents/documentation.md) to select the relevant requirements, decisions and integration evidence. Use the same workflow to update affected docs alongside the change and record the documentation impact at handoff.
 
+New to development or React? Start with [Development basics](docs/development-basics.md), then follow [a dashboard request through the API and SQLite](docs/request-walkthrough.md). These learning notes explain the current source; this guide remains authoritative for development commands and [README](README.md) for delivered capabilities.
+
 ## Start with the sample workspace
 
 Use Node.js 24 and the npm scripts in [package.json](package.json) as the normal development commands. Install the pinned dependencies with `npm ci`. Then, from the project root in PowerShell or a compatible shell:
