@@ -233,8 +233,8 @@ function LiveFlipkartConnection() {
       <div className="connection-note">
         <Icon name="info" />
         <span>
-          Credential verification does not identify the seller, import listings or change stock.
-          Marketplace publishing remains unavailable.
+          A successful access check starts a listing import. Open the account in Marketplaces to see
+          its listings and the most recent refresh.
         </span>
       </div>
     </section>

@@ -211,10 +211,20 @@ function MarketplaceAccountTile({
       <h2>{account.name}</h2>
       <div className="marketplace-account-provider">Flipkart</div>
       <p>{account.connection.message}</p>
+      {account.catalogImportError && (
+        <p className="marketplace-error" role="alert">
+          {account.catalogImportError} Choose Open listings, then Refresh listings to retry.
+        </p>
+      )}
       <dl className="connection-details">
         <div>
           <dt>Seller identity</dt>
-          <dd>{account.sellerId ?? 'Not yet verified'}</dd>
+          <dd>
+            {account.sellerId ??
+              (account.catalogOwnershipVerified
+                ? 'Listing ownership verified · Flipkart did not supply a seller ID'
+                : 'Not yet verified')}
+          </dd>
         </div>
         <div>
           <dt>Last refresh</dt>
@@ -460,6 +470,7 @@ function MarketplaceListings({
                   <th>Status</th>
                   <th>MRP</th>
                   <th>Selling price</th>
+                  <th>Shipping packages</th>
                   <th>Stock by location</th>
                   <th>Settlement</th>
                 </tr>
@@ -651,7 +662,11 @@ function MarketplaceListingRow({
         </td>
       ))}
       <td>
+        {listing.observedAt && listing.packageCount != null ? listing.packageCount : 'Unavailable'}
+      </td>
+      <td>
         <div className="marketplace-locations">
+          {listing.locations.length === 0 && <span>Flipkart supplied no stock location.</span>}
           {listing.locations.map((location) => {
             const policy = listing.stockPolicies.find((item) => item.locationId === location.id);
             return (

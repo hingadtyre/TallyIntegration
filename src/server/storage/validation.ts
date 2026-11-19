@@ -131,6 +131,38 @@ function listing(value: unknown, field: string): Listing {
     itemId: nullableString(row.itemId, `${field}.itemId`),
     packSize: row.packSize === null ? null : integer(row.packSize, `${field}.packSize`, 1),
     packEvidence: string(row.packEvidence, `${field}.packEvidence`, true),
+    ...(row.packSource !== undefined && {
+      packSource:
+        row.packSource === null
+          ? null
+          : choice(row.packSource, ['manual', 'packages'] as const, `${field}.packSource`),
+    }),
+    ...(row.packageCount !== undefined && {
+      packageCount:
+        row.packageCount === null ? null : integer(row.packageCount, `${field}.packageCount`, 1),
+    }),
+    ...(row.packageObservedAt !== undefined && {
+      packageObservedAt: nullableTimestamp(row.packageObservedAt, `${field}.packageObservedAt`),
+    }),
+    ...(row.packageAvailable !== undefined && {
+      packageAvailable: boolean(row.packageAvailable, `${field}.packageAvailable`),
+    }),
+    ...(row.packConfirmedAt !== undefined && {
+      packConfirmedAt: nullableTimestamp(row.packConfirmedAt, `${field}.packConfirmedAt`),
+    }),
+    ...(row.sourceScope !== undefined && {
+      sourceScope:
+        row.sourceScope === null
+          ? null
+          : choice(row.sourceScope, ['company'] as const, `${field}.sourceScope`),
+    }),
+    ...(row.tyreFloor !== undefined && { tyreFloor: boolean(row.tyreFloor, `${field}.tyreFloor`) }),
+    ...(row.syncPendingItemVersion !== undefined && {
+      syncPendingItemVersion:
+        row.syncPendingItemVersion === null
+          ? null
+          : integer(row.syncPendingItemVersion, `${field}.syncPendingItemVersion`),
+    }),
     verified: boolean(row.verified, `${field}.verified`),
     observed: row.observed === null ? null : integer(row.observed, `${field}.observed`),
     observedAt: nullableTimestamp(row.observedAt, `${field}.observedAt`),

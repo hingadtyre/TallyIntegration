@@ -95,7 +95,7 @@ test('inspection reports date, mode and record counts without changing the backu
   const destination = readFileSync(f.destination);
   const preview = inspectPilotBackup(f.backupFile, 'live');
   assert.equal(preview.mode, 'live');
-  assert.equal(preview.schemaVersion, 3);
+  assert.equal(preview.schemaVersion, 4);
   assert.equal(preview.publishingEnabled, false);
   assert.ok(Number.isFinite(Date.parse(preview.createdAt)));
   assert.match(preview.sha256, /^[a-f0-9]{64}$/);
@@ -265,7 +265,7 @@ test('older schema-two backup manifests remain eligible and restore into schema 
   const f = fixture(t);
   queryFile(f.backupFile, (database) =>
     database.exec(
-      'DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
+      'DROP TABLE listing_pack_settings; DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
     ),
   );
   const manifest = JSON.parse(readFileSync(`${f.backupFile}.json`, 'utf8'));
@@ -276,7 +276,7 @@ test('older schema-two backup manifests remain eligible and restore into schema 
   assert.equal(inspectPilotBackup(f.backupFile, 'live').schemaVersion, 2);
   await restorePilotBackup(restoreOptions(f));
   queryFile(f.destination, (database) => {
-    assert.equal(database.prepare('PRAGMA user_version').get()?.user_version, 3);
+    assert.equal(database.prepare('PRAGMA user_version').get()?.user_version, 4);
     assert.deepEqual(readMarketplace(database), { accounts: [], listings: [], changes: [] });
   });
 });
@@ -380,7 +380,7 @@ test('schema-two restore keeps later account identities needed for unfinished up
   const f = fixture(t);
   queryFile(f.backupFile, (database) =>
     database.exec(
-      'DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
+      'DROP TABLE listing_pack_settings; DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
     ),
   );
   const manifest = JSON.parse(readFileSync(`${f.backupFile}.json`, 'utf8'));
@@ -508,6 +508,23 @@ test('conflicting seller bindings refuse restore and retain the current marketpl
   );
   assert.deepEqual(queryFile(f.destination, readMarketplace), current);
   assert.deepEqual(queryFile(f.destination, readSnapshot), f.local);
+});
+
+test('a backup with disjoint catalogue ownership cannot attach its listings to an existing account', async (t) => {
+  const f = fixture(t);
+  const current = marketplaceData(f.local.accounts[0].id);
+  current.accounts[0].sellerId = null;
+  current.listings[0].sellerId = null;
+  current.changes = [];
+  const other = structuredClone(current);
+  other.listings[0].id = 'a-different-authenticated-listing';
+  queryFile(f.destination, (database) => writeMarketplace(database, current));
+  queryFile(f.backupFile, (database) => writeMarketplace(database, other));
+  await assert.rejects(
+    restorePilotBackup(restoreOptions(f)),
+    /conflicts with the current authenticated listing identities/,
+  );
+  assert.deepEqual(queryFile(f.destination, readMarketplace), current);
 });
 
 test('restore refuses to remove a newer hold or reopen a consumed sales allowance', async (t) => {

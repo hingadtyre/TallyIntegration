@@ -67,7 +67,7 @@ Square brackets select array entries by position. In `const [screen, setScreen] 
 
 ```ts
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Review, Snapshot } from '../shared/contracts.js';
+import type { InventoryPublishResult, Review, Snapshot } from '../shared/contracts.js';
 import { errorMessage, requestJson, type ActionResult } from './api.js';
 ```
 
@@ -78,10 +78,10 @@ The first line imports named functions from the installed React package. The rel
 **6. A type describes allowed values.** [App.tsx](../src/client/App.tsx#L9) declares:
 
 ```ts
-type Screen = 'inventory' | 'activity' | 'connections' | 'settings';
+type Screen = 'inventory' | 'marketplaces' | 'activity' | 'connections' | 'settings';
 ```
 
-`type` introduces a type alias named `Screen`. Each quoted value is a string literal type: that exact string is allowed. The `|` means “or,” making this a union of four possibilities. TypeScript can flag `'orders'` as an invalid `Screen` value.
+`type` introduces a type alias named `Screen`. Each quoted value is a string literal type. The `|` means “or,” making this a union of five possible screen names. TypeScript can flag `'orders'` as an invalid `Screen` value.
 
 This declaration creates no buttons and displays no screen. UI code uses the selected value later. Types help check source code before execution; they do not automatically validate external data. See [TypeScript's everyday types](https://www.typescriptlang.org/docs/handbook/2/everyday-types.html) for the language rules behind these examples.
 
@@ -90,20 +90,20 @@ This declaration creates no buttons and displays no screen. UI code uses the sel
 ```ts
 export interface Snapshot {
   mode: 'live' | 'demo';
-  publishingEnabled: false;
+  publishingEnabled: boolean;
   companies: Company[];
   items: StockItem[];
   // Other fields omitted from this excerpt.
 }
 ```
 
-`interface` describes expected properties. `Company[]` means an array of objects matching the separate `Company` interface. `publishingEnabled: false` permits the literal value `false`, rather than either boolean value. The full interface also includes accounts, listings, proposals, activity, settings, and connection information.
+`interface` describes expected properties. `Company[]` means an array of objects matching the separate `Company` interface. The `boolean` type allows `publishingEnabled` to be true or false. The full interface also includes accounts, listings, proposals, activity, settings and connection information. Each listing can carry a confirmed Set of value and its source, which the dashboard reads again after restart.
 
 `Snapshot` is a name chosen for this response shape. Naming a type or variable “snapshot” does not query SQL, load a file, or contact Tally. A real response object needs real code to assemble and send it. The [request walkthrough](request-walkthrough.md) follows that code.
 
 **8. Generics let a function work with different types.** [api.ts](../src/client/api.ts#L8) declares `requestJson<T>(...)`, returning `Promise<T>`. `T` is a placeholder for a type chosen for a particular call. It is not a runtime variable or a special inventory type.
 
-In `requestJson<Snapshot>(...)`, `T` means `Snapshot`. In `requestJson<Review>(...)`, it means `Review`. The same request helper handles both; TypeScript tracks the expected result separately at each call.
+In `requestJson<Snapshot>(...)`, `T` means `Snapshot`. In `requestJson<Review>(...)`, it means `Review`. Publishing a review uses `requestJson<InventoryPublishResult>(...)` because the server returns an outcome for each reviewed listing. TypeScript tracks the expected result of each call.
 
 The helper ultimately uses `return result as T`. Here, `as T` asks TypeScript to trust the programmer's assertion. It does not inspect fields, convert malformed data into a valid object, or validate the server response. This distinction matters when reading the apparently reassuring `<Snapshot>`.
 
@@ -178,7 +178,7 @@ Cleanup cancels this effect's requests. The command helpers do not receive that 
 
 `operation: () => Promise<T>` means “a function taking no arguments that returns a promise of `T`.” [ActionResult](../src/client/api.ts#L2) is either `{ ok: true, value: T }` or `{ ok: false, error: string }`. Callers must inspect `ok`; a caught failure can be returned normally.
 
-`useCallback` keeps a function reference stable while its listed dependencies stay unchanged. It neither runs the function nor caches its server response. `mutate`, `prepareReview`, `refreshTally`, and `backUpNow` supply particular operations to `runAction`.
+`useCallback` keeps a function reference stable while its listed dependencies stay unchanged. It neither runs the function nor caches its server response. `mutate`, `prepareReview`, `publishReview`, `refreshTally`, and `backUpNow` supply particular operations to `runAction`.
 
 The hook's [returned object](../src/client/useWorkspace.ts#L145) exposes these functions and current values. `{ state }` means `{ state: state }`. `ReturnType<typeof useWorkspace>` names the type of that returned object without executing the hook.
 

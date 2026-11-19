@@ -42,6 +42,8 @@ test('changing Tally address requires each company to be refreshed before its st
       location: 'Test location',
       itemId: 'tally:b:tyre',
       packSize: 1,
+      sourceScope: 'company',
+      tyreFloor: true,
       packEvidence: 'Fixture metadata',
       verified: true,
       observed: 5,

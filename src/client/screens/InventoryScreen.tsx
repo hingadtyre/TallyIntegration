@@ -5,12 +5,8 @@ import { Icon, Stat } from '../components.js';
 import { formatDateTime as time } from '../format.js';
 import type { Workspace } from '../useWorkspace.js';
 import { ItemRows } from './InventoryTable.js';
-import {
-  HistoryDialog,
-  MappingDialog,
-  RemoveMappingDialog,
-  ReviewDialog,
-} from './InventoryDialogs.js';
+import { HistoryDialog, RemoveMappingDialog, ReviewDialog } from './InventoryDialogs.js';
+import { MappingDialog } from './MappingDialog.js';
 
 interface InventoryScreenProps {
   state: Snapshot;
@@ -38,7 +34,7 @@ export function InventoryScreen({
   const [dirtyListings, setDirtyListings] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [review, setReview] = useState<Review | null>(null);
-  const [mappingItem, setMappingItem] = useState<StockItem | null>(null);
+  const [mapping, setMapping] = useState<{ item: StockItem; listingId?: string } | null>(null);
   const [removeListing, setRemoveListing] = useState<Listing | null>(null);
   const [historyListing, setHistoryListing] = useState<Listing | null>(null);
 
@@ -159,6 +155,34 @@ export function InventoryScreen({
             </select>
           </label>
         </div>
+        {company && (
+          <div className="company-sync">
+            <div>
+              <strong>Automatic stock updates · {company.automation ? 'On' : 'Off'}</strong>
+              <small>
+                {state.mode === 'demo' ? 'Simulates updates' : 'Updates Flipkart stock'} for
+                eligible listings across all seller accounts for {company.name}, starting with the
+                next successful Tally check.
+              </small>
+            </div>
+            <button
+              className="button secondary compact"
+              disabled={!!busy}
+              onClick={() =>
+                void mutate(
+                  '/automation',
+                  { companyId: company.id, enabled: !company.automation },
+                  'Saving company automation',
+                  company.automation
+                    ? 'Automatic stock updates turned off for this company.'
+                    : 'Automatic stock updates enabled for this company.',
+                )
+              }
+            >
+              {company.automation ? 'Turn off automatic updates' : 'Enable automatic updates'}
+            </button>
+          </div>
+        )}
         <div className="filters">
           <label className="search-input">
             <Icon name="search" />
@@ -330,7 +354,7 @@ export function InventoryScreen({
                   </th>
                   <th>Stock item / mapped listing</th>
                   <th className="number-column">Tally stock</th>
-                  <th>Pack</th>
+                  <th>Set of</th>
                   <th className="number-column">Observed stock</th>
                   <th>Proposed stock</th>
                   <th>Policy & automation</th>
@@ -356,7 +380,8 @@ export function InventoryScreen({
                       )
                     }
                     onSelect={toggleSelection}
-                    onMap={() => setMappingItem(item)}
+                    onMap={() => setMapping({ item })}
+                    onEditPack={(listing) => setMapping({ item, listingId: listing.id })}
                     onSave={(listing, amount) =>
                       mutate(
                         '/proposals',
@@ -371,7 +396,7 @@ export function InventoryScreen({
                         { companyId, listingIds: [listing.id], paused: !listing.paused },
                         'Saving automation setting',
                         listing.paused
-                          ? 'Pause removed. Automatic Inventory publication is still unavailable.'
+                          ? 'Pause removed for this listing. Company automation and stock policy still apply.'
                           : 'Automatic publication paused for this listing. Its underlying stock policy is preserved.',
                       )
                     }
@@ -390,34 +415,35 @@ export function InventoryScreen({
             <span className="status-dot" />
             Last Tally observation: {time(company?.lastSuccess)}
           </span>
-          <span>Pack sizes are verified source values</span>
         </div>
       </section>
       <div className="info-strip">
         <Icon name="info" />
         <p>
-          <strong>Inventory edits stay as drafts.</strong> Inventory publication and automatic stock
-          updates remain unavailable.{' '}
+          <strong>Review saved proposals before publishing.</strong>{' '}
           {state.mode === 'demo'
-            ? 'Marketplaces Apply simulates individual stock and price edits in this sample workspace.'
-            : 'Use Marketplaces Apply for individual stock and price edits.'}
+            ? 'This sample workspace simulates stock updates.'
+            : 'Publishing updates stock on Flipkart for the reviewed destinations.'}
         </p>
       </div>
-      {review && <ReviewDialog state={state} review={review} onClose={() => setReview(null)} />}
-      {mappingItem && (
+      {review && (
+        <ReviewDialog
+          state={state}
+          review={review}
+          onClose={() => setReview(null)}
+          onPublish={workspace.publishReview}
+        />
+      )}
+      {mapping && (
         <MappingDialog
-          item={mappingItem}
+          item={state.items.find((item) => item.id === mapping.item.id) ?? mapping.item}
+          editListingId={mapping.listingId}
           state={state}
           accountId={accountId}
           busy={!!busy}
-          onClose={() => setMappingItem(null)}
-          onSave={(listingId) =>
-            mutate(
-              '/mappings',
-              { listingId, itemId: mappingItem.id, confirmPackEvidence: true },
-              'Saving mapping',
-              'Mapping saved locally. No Tally product or marketplace listing was created.',
-            )
+          onClose={() => setMapping(null)}
+          onSave={(input) =>
+            mutate('/mappings', input, 'Saving mapping', 'Mapping and Set of saved.')
           }
         />
       )}

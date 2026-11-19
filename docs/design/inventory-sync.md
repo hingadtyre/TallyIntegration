@@ -12,7 +12,7 @@ Synchronize stock from Tally to Flipkart initially, with support for other marke
 - Associate existing Tally stock items with existing marketplace listings without creating products in either system.
 - Support several duplicate listings and homogeneous packs of 1, 2, 3, 4 or more consuming the same stock item.
 - Show Tally stock, marketplace titles and seller SKUs, pack sizes, observed marketplace stock, proposed quantities, and row actions.
-- Prefer pack size supplied by marketplace product data and prevent casual editing in the stock table.
+- Prefer reliable marketplace catalogue data. On 20 November the seller clarified that the Inventory **Set of** column must also let them select the actual package count or enter the Tally units consumed per sale. See the [stock calculation and pack-size rules](architecture.md#calculation-and-publication-precedence).
 - Calculate proposed stock, review and edit it, then explicitly publish it.
 - Prepare zero quantities for subsequent publication.
 - Support row actions as well as bulk actions and filters for brand, name, and pack size.
@@ -84,7 +84,7 @@ Synchronize stock from Tally to Flipkart initially, with support for other marke
 - If source stock, pack size/mapping, or rules change after preparation, affected proposal rows require another review. Preserve the user's proposal visibly for comparison.
 - Polling intervals are user-configurable; the user wants to change them through settings. Proposed defaults remain 30 seconds for Tally, five minutes for marketplace observations, and 15 minutes for catalog metadata.
 - Low-stock highlighting starts at five or fewer physical pieces and is configurable per item.
-- Permit the verified one-tyre-per-package fallback. Missing/contradictory metadata blocks the affected mapping and changed metadata requires rechecking it.
+- Permit the verified one-tyre-per-package fallback. The 20 November clarification ties package-change review to the seller's chosen source for **Set of**. See the [refresh rules](architecture.md#calculation-and-publication-precedence).
 - During Tally outages retain the last published marketplace values, show stale/offline observations, and fetch fresh stock before resuming publication. Revalidate pending work rather than replaying stale quantities.
 - The user explicitly clarified that setting a particular listing to one should mean it becomes zero after one sale even if Tally stock goes from four to three. A persistent display cap of one is rejected because it would continue advertising one.
 - The user further clarified that the manual quantity belongs to the particular marketplace listing, not the Tally item or its other mapped listings. Consume that listing's allowance only for its own qualifying sales. Dashboard quantity edits do not change Tally stock.
@@ -231,7 +231,7 @@ These are engineering checks or details, not additional blanket user-approval ga
 - Read selected/configured Tally company stock every 30 seconds initially; make the interval configurable and measure extraction duration before increasing frequency.
 - Prevent overlapping polls and back off on connection failures. Publish changed mapped stock after a successful read; do not send unchanged values on every poll.
 - Refresh marketplace observations periodically (candidate: five minutes) for display and drift detection. Accepted: do not automatically refill a normal Auto listing solely because Flipkart reduced it after an order while Tally is unchanged.
-- Refresh catalog/package metadata on demand and periodically at a slower interval (candidate: 15 minutes). Package changes invalidate the previous mapping verification.
+- Refresh catalog/package metadata on demand and periodically at a slower interval (candidate: 15 minutes). A changed shipping count requires review when the seller chose **Use package count**. A seller-entered **Set of** value stays in effect through shipping-only changes.
 - Give zero-availability updates priority, while preserving destination ordering and superseding obsolete pending jobs.
 - Re-read before retrying after an outage. A pending old positive update must not run after a newer zero result.
 - Diagnostic viewer: timestamp, level, module/operation, company, listing, synchronization-run ID, duration, retry, and error details; filter, search, pause/follow, and export.
@@ -248,7 +248,7 @@ Inspected existing UI values without submitting listing edits:
 
 [Verified set-of-two product page](https://www.flipkart.com/ceat-145-70-r12-milaze-x3-69t-4-wheeler-tyre/p/itm59ae5cee36269?pid=VTEGYHJKPW2NFEYP).
 
-The official [listing details API](https://flipkart.github.io/fk-api-platform-docs/docs/mp-api_versioned/get-listing-details) documents `POST https://api.flipkart.net/sellers/listings/v3/details` with `sku_ids` and response `available[sku].packages[]`. This provides a concrete API candidate for package-count extraction. No authenticated API request has yet been made; credentials/access and actual response agreement with the UI remain to be verified. The seller browser session alone is not proof of API authorization.
+At the time of this initial browser check, the [listing details API](https://flipkart.github.io/fk-api-platform-docs/docs/mp-api_versioned/get-listing-details) documented `available[sku].packages[]`. The subsequent [20 November verification](../integration/flipkart-validation.md#active-tyre-pack-sizes-on-2026-11-20) compared authenticated API package counts with catalogue quantities for all 190 active tyre listings.
 
 Proposed validation before publication: identify the exact company stock item and seller SKU/FSN; compare tyre brand, model, dimensions, base unit, catalog set size when accessible, and package count. Maintain the pack-size source and verification time. Do not infer pack size solely from SKU suffixes, product-title digits such as `4 Wheeler`, or package identifiers. Missing/contradictory evidence blocks that mapping, while verified mappings can proceed.
 

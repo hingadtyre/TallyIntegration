@@ -137,13 +137,14 @@ test('a failed second company read or duplicate item rejects the complete refres
   const failed = await f.service.refresh();
   assert.equal(failed.connection.tally, 'offline');
   assert.deepEqual(failed.items, before.items);
-  assert.deepEqual(failed.companies, before.companies);
+  const unverified = before.companies.map((company) => ({ ...company, lastSuccess: null }));
+  assert.deepEqual(failed.companies, unverified);
   f.source.failCompany = '';
   f.source.items.get('company-a')!.push({ ...f.source.items.get('company-a')![0] });
   const duplicate = await f.service.refresh();
   assert.equal(duplicate.connection.tally, 'offline');
   assert.deepEqual(duplicate.items, before.items);
-  assert.deepEqual(duplicate.companies, before.companies);
+  assert.deepEqual(duplicate.companies, unverified);
   assert.match(f.service.logs(), /Duplicate Tally stock identity/);
 });
 
@@ -154,8 +155,54 @@ test('a selected company no longer loaded in Tally retains its observations and 
   const failed = await f.service.refresh('tally:company-a');
   assert.equal(failed.connection.tally, 'offline');
   assert.deepEqual(failed.items, before.items);
-  assert.deepEqual(failed.companies, before.companies);
+  assert.equal(failed.companies[0].lastSuccess, null);
   await assert.rejects(f.service.refresh('unknown-company'), InputError);
+});
+
+test('a successful read for another company cannot authorize stock from a failed read', async (t) => {
+  const f = sourceFixture(t);
+  f.source.companies.push({ externalId: 'company-b', name: 'Company B' });
+  await f.service.refresh();
+  const companyId = 'tally:company-a';
+  f.store.update((state) => {
+    state.accounts.push({
+      id: 'seller',
+      name: 'Seller',
+      marketplace: 'flipkart',
+      status: 'not-connected',
+    });
+    state.listings.push({
+      id: 'listing',
+      accountId: 'seller',
+      sku: 'pair',
+      title: 'Pair',
+      location: 'warehouse',
+      itemId: 'tally:company-a:item-a',
+      packSize: 2,
+      packEvidence: 'Confirmed',
+      verified: true,
+      observed: 2,
+      observedAt: state.items[0].observedAt,
+      policy: 'auto',
+      remaining: null,
+      paused: false,
+      version: 1,
+    });
+  });
+  f.service.calculate(companyId, ['listing']);
+  f.source.failCompany = 'company-a';
+  await f.service.refresh(companyId);
+  const other = await f.service.refresh('tally:company-b');
+  assert.equal(other.connection.tally, 'online');
+  assert.equal(other.items[0].physical, 4);
+  assert.throws(() => f.service.calculate(companyId, ['listing']), /Tally stock is stale/);
+  assert.match(
+    f.service.review(companyId, ['listing']).rows[0].problem ?? '',
+    /Tally stock is stale/,
+  );
+  f.source.failCompany = '';
+  await f.service.refresh(companyId);
+  assert.equal(f.service.calculate(companyId, ['listing']).proposals[0].quantity, 2);
 });
 
 test('sample refresh preserves all inventory and never invokes the external reader', async (t) => {

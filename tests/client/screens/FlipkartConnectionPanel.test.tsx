@@ -79,11 +79,7 @@ test('verification sends credentials only in the local command and clears inputs
   assert.equal(inputs.applicationId.value, '');
   assert.equal(inputs.applicationSecret.value, '');
   assert.ok(screen.getByText('******app123'));
-  assert.ok(
-    screen.getByText(
-      /Credential verification does not identify the seller, import listings or change stock/,
-    ),
-  );
+  assert.ok(screen.getByText(/A successful access check starts a listing import/));
   assert.equal(window.localStorage.length, 0);
 });
 

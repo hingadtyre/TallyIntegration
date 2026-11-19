@@ -41,10 +41,13 @@ The association identifying which Tally stock item supplies a marketplace listin
 _Avoid_: Creating a Tally product, creating a marketplace listing
 
 **Pack size**:
-The number of physical base units consumed by one sold listing unit, such as two tyres for a pair listing. A shipping package is not necessarily a product pack.
+The number of base units of the mapped Tally stock item consumed by one sold listing unit. For a pair of tyres stocked individually, the pack size is two. The seller calls this **Set of** in Inventory.
+
+**Catalogue set quantity**:
+The number of items a buyer receives when purchasing one unit of a particular marketplace product variant. Flipkart labels this `Set of` for vehicle tyres and `Number of Two Wheeler Tyre` for two-wheeler tyres. A pair of tyres has a catalogue set quantity of two. Its pack size is two if Tally counts individual tyres and one if Tally counts pairs.
 
 **Shipping package count**:
-The number of physical packages configured for one listing unit. For this seller's tyres, one tyre is shipped per package, making a verified package count evidence of pack size; this equivalence does not automatically apply to other categories or sellers.
+The number of shipping parcels configured for one listing unit. A parcel may contain several items, and a single item may ship in multiple parcels.
 
 **Physical package**:
 An individually handled parcel in a delivery or return. One sold listing unit can occupy several physical packages, which may arrive separately.

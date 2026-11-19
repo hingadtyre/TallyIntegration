@@ -15,6 +15,7 @@ import { isAbsolute, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Snapshot } from '../shared/contracts.js';
 import { recordActivity } from './activity.js';
+import { cataloguesOverlap } from './marketplace-catalog.js';
 import { acquireWorkspaceOwnership } from './runtime.js';
 import { backupDatabase } from './storage/backup.js';
 import { readSnapshot, writeSnapshot } from './storage/records.js';
@@ -71,10 +72,8 @@ function requireNoSidecars(file: string): void {
 
 function readCheckedSnapshot(database: DatabaseSync, mode: WorkspaceMode): Snapshot {
   const version = schemaVersion(database);
-  if (version !== 2 && version !== CURRENT_SCHEMA_VERSION) {
-    throw new Error(
-      `Offline pilot restore only accepts schemas 2 and ${CURRENT_SCHEMA_VERSION}. Other schemas must not be replaced with this tool.`,
-    );
+  if (version !== 2 && version !== 3 && version !== CURRENT_SCHEMA_VERSION) {
+    throw new Error(`Offline pilot restore accepts schemas 2 through ${CURRENT_SCHEMA_VERSION}.`);
   }
   const integrity = database.prepare('PRAGMA integrity_check').all();
   if (
@@ -87,7 +86,7 @@ function readCheckedSnapshot(database: DatabaseSync, mode: WorkspaceMode): Snaps
     );
   }
   const snapshot = readSnapshot(database);
-  if (version === CURRENT_SCHEMA_VERSION) readMarketplace(database);
+  if (version >= 3) readMarketplace(database);
   if (snapshot.mode !== mode)
     throw new Error('The backup and destination must use the same live or demo workspace mode.');
   return snapshot;
@@ -118,7 +117,9 @@ function loadBackup(
     !('verified' in manifest) ||
     manifest.verified !== true ||
     !('schemaVersion' in manifest) ||
-    (manifest.schemaVersion !== 2 && manifest.schemaVersion !== CURRENT_SCHEMA_VERSION) ||
+    (manifest.schemaVersion !== 2 &&
+      manifest.schemaVersion !== 3 &&
+      manifest.schemaVersion !== CURRENT_SCHEMA_VERSION) ||
     !('mode' in manifest) ||
     manifest.mode !== mode ||
     !('credentialsIncluded' in manifest) ||
@@ -240,6 +241,8 @@ function restoredSnapshot(
     if (!listing.paused) listing.version++;
     listing.paused = true;
     listing.observedAt = null;
+    if (listing.packageAvailable !== undefined) listing.packageAvailable = false;
+    if (listing.syncPendingItemVersion != null) listing.syncPendingItemVersion = null;
   }
   for (const account of restored.accounts)
     account.status = restored.mode === 'demo' ? 'demo' : 'not-connected';
@@ -306,6 +309,14 @@ function restoredMarketplace(backup: MarketplaceData, current: MarketplaceData):
     if (saved) {
       if (saved.sellerId && account.sellerId && saved.sellerId !== account.sellerId)
         throw new Error('The backup conflicts with a current marketplace seller binding.');
+      if (!saved.sellerId || !account.sellerId) {
+        const previous = current.listings.filter((row) => row.accountId === account.id);
+        const incoming = restored.listings.filter((row) => row.accountId === account.id);
+        if (previous.length && incoming.length && !cataloguesOverlap(previous, incoming))
+          throw new Error(
+            'The backup conflicts with the current authenticated listing identities.',
+          );
+      }
       saved.sellerId = account.sellerId ?? saved.sellerId;
     } else if (
       account.sellerId ||
@@ -340,7 +351,9 @@ function restoredMarketplace(backup: MarketplaceData, current: MarketplaceData):
     );
     if (
       (savedListing &&
-        (savedListing.sellerId !== listing.sellerId ||
+        ((savedListing.sellerId &&
+          listing.sellerId &&
+          savedListing.sellerId !== listing.sellerId) ||
           savedListing.productId !== listing.productId ||
           savedListing.sku !== listing.sku)) ||
       (savedSku && savedSku.id !== listing.id)
@@ -351,6 +364,8 @@ function restoredMarketplace(backup: MarketplaceData, current: MarketplaceData):
   }
   for (const account of restored.accounts) account.lastRefreshedAt = null;
   for (const listing of restored.listings) {
+    listing.sellerId ??=
+      restored.accounts.find((row) => row.id === listing.accountId)?.sellerId ?? null;
     listing.observedAt = null;
     listing.version++;
   }

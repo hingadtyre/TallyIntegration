@@ -95,7 +95,7 @@ function listing(value: unknown, field: string): MarketplaceListing {
   const result: MarketplaceListing = {
     id: text(row.id, `${field}.id`),
     accountId: text(row.accountId, `${field}.accountId`),
-    sellerId: text(row.sellerId, `${field}.sellerId`),
+    sellerId: row.sellerId === null ? null : text(row.sellerId, `${field}.sellerId`),
     productId: text(row.productId, `${field}.productId`),
     sku: text(row.sku, `${field}.sku`),
     title: text(row.title, `${field}.title`, true),
@@ -109,6 +109,10 @@ function listing(value: unknown, field: string): MarketplaceListing {
     sellingPrice:
       row.sellingPrice === null ? null : number(row.sellingPrice, `${field}.sellingPrice`),
     locations: array(row.locations, `${field}.locations`, location),
+    ...(row.packageCount !== undefined && {
+      packageCount:
+        row.packageCount === null ? null : number(row.packageCount, `${field}.packageCount`, true),
+    }),
     observedAt: nullableTimestamp(row.observedAt, `${field}.observedAt`),
     version: number(row.version, `${field}.version`, true),
   };
@@ -225,7 +229,7 @@ export function readMarketplace(database: DatabaseSync): MarketplaceData {
         ),
         id: row.id,
         accountId: row.account_id,
-        sellerId: row.seller_id,
+        sellerId: row.seller_id === '' ? null : row.seller_id,
         productId: row.product_id,
         sku: row.sku,
         version: row.version,
@@ -302,7 +306,9 @@ export function writeMarketplace(database: DatabaseSync, input: MarketplaceData)
       return {
         account_id: accountId,
         id,
-        seller_id: sellerId,
+        // Older databases require a non-null SQL value. The API uses null for
+        // authenticated catalogue ownership without a provider-issued seller ID.
+        seller_id: sellerId ?? '',
         product_id: productId,
         sku,
         version,

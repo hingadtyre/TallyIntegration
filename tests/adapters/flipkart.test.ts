@@ -19,7 +19,7 @@ test('self access sends Basic credentials only to the fixed Flipkart HTTPS token
       calls++;
       assert.equal(
         url,
-        'https://api.flipkart.net/oauth-service/oauth/token?grant_type=client_credentials&scope=Seller_Api,Default',
+        'https://api.flipkart.net/oauth-service/oauth/token?grant_type=client_credentials&scope=Seller_Api',
       );
       assert.equal(options?.method, 'GET');
       assert.equal(options.redirect, 'error');

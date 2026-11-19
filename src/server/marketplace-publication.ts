@@ -18,11 +18,18 @@ import {
 } from './marketplace-catalog.js';
 import type { Store } from './store.js';
 import { InputError, requireText, requireWholeNumber } from './validation.js';
+import {
+  activateInventoryIntent,
+  inventoryTarget,
+  type InventoryIntent,
+} from './inventory-publication.js';
 
 export type ListingTransport = Pick<
   FlipkartListingsClient,
   'listListings' | 'getListing' | 'updatePrice' | 'updateStock'
 >;
+
+type PendingStockSync = { listingId: string; listingVersion: number; itemVersion: number };
 
 function parseEdit(input: unknown): MarketplaceEdit {
   if (!input || typeof input !== 'object') throw new InputError('Choose a stock or price edit.');
@@ -128,6 +135,31 @@ function sameBaseline(
     : before.mrp === after.mrp && before.sellingPrice === after.sellingPrice;
 }
 
+function automaticRetryAt(
+  changes: MarketplaceChange[],
+  listing: MarketplaceListing,
+  edit: MarketplaceEdit,
+): number {
+  if (edit.kind !== 'stock') return 0;
+  let failures = 0;
+  let rejectedAt = 0;
+  // Newest first. A different target quantity supersedes the rejected one, so
+  // a newly required zero never waits for backoff on an earlier positive value.
+  for (const change of changes) {
+    if (
+      change.accountId !== listing.accountId ||
+      change.listingId !== listing.id ||
+      change.edit.kind !== 'stock' ||
+      change.edit.locationId !== edit.locationId
+    )
+      continue;
+    if (change.state !== 'failed' || change.edit.quantity !== edit.quantity) break;
+    if (failures === 0) rejectedAt = Date.parse(change.updatedAt);
+    if (++failures >= 6) break;
+  }
+  return failures ? rejectedAt + Math.min(30_000 * 2 ** (failures - 1), 600_000) : 0;
+}
+
 /** Durable attempts never replay an uncertain absolute stock write after a restart. */
 export class MarketplacePublication {
   constructor(
@@ -149,12 +181,29 @@ export class MarketplacePublication {
     id: string,
     status: MarketplaceChange['state'],
     message: string,
+    rejectedWork: PendingStockSync[] = [],
   ): MarketplaceChange {
     return this.store.updateMarketplace((data, state) => {
       const change = data.changes.find((row) => row.id === id)!;
       change.state = status;
       change.message = message;
       change.updatedAt = new Date().toISOString();
+      for (const work of rejectedWork) {
+        // A rejected stock edit cannot supersede work for the same Tally balance.
+        // A subsequent mapping, pause or newer balance takes precedence.
+        const row = state.listings.find((entry) => entry.id === work.listingId);
+        const item = state.items.find((entry) => entry.id === row?.itemId);
+        if (
+          row &&
+          row.version === work.listingVersion &&
+          row.verified &&
+          !row.paused &&
+          row.syncPendingItemVersion == null &&
+          item?.version === work.itemVersion &&
+          state.companies.some((company) => company.id === item.companyId && company.automation)
+        )
+          row.syncPendingItemVersion = item.version;
+      }
       recordActivity(state, `marketplace-${status}`, `${change.sku}: ${message}`, {
         level: status === 'failed' || status === 'uncertain' ? 'warning' : 'info',
       });
@@ -162,11 +211,23 @@ export class MarketplacePublication {
     });
   }
 
+  apply(
+    accountId: string,
+    input: Record<string, unknown>,
+    token: string | null,
+  ): Promise<MarketplaceApplyResult>;
+  apply(
+    accountId: string,
+    input: Record<string, unknown>,
+    token: string | null,
+    intent: InventoryIntent,
+  ): Promise<MarketplaceApplyResult | null>;
   async apply(
     accountId: string,
     input: Record<string, unknown>,
     token: string | null,
-  ): Promise<MarketplaceApplyResult> {
+    intent?: InventoryIntent,
+  ): Promise<MarketplaceApplyResult | null> {
     const data = this.store.readMarketplace();
     const listing = findMarketplaceListing(
       data,
@@ -177,7 +238,7 @@ export class MarketplacePublication {
     if (listing.version !== version || !listing.observedAt)
       throw new InputError('This listing has changed. Refresh and review the current value.', 409);
     const edit = parseEdit(input.edit);
-    validateStockPolicy(this.store.read(), listing, edit);
+    if (!intent) validateStockPolicy(this.store.read(), listing, edit);
     // A later Apply must not conceal an unconfirmed outcome for this listing.
     if (
       data.changes.some(
@@ -191,7 +252,49 @@ export class MarketplacePublication {
         'Check the previous update result before applying another edit to this listing.',
         409,
       );
-    const before = token === null ? listing : await this.client.getListing(token, listing);
+    if (intent && !intent.draft && Date.now() < automaticRetryAt(data.changes, listing, edit))
+      throw new InputError(
+        'Flipkart rejected the previous stock update. An upcoming Tally check will retry after backoff.',
+        409,
+      );
+    const before =
+      token === null
+        ? listing
+        : await this.client.getListing(token, listing, { requireCurrentStatus: !!intent });
+    if (
+      before.id !== listing.id ||
+      before.accountId !== accountId ||
+      before.sellerId !== listing.sellerId ||
+      before.productId !== listing.productId ||
+      before.sku !== listing.sku
+    )
+      throw new InputError(
+        'Flipkart returned a different listing identity. Refresh the account.',
+        409,
+      );
+    if (intent) {
+      const target = inventoryTarget(this.store.read(), intent, before);
+      if (
+        target.listing.packSource === 'packages' &&
+        before.packageCount !== target.listing.packSize
+      ) {
+        this.saveObservation(before);
+        throw new InputError(
+          'Flipkart package count changed or is unavailable. Review Set of before publishing.',
+          409,
+        );
+      }
+      if (
+        edit.kind !== 'stock' ||
+        target.quantity !== edit.quantity ||
+        target.listing.location !== edit.locationId ||
+        before.locations.find((l) => l.id === edit.locationId)?.quantity == null
+      )
+        throw new InputError(
+          'The stock target changed or its current quantity is unavailable. Refresh and review.',
+          409,
+        );
+    }
     if (!sameBaseline(listing, before, edit)) {
       this.saveObservation(before);
       throw new InputError(
@@ -212,11 +315,46 @@ export class MarketplacePublication {
       createdAt: at,
       updatedAt: at,
     };
-    this.store.updateMarketplace((current, state) => {
+    const consumedWork = this.store.updateMarketplace((current, state) => {
       const latest = findMarketplaceListing(current, accountId, listing.id);
       if (latest.version !== version)
         throw new InputError('The listing changed. Refresh before applying.', 409);
-      validateStockPolicy(state, latest, edit);
+      // Capture the automatic work this Update once would supersede. An edited
+      // zero also activates a hold that needs correction if Flipkart rejects it.
+      const pending =
+        edit.kind === 'stock' && edit.automation === 'once'
+          ? policyRows(state, latest, edit.locationId).flatMap((row) => {
+              const itemVersion =
+                row.syncPendingItemVersion ??
+                (intent?.draft?.edited && edit.quantity === 0 ? intent.itemVersion : null);
+              return itemVersion == null ? [] : [{ row, itemVersion }];
+            })
+          : [];
+      if (intent) {
+        const target = inventoryTarget(state, intent, before);
+        if (
+          edit.kind !== 'stock' ||
+          target.quantity !== edit.quantity ||
+          target.listing.location !== edit.locationId
+        )
+          throw new InputError('The stock target changed. Review the new calculation.', 409);
+        activateInventoryIntent(state, intent, target.listing);
+        if (matchesEdit(before, edit)) {
+          recordActivity(
+            state,
+            'inventory-confirmed',
+            `${listing.sku}: confirmed current stock ${target.quantity}; no write needed.`,
+            { companyId: intent.companyId, listingId: intent.listingId },
+          );
+          return null;
+        }
+      } else {
+        validateStockPolicy(state, latest, edit);
+        if (edit.kind === 'stock') {
+          for (const row of policyRows(state, latest, edit.locationId))
+            row.syncPendingItemVersion = null;
+        }
+      }
       if (edit.kind === 'stock' && edit.automation === 'pause') {
         for (const row of policyRows(state, latest, edit.locationId)) {
           row.paused = true;
@@ -226,10 +364,16 @@ export class MarketplacePublication {
       current.changes.unshift(change);
       recordActivity(
         state,
-        'marketplace-apply',
+        intent ? 'inventory-publish' : 'marketplace-apply',
         `${listing.sku}: ${edit.kind} update requested${edit.kind === 'stock' && edit.automation === 'pause' ? '; Tally synchronization paused' : ''}.`,
       );
+      return pending.map(({ row, itemVersion }) => ({
+        listingId: row.id,
+        listingVersion: row.version,
+        itemVersion,
+      }));
     });
+    if (consumedWork === null) return null;
     this.finish(change.id, 'sending', 'Applying update.');
     try {
       if (token !== null) {
@@ -239,7 +383,7 @@ export class MarketplacePublication {
       }
     } catch (error) {
       if (error instanceof FlipkartListingError && !error.uncertain) {
-        const failed = this.finish(change.id, 'failed', error.message);
+        const failed = this.finish(change.id, 'failed', error.message, consumedWork);
         return {
           change: failed,
           listing: listingView(

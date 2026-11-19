@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Snapshot } from '../../shared/contracts.js';
+import { schemaVersion } from './schema.js';
 import { validateSnapshot } from './validation.js';
 
 type ColumnValue = string | number | null;
@@ -12,6 +13,7 @@ type TableName =
   | 'seller_accounts'
   | 'stock_items'
   | 'listings'
+  | 'listing_pack_settings'
   | 'proposals'
   | 'activity';
 
@@ -57,6 +59,12 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
   `,
     )
     .all();
+  const packs = new Map(
+    (schemaVersion(database) >= 4
+      ? database.prepare('SELECT * FROM listing_pack_settings').all()
+      : []
+    ).map((row) => [row.listing_id, row]),
+  );
   const listings = database
     .prepare(
       `
@@ -67,7 +75,24 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
   `,
     )
     .all()
-    .map((row) => ({ ...row, verified: row.verified === 1, paused: row.paused === 1 }));
+    .map((row) => {
+      const pack = packs.get(row.id);
+      return {
+        ...row,
+        verified: row.verified === 1,
+        paused: row.paused === 1,
+        ...(pack && {
+          packSource: pack.pack_source,
+          packageCount: pack.package_count,
+          packageObservedAt: pack.package_observed_at,
+          packageAvailable: pack.package_available === 1,
+          packConfirmedAt: pack.pack_confirmed_at,
+          sourceScope: pack.source_scope,
+          tyreFloor: pack.tyre_floor === 1,
+          syncPendingItemVersion: pack.sync_pending_item_version,
+        }),
+      };
+    });
   const proposals = database
     .prepare(
       `
@@ -248,6 +273,34 @@ export function writeSnapshot(database: DatabaseSync, input: Snapshot): void {
       version: listing.version,
       sort_order: index,
     })),
+  );
+  syncTable(
+    database,
+    'listing_pack_settings',
+    'listing_id',
+    state.listings
+      .filter(
+        (row) =>
+          row.packSource !== undefined ||
+          row.packageCount !== undefined ||
+          row.packageObservedAt !== undefined ||
+          row.packConfirmedAt !== undefined ||
+          row.packageAvailable !== undefined ||
+          row.syncPendingItemVersion != null ||
+          row.sourceScope != null ||
+          row.tyreFloor !== undefined,
+      )
+      .map((row) => ({
+        listing_id: row.id,
+        pack_source: row.packSource ?? null,
+        package_count: row.packageCount ?? null,
+        package_observed_at: row.packageObservedAt ?? null,
+        package_available: Number(row.packageAvailable ?? false),
+        pack_confirmed_at: row.packConfirmedAt ?? null,
+        source_scope: row.sourceScope ?? null,
+        tyre_floor: Number(row.tyreFloor ?? false),
+        sync_pending_item_version: row.syncPendingItemVersion ?? null,
+      })),
   );
   syncTable(
     database,

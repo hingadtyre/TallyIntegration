@@ -2,7 +2,10 @@ import { calculateStock } from '../domain/stock-policy.js';
 import type { Listing, Proposal, Snapshot, StockItem } from '../shared/contracts.js';
 import { InputError } from './validation.js';
 
-const RULE_VERSION = 'flipkart-tyres-v1';
+function ruleVersion(state: Snapshot, listing: Listing): string {
+  const useTyreFloor = listing.tyreFloor ?? state.mode === 'demo';
+  return useTyreFloor ? 'flipkart-tyres-v1' : 'complete-packs-v1';
+}
 
 export function requireStockSource(
   state: Snapshot,
@@ -13,10 +16,22 @@ export function requireStockSource(
     throw new InputError('Refresh valid source stock before calculating.');
   if (!listing.verified || !listing.packSize)
     throw new InputError('Verify the mapping and pack size first.');
+  if (
+    listing.packSource === 'packages' &&
+    (!listing.packageAvailable || listing.packageCount !== listing.packSize)
+  )
+    throw new InputError(
+      'Refresh the Flipkart package count and review Set of before calculating.',
+    );
   const observedAt = Date.parse(item.observedAt);
   const maximumAge = Math.max(120_000, state.settings.tallySeconds * 3000);
   const stale = !Number.isFinite(observedAt) || Date.now() - observedAt > maximumAge;
-  if (state.mode === 'live' && (state.connection.tally !== 'online' || stale)) {
+  if (
+    state.mode === 'live' &&
+    (state.connection.tally !== 'online' ||
+      stale ||
+      !state.companies.find((company) => company.id === item.companyId)?.lastSuccess)
+  ) {
     throw new InputError('Tally stock is stale. Refresh before reviewing changes.');
   }
   return { item, physical: item.physical, packSize: listing.packSize };
@@ -31,6 +46,7 @@ export function desiredStock(
   return calculateStock({
     physical: source.physical,
     packSize: source.packSize,
+    tyreFloor: ruleVersion(state, listing) === 'flipkart-tyres-v1',
     policy:
       policy === 'normal'
         ? { mode: 'auto', remaining: null }
@@ -52,7 +68,7 @@ export function prepareProposal(
     edited: editedQuantity !== undefined,
     itemVersion: item.version,
     listingVersion: listing.version,
-    ruleVersion: RULE_VERSION,
+    ruleVersion: ruleVersion(state, listing),
     createdAt: new Date().toISOString(),
     stale: false,
   };
@@ -66,7 +82,7 @@ export function isStaleProposal(state: Snapshot, draft: Proposal): boolean {
     !item ||
     draft.itemVersion !== item.version ||
     draft.listingVersion !== listing.version ||
-    draft.ruleVersion !== RULE_VERSION
+    draft.ruleVersion !== ruleVersion(state, listing)
   );
 }
 

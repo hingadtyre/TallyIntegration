@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 /** Each managed record has an explicit table. Array order is presentation state,
  * so sort_order is retained without making names or positions into identities. */
@@ -104,6 +104,26 @@ export function createSchema(database: DatabaseSync): void {
   // Activity references deliberately outlive current managed records. They are
   // historical identifiers, so deleting a record must not delete its history.
   createMarketplaceSchema(database);
+  createPackSchema(database);
+}
+
+/** Each row belongs to a specific account, seller SKU and inventory location
+ * through its listing id. Missing rows preserve legacy mappings without
+ * implying that a seller selected a source location or an advertising rule. */
+export function createPackSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE listing_pack_settings (
+      listing_id TEXT PRIMARY KEY REFERENCES listings(id) DEFERRABLE INITIALLY DEFERRED,
+      pack_source TEXT CHECK (pack_source IN ('packages','manual')),
+      package_count INTEGER CHECK (package_count > 0),
+      package_observed_at TEXT,
+      package_available INTEGER CHECK (package_available IN (0,1)),
+      pack_confirmed_at TEXT,
+      source_scope TEXT CHECK (source_scope = 'company'),
+      tyre_floor INTEGER CHECK (tyre_floor IN (0,1)),
+      sync_pending_item_version INTEGER CHECK (sync_pending_item_version >= 0)
+    );
+  `);
 }
 
 /** Explicit membership keeps the legacy disconnected account placeholder out of

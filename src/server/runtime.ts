@@ -146,7 +146,7 @@ export async function startRuntime(
     version: packageInfo.version,
     mode,
     instanceId,
-    publishingEnabled: false,
+    publishingEnabled: true,
   };
   let store: Store | undefined;
   let service: InventoryService | undefined;
@@ -202,12 +202,12 @@ export async function startRuntime(
 
   try {
     store = new Store(join(owner.dataDirectory, `${mode}.sqlite`), mode);
-    service = new InventoryService(store, { diagnostics });
     flipkart = new FlipkartConnection(owner.dataDirectory, mode);
     marketplaces = new MarketplaceService(store, owner.dataDirectory, {
       legacyConnection: flipkart,
     });
     await marketplaces.initialize();
+    service = new InventoryService(store, { diagnostics, marketplaces });
     app = createApp(
       service,
       paths.webRoot,
@@ -254,7 +254,7 @@ export async function startRuntime(
     service.start();
     service.log(
       'startup',
-      `${mode} dashboard started; automatic Inventory publishing disabled; explicit Marketplace Apply available.`,
+      `${mode} dashboard started; Inventory sync follows the saved company and listing settings.`,
     );
     server.on('error', (error) => {
       diagnostics.error('http-server', error);

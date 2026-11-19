@@ -3,7 +3,7 @@ import process from 'node:process';
 import { inspectPilotBackup, restorePilotBackup } from '../dist/src/server/restore.js';
 
 const usage = [
-  'Offline pilot restore. Marketplace publishing remains disabled.',
+  'Offline pilot restore. Company automation is disabled in restored data.',
   'Inspect first:',
   '  node scripts/restore-pilot.mjs inspect --backup <absolute.sqlite> --mode live|demo',
   'Replace only after inspecting:',
@@ -60,7 +60,7 @@ try {
         ),
       );
       console.log(
-        'Offline pilot restore completed. Start Stockbridge, refresh Tally and review the restored records. Marketplace publishing remains disabled.',
+        'Offline pilot restore completed. Start Stockbridge, refresh Tally and the seller account, then review the paused listings and company automation settings.',
       );
     }
   }

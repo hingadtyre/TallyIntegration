@@ -128,7 +128,7 @@ test('health identifies this instance and authenticated shutdown removes only it
     version: '0.1.0',
     mode: 'demo',
     instanceId: runtime.record.instanceId,
-    publishingEnabled: false,
+    publishingEnabled: true,
   });
   assert.match(runtime.record.token, /^[a-f0-9]{64}$/);
   const rejectedHeaders: Record<string, string>[] = [

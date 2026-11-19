@@ -9,6 +9,7 @@ import { readMarketplace } from './marketplace-records.js';
 import {
   createSchema,
   createMarketplaceSchema,
+  createPackSchema,
   CURRENT_SCHEMA_VERSION,
   schemaVersion,
 } from './schema.js';
@@ -64,11 +65,13 @@ export function prepareDatabase(
     });
     return null;
   }
-  if (version !== 1 && version !== 2) throw new Error(`Unsupported database schema ${version}.`);
+  if (version !== 1 && version !== 2 && version !== 3)
+    throw new Error(`Unsupported database schema ${version}.`);
 
   const original = version === 1 ? legacyJson(database) : JSON.stringify(readSnapshot(database));
   const state = version === 1 ? parseLegacySnapshot(original) : readSnapshot(database);
   requireMode(state, mode);
+  const originalMarket = version === 3 ? JSON.stringify(readMarketplace(database)) : null;
   const stamp = new Date().toISOString().replaceAll(':', '-');
   const backupPath = join(
     dirname(file),
@@ -79,6 +82,7 @@ export function prepareDatabase(
   inTransaction(database, () => {
     if (
       schemaVersion(database) !== version ||
+      (originalMarket !== null && JSON.stringify(readMarketplace(database)) !== originalMarket) ||
       (version === 1 ? legacyJson(database) : JSON.stringify(readSnapshot(database))) !== original
     ) {
       throw new Error('The database changed during upgrade. Stop other app processes and retry.');
@@ -88,7 +92,8 @@ export function prepareDatabase(
       writeSnapshot(database, state);
       database.exec('DROP TABLE app_state;');
     } else {
-      createMarketplaceSchema(database);
+      if (version === 2) createMarketplaceSchema(database);
+      createPackSchema(database);
     }
     database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION};`);
   });

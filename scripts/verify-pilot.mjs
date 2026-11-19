@@ -437,13 +437,13 @@ async function verifyPilot(zip) {
       assert.equal(health.application, 'stockbridge');
       assert.equal(health.version, manifest.version);
       assert.equal(health.mode, 'live');
-      assert.equal(health.publishingEnabled, false);
+      assert.equal(health.publishingEnabled, true);
       assert.ok(!Object.hasOwn(health, 'token'), 'Health must not expose the runtime token.');
       const record = readRuntimeRecord(runtimeFile);
       assert.equal(record.instanceId, health.instanceId);
       const state = await api('/api/state');
       assert.equal(state.mode, 'live');
-      assert.equal(state.publishingEnabled, false);
+      assert.equal(state.publishingEnabled, true);
       assert.deepEqual(state.companies, []);
       assert.deepEqual(state.items, []);
       assert.deepEqual(state.listings, []);
@@ -467,8 +467,8 @@ async function verifyPilot(zip) {
       const checked = await api('/api/flipkart/check', {}, 409);
       assert.match(checked.error, /Connect a seller-owned Flipkart application first/);
       assert.ok(!existsSync(join(dataDirectory, 'flipkart-self-access.credentials')));
-      assert.equal((await api('/api/state')).publishingEnabled, false);
-      return { credentialsPresent: false, publishingEnabled: false };
+      assert.equal((await api('/api/state')).publishingEnabled, true);
+      return { credentialsPresent: false, publishingEnabled: true };
     });
     let marketplaceAccounts;
     await check('marketplace_accounts_are_explicit_and_credentials_are_separate', async () => {
@@ -517,7 +517,7 @@ async function verifyPilot(zip) {
       assert.equal(directory.length, 2);
       assert.equal(directory[0].connection.applicationIdHint, null);
       assert.equal(directory[1].connection.applicationIdHint, '***0002');
-      assert.equal((await api('/api/state')).publishingEnabled, false);
+      assert.equal((await api('/api/state')).publishingEnabled, true);
       return { accounts: 2, separateProtectedFiles: true, verifyRequested: false };
     });
     await check('dashboard_and_compiled_assets', async () => {
@@ -567,7 +567,7 @@ async function verifyPilot(zip) {
       assert.equal(state.items[0].id, fixture.itemId);
       assert.equal(state.items[0].physical, 4);
       assert.equal(state.items[0].unit, 'nos');
-      assert.equal(state.publishingEnabled, false);
+      assert.equal(state.publishingEnabled, true);
       assert.ok(fixture.evidence().requests >= 3);
       assert.deepEqual(fixture.evidence().failures, []);
       return { companyId: fixture.companyId, itemId: fixture.itemId, physical: 4 };
@@ -596,7 +596,7 @@ async function verifyPilot(zip) {
       assert.match(rejected.error, /authorization/);
       assert.equal((await api('/api/health')).instanceId, firstInstance.instanceId);
       const publish = await api('/api/publish', {}, 409);
-      assert.match(publish.error, /unavailable/);
+      assert.match(publish.error, /fresh Inventory review/);
       return { stopWithoutToken: 403, publishing: 409 };
     });
     const restoreArguments = [
@@ -681,7 +681,7 @@ async function verifyPilot(zip) {
       assert.equal(restored.items[0].observedAt, null);
       assert.equal(restored.companies[0].automation, false);
       assert.equal(restored.connection.tally, 'not-checked');
-      assert.equal(restored.publishingEnabled, false);
+      assert.equal(restored.publishingEnabled, true);
       assert.ok(restored.activity.some((entry) => entry.operation === 'pilot-restore'));
       assert.ok(!existsSync(join(packageRoot, '.data')));
       const accounts = (await api('/api/marketplaces', undefined, 200, 30_000)).accounts;
@@ -696,7 +696,7 @@ async function verifyPilot(zip) {
         instanceId: health.instanceId,
         tallySeconds: 45,
         restoredPhysical: 4,
-        publishingEnabled: false,
+        publishingEnabled: true,
       };
     });
     await check('final_stop_and_status', async () => {

@@ -6,8 +6,8 @@ try {
   console.log(`Stockbridge ${mode} dashboard: ${runtime.record.url}`);
   console.log(
     mode === 'demo'
-      ? 'Inventory publication and automatic stock updates are unavailable. Marketplaces Apply simulates changes only. Press Ctrl+C to stop.'
-      : 'Inventory publication and automatic stock updates are unavailable. Use Marketplaces Apply for individual stock and price edits. Press Ctrl+C to stop.',
+      ? 'Sample workspace. Inventory and marketplace updates are simulated. Press Ctrl+C to stop.'
+      : 'Live workspace. Publishing sends verified stock updates to Flipkart. Press Ctrl+C to stop.',
   );
   const stop = () => {
     void runtime.stop().catch((error: unknown) => {

@@ -8,6 +8,7 @@ import { InputError } from './validation.js';
 import { FlipkartListingError } from '../adapters/flipkart-listings.js';
 import { runMarketplaceCommand } from './marketplace-http.js';
 import type { MarketplaceService } from './marketplace-service.js';
+import type { FlipkartConnectionStatus } from '../shared/contracts.js';
 
 const contentTypes: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -21,7 +22,7 @@ export interface RuntimeHealth {
   version: string;
   mode: 'live' | 'demo';
   instanceId: string;
-  publishingEnabled: false;
+  publishingEnabled: boolean;
 }
 
 interface RuntimeControl {
@@ -39,7 +40,7 @@ async function runFlipkartCommand(
   connection: MarketplaceConnection | undefined,
   path: string,
   input: Record<string, unknown>,
-): Promise<unknown> {
+): Promise<FlipkartConnectionStatus> {
   if (!connection) throw new InputError('Flipkart connection is unavailable in this runtime.', 503);
   switch (path) {
     case '/api/flipkart/connect':
@@ -124,6 +125,8 @@ async function runCommand(
       return service.edit(input.companyId, input.listingId, input.quantity);
     case '/api/pause':
       return service.pause(input.companyId, input.listingIds, input.paused);
+    case '/api/automation':
+      return service.automation(input.companyId, input.enabled);
     case '/api/review':
       return service.review(input.companyId, input.listingIds);
     case '/api/settings':
@@ -135,10 +138,7 @@ async function runCommand(
     case '/api/backup':
       return service.backup();
     case '/api/publish':
-      throw new InputError(
-        'Marketplace publishing is unavailable until authenticated integration validation is complete.',
-        409,
-      );
+      return service.publish(input.reviewId, input.positiveEdits);
     default:
       throw new InputError('Route not found.', 404);
   }
@@ -226,7 +226,10 @@ export function createApp(
           ? await runMarketplaceCommand(marketplaces!, path, input)
           : path.startsWith('/api/flipkart/')
             ? marketplaces
-              ? await marketplaces.runLegacyCommand(() => runFlipkartCommand(flipkart, path, input))
+              ? await marketplaces.runLegacyCommand(
+                  () => runFlipkartCommand(flipkart, path, input),
+                  path === '/api/flipkart/connect' || path === '/api/flipkart/check',
+                )
               : await runFlipkartCommand(flipkart, path, input)
             : await runCommand(service, path, input);
         service.log(path, `Completed in ${Date.now() - started} ms`, 'info', requestId);
