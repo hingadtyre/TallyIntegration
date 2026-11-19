@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Flipkart - Read-only listing package check",
-    "description": "Three read-only requests: get an access token, search listings, and get listing details. One token response script saves access_token for both listing requests. Edit raw JSON bodies directly. No pre-request scripts or tests. See postman/README.md.",
+    "description": "Listing and return-package research in one collection. Requests 01-03 retain the original token, listing search and listing details workflows. Requests 04-08 are targeted return and original-shipment reads. On 2026-11-19, 04 and 06 returned seven courier-return records and seven shipments for six orders; 09 returned no active handover for the sampled location. Request 10 remains prepared and unexecuted because no task identifiers were available. One token response script saves access_token for requests 02-11. Edit URL placeholders and raw JSON bodies directly. No pre-request scripts or test assertions; no approval, receipt, code-generation or handover-completion requests. See postman/README.md. Request 11 separately probes a Seller Hub report Shipment ID; its HTTP 500 result was inconclusive.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -136,6 +136,256 @@
           }
         },
         "description": "Uses {{access_token}} from the selected environment. Replace the sample sku_ids directly in the raw JSON body with up to ten exact seller SKUs. These example identifiers are not guaranteed to exist. Shipping package count is not automatically sale pack size."
+      },
+      "response": []
+    },
+    {
+      "name": "04 - Courier returns by return IDs",
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{access_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://api.flipkart.net/sellers/v2/returns?source=courier_return&returnIds=REPLACE_WITH_RETURN_ID",
+        "description": "Uses {{access_token}}. Replace REPLACE_WITH_RETURN_ID directly in the URL with an exact courier-return ID; use comma-separated IDs for a targeted group (up to 25). Reads aggregate return records, not independent physical-package receipt status. Live check on 2026-11-19: sent once, HTTP 200, seven matching courier-return records. This does not establish package-level receipt."
+      },
+      "response": []
+    },
+    {
+      "name": "05 - Customer returns by return IDs",
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{access_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://api.flipkart.net/sellers/v2/returns?source=customer_return&returnIds=REPLACE_WITH_RETURN_ID",
+        "description": "Uses {{access_token}}. Replace REPLACE_WITH_RETURN_ID directly in the URL with an exact customer-return ID; use comma-separated IDs for a targeted group (up to 25). An expected date is an estimate; return quantity is not a physical-package count."
+      },
+      "response": []
+    },
+    {
+      "name": "06 - Original packages by order IDs",
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{access_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://api.flipkart.net/sellers/v3/shipments?orderIds=REPLACE_WITH_ORDER_ID",
+        "description": "Uses {{access_token}}. Replace REPLACE_WITH_ORDER_ID directly in the URL with an exact order ID, or comma-separated order IDs. Inspect orderItems[].packageIds and subShipments[].packages. Join by order and order item; package and sub-shipment identifiers are scoped to their shipment. Original package structure does not establish which packages are returning. Live check on 2026-11-19: sent once, HTTP 200, seven shipments for six supplied orders. Further package relationships remain under investigation."
+      },
+      "response": []
+    },
+    {
+      "name": "07 - Original shipment tracking details",
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{access_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://api.flipkart.net/sellers/v3/shipments/REPLACE_WITH_SHIPMENT_ID",
+        "description": "Uses {{access_token}}. Replace REPLACE_WITH_SHIPMENT_ID directly in the URL with an original shipment ID from request 06, or comma-separated shipment IDs. Inspect subShipments[].courierDetails. These are original forward tracking references; do not assume they identify reverse parcels. Responses can contain buyer details; retain only the fields needed for research."
+      },
+      "response": []
+    },
+    {
+      "name": "08 - Courier returns by original tracking IDs",
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{access_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://api.flipkart.net/sellers/v2/returns?source=courier_return&trackingIds=REPLACE_WITH_TRACKING_ID",
+        "description": "Diagnostic lookup using {{access_token}}. Replace REPLACE_WITH_TRACKING_ID directly in the URL with an original forward tracking ID from request 07, or comma-separated IDs (up to 25). The prior live diagnostic returned HTTP 400 INVALID_RETURN_ID: No valid returns found. This is an expected possible result, not proof of a working reverse join."
+      },
+      "response": []
+    },
+    {
+      "name": "09 - Active return handovers",
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "POST",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{access_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://api.flipkart.net/sellers/v3/returns/tasks/initial-load",
+        "description": "Live check on 2026-11-19: sent once, HTTP 200; sellerConfig.enabledFor was DynamicStartEnd and feDetails was empty. No active handover or task identifiers were returned for the sampled location at that time; response observed on screen only. Uses {{access_token}}. Replace sellerLocationId directly in the raw JSON body with the intended seller location. Reads documented active return-handover sessions; only executives currently starting, scanning or ending handover may appear. In a populated feDetails object, each key is feId and that entry contains task.id. It does not generate a handover code or accept, reject or complete a return.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"sellerLocationId\": \"REPLACE_WITH_SELLER_LOCATION_ID\",\n  \"taskType\": \"RETURN\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "10 - Scanned return shipments",
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "POST",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{access_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://api.flipkart.net/sellers/v3/returns/tasks/shipments",
+        "description": "Prepared only; not sent because request 09 returned no taskId or feId for the sampled location. Uses {{access_token}}. Replace taskId and feId directly in the raw JSON body using an existing handover session from request 09. Reads scanned shipments with pageSize 20; a closed task may return TASK_CLOSED. If a nextUrl is returned, inspect it and use a separate HTTPS GET request on api.flipkart.net with the same token; do not overwrite this saved POST. Scanned status describes the handover session, not a complete reverse tracking history.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"taskId\": \"REPLACE_WITH_TASK_ID\",\n  \"feId\": \"REPLACE_WITH_FE_ID\",\n  \"pageSize\": 20\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "11 - Shipment lookup using report shipment ID",
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{access_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://api.flipkart.net/sellers/v3/shipments?shipmentIds=REPLACE_WITH_REPORT_SHIPMENT_ID",
+        "description": "Diagnostic lookup using {{access_token}}. Replace REPLACE_WITH_REPORT_SHIPMENT_ID directly in the URL with the exact Shipment ID from the Seller Hub returns report. Keep this separate from request 06, which searches by order IDs. A single live probe on 2026-11-19 using an H-prefixed report Shipment ID returned HTTP 500 DEPENDENT_SYSTEM_CALL_FAILED in 350 ms. This upstream failure is inconclusive: it establishes neither support nor lack of support for that identifier in this endpoint. No automatic retries or shipment mapping are established."
       },
       "response": []
     }

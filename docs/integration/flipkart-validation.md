@@ -1,6 +1,8 @@
 # Flipkart connection and listing validation
 
-**Updated 2026-11-18. An authorized read-only API check verified token access, standard listing discovery and package arrays for ten listings. The application import path still needs corrections identified below; marketplace writes remain unverified.**
+**Updated 2026-11-19. The authorized read-only API check on 18 November verified token access, standard listing discovery and package arrays for ten listings. The application import path still needs corrections identified below; marketplace writes remain unverified.**
+
+Separate [return-package feasibility research](flipkart-return-package-research.md) records the 2026-11-18/19 Seller Hub, API and official Ekart browser checks. All 28 original package tracking numbers across six courier-return orders exposed individual RTO histories, including different states and times within an order item. Supported automated carrier access, authoritative event meanings, customer-return package coverage and physical seller receipt remain unverified. Carrier hub receipt is not seller-confirmed receipt. Returns are not implemented in Stockbridge; the user put implementation on hold on 19 November while accepting the research and Postman changes.
 
 ## Live read-only package check on 2026-11-18
 

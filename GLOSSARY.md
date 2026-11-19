@@ -46,6 +46,20 @@ The number of physical base units consumed by one sold listing unit, such as two
 **Shipping package count**:
 The number of physical packages configured for one listing unit. For this seller's tyres, one tyre is shipped per package, making a verified package count evidence of pack size; this equivalence does not automatically apply to other categories or sellers.
 
+**Physical package**:
+An individually handled parcel in a delivery or return. One sold listing unit can occupy several physical packages, which may arrive separately.
+_Avoid_: Listing quantity, product pack
+
+**Courier return**:
+Goods sent back to the seller because delivery to the marketplace buyer was unsuccessful, also called return to origin (RTO).
+
+**Customer return**:
+Goods sent back after the marketplace buyer received them and requested a return.
+
+**Physical receipt**:
+The seller's confirmation that an individual returned package has arrived and has been checked. A marketplace or courier delivery status alone does not establish physical receipt.
+_Avoid_: Delivered when only a tracking status is known
+
 **Fulfillable pack quantity**:
 The number of complete packs that can be supplied from a stock item's physical quantity, before applying any marketplace advertising policy.
 
