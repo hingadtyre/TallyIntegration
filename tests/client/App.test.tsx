@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { render, screen, within, fireEvent, waitFor, response } from '../support/client-dom.js';
+import {
+  render,
+  screen,
+  within,
+  fireEvent,
+  waitFor,
+  response,
+  act,
+} from '../support/client-dom.js';
 import type { FlipkartConnectionStatus, Review, Snapshot } from '../../src/shared/contracts.js';
 import type {
   MarketplaceAccount,
@@ -45,6 +53,93 @@ test('startup failure exposes the server error and a retry action', async (t) =>
   await screen.findByText('Workspace could not be opened.');
   assert.ok(screen.getByRole('button', { name: 'Try again' }));
   assert.equal(screen.queryByRole('heading', { name: 'Inventory' }), null);
+});
+
+test('collapsing and expanding navigation preserves filters, the selected screen and unsaved inputs', async (t) => {
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    assert.equal(init?.method, undefined);
+    assert.equal(String(input), '/api/state');
+    return response(initialState('demo', 'unused'));
+  });
+  render(<App />);
+  await screen.findByRole('heading', { name: 'Inventory' });
+  const expand = screen.getByRole('button', { name: 'Expand sidebar' });
+  assert.equal(expand.getAttribute('aria-expanded'), 'false');
+  assert.equal(expand.textContent?.trim(), '');
+  fireEvent.click(expand);
+  const search = screen.getByRole('textbox', { name: 'Search stock items and listings' });
+  fireEvent.change(search, { target: { value: 'Apollo' } });
+
+  const collapse = screen.getByRole('button', { name: 'Collapse sidebar' });
+  assert.equal(collapse.getAttribute('aria-expanded'), 'true');
+  fireEvent.click(collapse);
+  assert.equal(
+    screen.getByRole('button', { name: 'Expand sidebar' }).getAttribute('aria-expanded'),
+    'false',
+  );
+  assert.equal((search as HTMLInputElement).value, 'Apollo');
+
+  const navigation = within(screen.getByRole('navigation', { name: 'Main navigation' }));
+  fireEvent.click(navigation.getByRole('button', { name: 'Settings' }));
+  assert.equal(
+    navigation.getByRole('button', { name: 'Settings' }).getAttribute('aria-current'),
+    'page',
+  );
+  const address = screen.getByRole('textbox', { name: /Connection address/ });
+  fireEvent.change(address, { target: { value: 'http://127.0.0.1:9001/' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+  assert.ok(screen.getByRole('heading', { name: 'Settings', level: 1 }));
+  assert.equal((address as HTMLInputElement).value, 'http://127.0.0.1:9001/');
+  assert.equal(
+    screen.getByRole('button', { name: 'Collapse sidebar' }).getAttribute('aria-expanded'),
+    'true',
+  );
+
+  fireEvent.click(navigation.getByRole('button', { name: 'Inventory' }));
+  assert.equal(
+    (screen.getByRole('textbox', { name: 'Search stock items and listings' }) as HTMLInputElement)
+      .value,
+    'Apollo',
+  );
+});
+
+test('narrow navigation closes after selection and resizing preserves the sidebar state', async (t) => {
+  const originalWidth = Object.getOwnPropertyDescriptor(window, 'innerWidth')!;
+  Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 800 });
+  t.after(() => Object.defineProperty(window, 'innerWidth', originalWidth));
+  t.mock.method(globalThis, 'fetch', async () => response(initialState('live', 'unused')));
+  render(<App />);
+  await screen.findByRole('heading', { name: 'Inventory' });
+
+  fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+  assert.equal(
+    screen.getByRole('button', { name: 'Collapse sidebar' }).getAttribute('aria-expanded'),
+    'true',
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  assert.ok(screen.getByRole('heading', { name: 'Settings', level: 1 }));
+  assert.equal(
+    screen.getByRole('button', { name: 'Expand sidebar' }).getAttribute('aria-expanded'),
+    'false',
+  );
+
+  act(() => {
+    Object.defineProperty(window, 'innerWidth', { value: 1200 });
+    window.dispatchEvent(new window.Event('resize'));
+  });
+  assert.equal(
+    screen.getByRole('button', { name: 'Expand sidebar' }).getAttribute('aria-expanded'),
+    'false',
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+  act(() => {
+    Object.defineProperty(window, 'innerWidth', { value: 1400 });
+    window.dispatchEvent(new window.Event('resize'));
+  });
+  assert.equal(
+    screen.getByRole('button', { name: 'Collapse sidebar' }).getAttribute('aria-expanded'),
+    'true',
+  );
 });
 
 test('an empty live workspace guides the user to connections and disables listing actions', async (t) => {

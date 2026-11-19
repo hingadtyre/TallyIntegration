@@ -12,6 +12,8 @@ A fresh live workspace has no company or seller account in its selectors. Tally 
 
 The first local foundation is implemented. It includes company-separated stock views, parent/child listing rows, search/brand/pack filters, selected or filtered bulk proposals, saved manual drafts, stale-review protection, Pause state, activity/diagnostic views, editable polling settings and verified manual SQLite backups.
 
+The sidebar starts collapsed at every screen size. Use the arrow below the Stockbridge logo to expand or collapse it. Navigation icons remain available in the collapsed view. On narrow screens, navigation expands over the page and closes after selecting a screen. Toggling the sidebar preserves the current screen and its unsaved inputs.
+
 **Marketplaces supports direct stock, MRP and selling-price edits with each editor's Apply action. In live mode Apply sends a real Flipkart request.** Accounts have independent credentials, seller binding, listing observations and outcomes. Refresh imports all five documented listing states and location stock; search and filters cover the complete last successful import. Tally setup is not required for this view. Settlement opens Seller Hub because a supported listing-settlement API has not been established.
 
 Inventory proposals and automatic Tally-to-Flipkart publishing remain disabled: `/api/publish` is still rejected, and Inventory drafts do not change stock. Direct edits preserve holds and sales allowances. Positive stock under Limited sales is blocked in live mode until order reconciliation exists or the seller explicitly returns that destination to Auto policy. Changing policy does not itself publish; Pause is retained.

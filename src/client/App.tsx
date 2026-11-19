@@ -9,6 +9,10 @@ import { MarketplacesScreen } from './screens/MarketplacesScreen.js';
 
 type Screen = 'inventory' | 'marketplaces' | 'activity' | 'connections' | 'settings';
 
+function isNarrowViewport() {
+  return window.innerWidth <= 960;
+}
+
 /** Navigation and company/account context only. Each screen owns its own controls. */
 export function App() {
   const workspace = useWorkspace();
@@ -16,6 +20,7 @@ export function App() {
   const [screen, setScreen] = useState<Screen>('inventory');
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
   const [selectedAccountId, setSelectedAccountId] = useState('');
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
   if (!state)
     return (
       <main className="startup">
@@ -46,15 +51,17 @@ export function App() {
   }
   function selectScreen(value: Screen) {
     setScreen(value);
+    if (isNarrowViewport()) setSidebarExpanded(false);
     workspace.dismissNotice();
     if (screen === 'marketplaces' && value === 'inventory') void workspace.refreshSnapshot();
   }
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
+    <div className={`app-shell ${sidebarExpanded ? 'sidebar-expanded' : 'sidebar-collapsed'}`}>
+      <aside className="sidebar" id="workspace-sidebar">
         <a
           href="#inventory"
           className="wordmark"
+          aria-label="Stockbridge inventory"
           onClick={(event) => {
             event.preventDefault();
             selectScreen('inventory');
@@ -67,6 +74,17 @@ export function App() {
             stockbridge<span className="wordmark-caption">TALLY · MARKETPLACES</span>
           </span>
         </a>
+        <button
+          type="button"
+          className="sidebar-toggle"
+          aria-label={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+          title={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+          aria-expanded={sidebarExpanded}
+          aria-controls="workspace-sidebar"
+          onClick={() => setSidebarExpanded(!sidebarExpanded)}
+        >
+          <Icon name="chevron" />
+        </button>
         <div className="sidebar-label">WORKSPACE</div>
         <nav aria-label="Main navigation">
           {(['inventory', 'marketplaces', 'activity', 'connections', 'settings'] as Screen[]).map(
@@ -74,6 +92,8 @@ export function App() {
               <button
                 key={value}
                 className={`nav-item ${screen === value ? 'active' : ''}`}
+                aria-label={value[0].toUpperCase() + value.slice(1)}
+                title={value[0].toUpperCase() + value.slice(1)}
                 aria-current={screen === value ? 'page' : undefined}
                 onClick={() => selectScreen(value)}
               >
