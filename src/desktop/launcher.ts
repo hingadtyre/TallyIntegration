@@ -2,8 +2,9 @@ import { spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { liveDashboardPort } from '../shared/dashboard-port.js';
 
-const dashboardUrl = 'http://127.0.0.1:4310';
+const dashboardUrl = `http://127.0.0.1:${liveDashboardPort()}`;
 
 export interface RuntimeRecord {
   application: 'stockbridge';
@@ -107,7 +108,7 @@ export async function runLauncher(
     );
     console.log(`Dashboard: ${dashboardUrl}\nData folder: ${dataDirectory}`);
     console.log(
-      'Read-only pilot. Seller-owned API credentials can be checked in Connections; stock synchronization remains unavailable.',
+      'Stockbridge reads Tally stock. Reviewed changes and enabled automatic updates can publish stock to Flipkart.',
     );
     return;
   }

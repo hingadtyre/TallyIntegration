@@ -3,6 +3,7 @@ import test from 'node:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { instanceResponds, parseRuntimeRecord, runLauncher } from '../../src/desktop/launcher.js';
+import { liveDashboardPort } from '../../src/shared/dashboard-port.js';
 import { storageFixture } from '../support/server-fixture.js';
 
 const record = {
@@ -14,6 +15,12 @@ const record = {
   url: 'http://127.0.0.1:4310',
   token: 'a'.repeat(64),
 };
+
+test('the dashboard port override accepts only a port number', () => {
+  assert.equal(liveDashboardPort('51932'), 51932);
+  for (const value of ['', '0', '-1', '65536', '123.5', '127.0.0.1:51932', 'https://example.com'])
+    assert.throws(() => liveDashboardPort(value), /must be a port number/);
+});
 
 test('status does not declare shutdown complete while its runtime record still exists', async (t) => {
   const fixture = storageFixture(t);
@@ -33,6 +40,7 @@ test('status does not declare shutdown complete while its runtime record still e
   assert.match(lines[0], /not responding or is still stopping/);
   assert.match(lines[0], /Do not update/);
   assert.ok(!lines.join('\n').includes('is not running.'));
+  assert.match(lines.join('\n'), /automatic updates can publish stock to Flipkart/);
 });
 
 test('desktop control only accepts a complete local live-instance record', () => {
