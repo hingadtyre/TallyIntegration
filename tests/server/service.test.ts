@@ -248,6 +248,37 @@ test('calculation is limited to its explicit company scope and failed scope is a
   );
 });
 
+test('bulk Calculate prepares nineteen drafts and identifies the pack that needs confirmation', async (t) => {
+  const f = fixture(t);
+  const ids = f.store.update((state) => {
+    const sample = state.listings.find((listing) => listing.id === 'listing-1')!;
+    return Array.from({ length: 20 }, (_, index) => {
+      const id = `bulk-${index}`;
+      state.listings.push({ ...sample, id, sku: id, verified: index !== 7 });
+      return id;
+    });
+  });
+  const result = await f.service.calculateAvailable('demo-a', ids);
+  assert.equal(result.calculation.filter((row) => row.status === 'ready').length, 19);
+  assert.deepEqual(
+    result.calculation.filter((row) => row.status === 'blocked'),
+    [
+      {
+        listingId: 'bulk-7',
+        status: 'blocked',
+        reason: 'Verify the mapping and pack size first.',
+        fix: 'pack',
+      },
+    ],
+  );
+  assert.equal(result.proposals.length, 19);
+  assert.equal(
+    result.proposals.some((row) => row.listingId === 'bulk-7'),
+    false,
+  );
+  assert.deepEqual(f.service.snapshot().proposals, result.proposals);
+});
+
 test('edited quantity and zero drafts survive calculation without activating policies', (t) => {
   const f = fixture(t);
   const original = f.service.snapshot().listings;

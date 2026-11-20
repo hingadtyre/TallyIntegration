@@ -72,6 +72,12 @@ A minimum marketplace quantity applied when at least one complete pack is physic
 **Low physical stock**:
 A stock balance at or below a configured threshold in base units. It is determined from physical stock, not the advertised marketplace quantity.
 
+**Company sync**:
+The seller’s permission for Stockbridge to publish automatic stock updates for eligible listings supplied by one Tally company, across its seller accounts. It covers each listing as soon as its stock and destination can be verified.
+
+**Listing trial**:
+A seller-approved publication of the calculated stock for one mapped listing at one seller location while company sync is off.
+
 **Automation pause**:
 A deliberate stop of all automatic stock publication for a marketplace listing, including zero updates, maintained until the seller resumes automation. Its underlying stock policy remains in place; observations and allowance accounting continue, and reviewed manual publication is still possible.
 _Avoid_: Disabled listing, deleted mapping

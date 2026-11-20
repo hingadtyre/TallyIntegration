@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { InventoryPublishResult, Review, Snapshot } from '../shared/contracts.js';
+import type {
+  CalculationResult,
+  InventoryPublishResult,
+  InventoryPublishRow,
+  Review,
+  Snapshot,
+} from '../shared/contracts.js';
+import type { AutomationPreview } from '../shared/automation.js';
 import { errorMessage, requestJson, type ActionResult } from './api.js';
 
 interface BackupResult {
@@ -105,6 +112,38 @@ export function useWorkspace() {
     [runAction],
   );
 
+  const calculate = useCallback(
+    (companyId: string, listingIds: string[]) =>
+      runAction(
+        'Calculating',
+        async () => {
+          const { calculation, ...next } = await requestJson<CalculationResult>('/calculate', {
+            companyId,
+            listingIds,
+          });
+          if (mounted.current) setState(next);
+          return calculation;
+        },
+        '',
+      ),
+    [runAction],
+  );
+
+  const previewAutomation = (companyId: string) =>
+    runAction(
+      'Checking company stock',
+      () => requestJson<AutomationPreview>('/automation/preview', { companyId }),
+      '',
+    );
+
+  const tryAutomation = (companyId: string, previewId: string, listingId: string) =>
+    runAction(
+      'Trying one listing',
+      () =>
+        requestJson<InventoryPublishRow>('/automation/trial', { companyId, previewId, listingId }),
+      '',
+    );
+
   const publishReview = useCallback(
     (reviewId: string, positiveEdits?: 'once' | 'allowance') =>
       runAction(
@@ -152,10 +191,20 @@ export function useWorkspace() {
           const next = await requestJson<Snapshot>('/refresh', companyId ? { companyId } : {});
           // A completed request can contain a failed Tally check and retained observations.
           if (mounted.current) setState(next);
-          if (next.connection.tally === 'offline') throw new Error(next.connection.message);
+          const selected = next.companies.find((company) => company.id === companyId);
+          const noVerifiedCompanies =
+            next.companies.length > 0 && next.companies.every((company) => company.stockIssue);
+          if (
+            next.mode === 'live' &&
+            (next.connection.tally !== 'online' || selected?.stockIssue || noVerifiedCompanies)
+          )
+            throw new Error(next.connection.message);
           return next;
         },
-        'Refresh completed. Saved observations are shown below.',
+        (next) =>
+          !next.companies.length || next.companies.some((company) => company.stockIssue)
+            ? next.connection.message
+            : 'Refresh completed. Saved observations are shown below.',
       ),
     [runAction],
   );
@@ -187,9 +236,12 @@ export function useWorkspace() {
     error,
     notice,
     mutate,
+    calculate,
     refreshSnapshot,
     refreshTally,
     prepareReview,
+    previewAutomation,
+    tryAutomation,
     publishReview,
     backUpNow,
     dismissError: () => setError(''),

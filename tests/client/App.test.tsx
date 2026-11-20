@@ -493,22 +493,195 @@ test('selected listings keep priority through zero draft, review, publication an
   assert.equal(screen.queryByRole('dialog'), null);
 });
 
-test('company automatic updates target the selected company and survive a refreshed snapshot', async (t) => {
+test('company activation reviews every seller across filters and requires a fresh explicit decision after a trial', async (t) => {
   const state = initialState('demo', 'unused');
+  state.mode = 'live';
   const company = state.companies[0];
   company.automation = false;
+  let previews = 0;
+  const writes: string[] = [];
+  const rows = [
+    {
+      listingId: 'trial-a',
+      sku: 'TRIAL',
+      accountId: 'a',
+      account: 'Seller A',
+      location: 'North',
+      observed: 3,
+      proposed: 5,
+      status: 'ready',
+      reason: null,
+      itemName: 'Tyre',
+    },
+    {
+      listingId: 'same-b',
+      sku: 'PAIR',
+      accountId: 'b',
+      account: 'Seller B',
+      location: 'South',
+      observed: 0,
+      proposed: 0,
+      status: 'ready',
+      reason: null,
+      itemName: 'Pair',
+    },
+    {
+      listingId: 'blocked-b',
+      sku: 'UNKNOWN',
+      accountId: 'b',
+      account: 'Seller B',
+      location: 'West',
+      observed: 2,
+      proposed: null,
+      status: 'waiting',
+      reason: 'Verify Set of.',
+      itemName: 'Tyre',
+    },
+    {
+      listingId: 'paused-a',
+      sku: 'PAUSED',
+      accountId: 'a',
+      account: 'Seller A',
+      location: 'East',
+      observed: 1,
+      proposed: null,
+      status: 'paused',
+      reason: 'Paused by the seller.',
+      itemName: 'Tyre',
+    },
+  ];
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     if (String(input) === '/api/state') return response(state);
+    const body = JSON.parse(String(init?.body));
+    if (String(input) === '/api/automation/preview') {
+      assert.deepEqual(body, { companyId: company.id });
+      return response({
+        id: 'preview-' + ++previews,
+        companyId: company.id,
+        companyName: company.name,
+        rows,
+      });
+    }
+    writes.push(String(input));
+    if (String(input) === '/api/automation/trial') {
+      assert.deepEqual(body, {
+        companyId: company.id,
+        previewId: 'preview-1',
+        listingId: 'trial-a',
+      });
+      assert.equal(company.automation, false);
+      rows[0].observed = 5;
+      return response({
+        listingId: 'trial-a',
+        sku: 'TRIAL',
+        status: 'confirmed',
+        message: 'Readback confirmed five.',
+      });
+    }
     assert.equal(String(input), '/api/automation');
     const expected = !company.automation;
-    assert.deepEqual(JSON.parse(String(init?.body)), { companyId: company.id, enabled: expected });
+    assert.deepEqual(body, {
+      companyId: company.id,
+      enabled: expected,
+      ...(expected && { previewId: 'preview-2' }),
+    });
     company.automation = expected;
     return response(state);
   });
   render(<App />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Enable automatic updates' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Review automatic updates' }));
+  const review = await screen.findByRole('dialog', { name: 'Review automatic updates' });
+  assert.ok(within(review).getByRole('heading', { name: 'Seller B' }));
+  assert.ok(within(review).getByText('Verify Set of.'));
+  assert.ok(within(review).getByText('1 would change'));
+  assert.ok(within(review).getByText('Already matches'));
+  assert.deepEqual(writes, []);
+  fireEvent.click(within(review).getByRole('button', { name: 'Try one listing' }));
+  fireEvent.click(
+    within(review).getByRole('button', { name: 'Choose TRIAL at North for Seller A' }),
+  );
+  assert.equal(within(review).queryByText('PAIR'), null);
+  assert.deepEqual(writes, []);
+  fireEvent.click(within(review).getByRole('button', { name: 'Publish this listing once' }));
+  await within(review).findByText('Readback confirmed five.');
+  assert.equal(within(review).queryByRole('button', { name: /Publish this/ }), null);
+  assert.equal(within(review).queryByRole('button', { name: /Enable automatic/ }), null);
+  fireEvent.click(within(review).getByRole('button', { name: 'Refresh company preview' }));
+  await within(review).findByText('0 would change');
+  fireEvent.click(
+    within(review).getByRole('button', { name: 'Enable automatic updates for this company' }),
+  );
   fireEvent.click(await screen.findByRole('button', { name: 'Turn off automatic updates' }));
-  await screen.findByRole('button', { name: 'Enable automatic updates' });
+  await screen.findByRole('button', { name: 'Review automatic updates' });
+  assert.deepEqual(writes, ['/api/automation/trial', '/api/automation', '/api/automation']);
+});
+
+test('an uncertain one-listing trial offers readback and requires a new preview before any other approval', async (t) => {
+  const state = initialState('demo', 'unused');
+  const company = state.companies[0];
+  company.automation = false;
+  const row = {
+    listingId: 'one',
+    sku: 'ONE',
+    accountId: 'acct',
+    account: 'Store',
+    location: 'Office',
+    itemName: 'Tyre',
+    status: 'ready',
+    reason: null,
+    observed: 0,
+    proposed: 5,
+  };
+  let writes = 0;
+  let previews = 0;
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    if (String(input) === '/api/state') return response(state);
+    if (String(input) === '/api/automation/preview')
+      return response({
+        id: 'review-' + ++previews,
+        companyId: company.id,
+        companyName: company.name,
+        rows: [
+          writes
+            ? {
+                ...row,
+                status: 'waiting',
+                proposed: null,
+                reason: 'Check the previous update result.',
+              }
+            : row,
+        ],
+      });
+    assert.equal(String(input), '/api/automation/trial');
+    writes++;
+    return response({
+      listingId: row.listingId,
+      sku: row.sku,
+      status: 'uncertain',
+      message: 'Readback is unavailable.',
+    });
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Try one listing' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Try one listing' });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Choose ONE at Office for Store' }));
+  const confirm = within(dialog).getByRole('button', { name: 'Simulate this listing once' });
+  fireEvent.click(confirm);
+  fireEvent.click(confirm);
+  await within(dialog).findByText('Check the update result');
+  assert.ok(within(dialog).getByText(/Open this SKU in Marketplaces/));
+  assert.equal(
+    within(dialog).queryByRole('button', { name: /Simulate this listing once|Enable automatic/ }),
+    null,
+  );
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Refresh company preview' }));
+  await within(dialog).findByText('Check the previous update result.');
+  assert.equal(
+    (within(dialog).getByRole('button', { name: 'Try one listing' }) as HTMLButtonElement).disabled,
+    true,
+  );
+  assert.equal(writes, 1);
+  assert.equal(company.automation, false);
 });
 
 test('pause and resume target one listing while preserving its limited-sales policy', async (t) => {
@@ -687,6 +860,90 @@ test('failed mapping keeps the dialog, selected listing and confirmation availab
   assert.equal(mappingAttempts, 1);
 });
 
+test('a mixed calculation links to the affected Set of and reviews only the ready draft', async (t) => {
+  const state = initialState('demo', 'unused');
+  state.listings = state.listings.filter((l) => ['listing-1', 'listing-2'].includes(l.id));
+  const [ready, blocked] = state.listings;
+  blocked.verified = false;
+  const draft = {
+    listingId: ready.id,
+    quantity: 5,
+    calculated: 5,
+    edited: false,
+    itemVersion: 1,
+    listingVersion: 1,
+    ruleVersion: 'flipkart-tyres-v1',
+    createdAt: new Date().toISOString(),
+    stale: false,
+  };
+  // The failed row still has an older draft. It must stay out of the ready review.
+  state.proposals = [{ ...draft, listingId: blocked.id }];
+  const reviews: string[][] = [];
+  t.mock.method(
+    globalThis,
+    'fetch',
+    async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/state') return response(state);
+      if (path === '/api/mappings') {
+        assert.equal(JSON.parse(String(options?.body)).listingId, blocked.id);
+        blocked.verified = true;
+        return response(state);
+      }
+      if (path === '/api/calculate' && blocked.verified) {
+        assert.deepEqual(JSON.parse(String(options?.body)).listingIds, [blocked.id]);
+        return response({
+          ...state,
+          proposals: [draft, { ...draft, listingId: blocked.id }],
+          calculation: [{ listingId: blocked.id, status: 'ready' }],
+        });
+      }
+      if (path === '/api/calculate')
+        return response({
+          ...state,
+          proposals: [...state.proposals, draft],
+          calculation: [
+            { listingId: ready.id, status: 'ready' },
+            {
+              listingId: blocked.id,
+              status: 'blocked',
+              reason: 'Confirm the pack size.',
+              fix: 'pack',
+            },
+          ],
+        });
+      if (path === '/api/review') {
+        reviews.push(JSON.parse(String(options?.body)).listingIds);
+        return response({
+          id: 'ready-review',
+          companyId: 'demo-a',
+          createdAt: draft.createdAt,
+          rows: [],
+          publishingEnabled: false,
+        });
+      }
+      return response({ error: 'Unexpected request' }, 404);
+    },
+  );
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Calculate' }));
+  await screen.findByText('1 draft ready · 1 listing needs Set of confirmation');
+  fireEvent.click(screen.getByRole('button', { name: /Fix Set of for/ }));
+  const dialog = await screen.findByRole('dialog', { name: 'Edit Set of' });
+  assert.ok(within(dialog).getByText(blocked.sku));
+  fireEvent.click(within(dialog).getByRole('button', { name: /Cancel/i }));
+  fireEvent.click(screen.getByRole('button', { name: /Review ready drafts/ }));
+  await screen.findByRole('dialog', { name: 'Review proposed stock' });
+  assert.deepEqual(reviews, [[ready.id]]);
+  fireEvent.click(screen.getByRole('button', { name: 'Back to inventory' }));
+  fireEvent.click(screen.getByRole('button', { name: /Fix Set of for/ }));
+  const repair = await screen.findByRole('dialog', { name: 'Edit Set of' });
+  fireEvent.click(within(repair).getByRole('checkbox', { name: /I confirm the item/ }));
+  fireEvent.click(within(repair).getByRole('button', { name: 'Save Set of' }));
+  await screen.findByText('2 drafts ready');
+  assert.equal(screen.queryByRole('button', { name: /Fix Set of for/ }), null);
+});
+
 test('a filtered quantity edit blocks review until saved and stays separate from observed stock', async (t) => {
   let state = initialState('demo', 'unused');
   const preparedAt = new Date().toISOString();
@@ -723,7 +980,7 @@ test('a filtered quantity edit blocks review until saved and stays separate from
               },
             ],
           };
-        return response(state);
+        return response({ ...state, calculation: [{ listingId: 'listing-2', status: 'ready' }] });
       }
       if (path === '/api/proposals') {
         assert.equal(body.listingId, 'listing-2');

@@ -10,9 +10,9 @@ function ruleVersion(state: Snapshot, listing: Listing): string {
 export function requireStockSource(
   state: Snapshot,
   listing: Listing,
+  item = state.items.find((row) => row.id === listing.itemId),
 ): { item: StockItem; physical: number; packSize: number } {
-  const item = state.items.find((row) => row.id === listing.itemId);
-  if (!item || item.physical === null || !item.observedAt)
+  if (!item || item.id !== listing.itemId || item.physical === null || !item.observedAt)
     throw new InputError('Refresh valid source stock before calculating.');
   if (!listing.verified || !listing.packSize)
     throw new InputError('Verify the mapping and pack size first.');
@@ -26,11 +26,10 @@ export function requireStockSource(
   const observedAt = Date.parse(item.observedAt);
   const maximumAge = Math.max(120_000, state.settings.tallySeconds * 3000);
   const stale = !Number.isFinite(observedAt) || Date.now() - observedAt > maximumAge;
+  const company = state.companies.find((row) => row.id === item.companyId);
   if (
     state.mode === 'live' &&
-    (state.connection.tally !== 'online' ||
-      stale ||
-      !state.companies.find((company) => company.id === item.companyId)?.lastSuccess)
+    (state.connection.tally !== 'online' || stale || !company?.lastSuccess || company.stockIssue)
   ) {
     throw new InputError('Tally stock is stale. Refresh before reviewing changes.');
   }
@@ -42,8 +41,9 @@ export function desiredStock(
   listing: Listing,
   policy: 'current' | 'normal' = 'current',
   availableUnits?: number,
+  item?: StockItem,
 ): number {
-  const source = requireStockSource(state, listing);
+  const source = requireStockSource(state, listing, item);
   return calculateStock({
     physical: availableUnits ?? source.physical,
     packSize: source.packSize,

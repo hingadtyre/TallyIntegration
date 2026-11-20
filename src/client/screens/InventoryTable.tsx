@@ -176,6 +176,7 @@ export function ItemRows({
                 <span className="status-dot" />
                 {policyLabel(listing)}
               </span>
+              <small>{listing.automationStatus ?? 'Stockbridge status unavailable'}</small>
               <button
                 className={`automation-button ${listing.paused ? 'is-paused' : ''}`}
                 disabled={busy}

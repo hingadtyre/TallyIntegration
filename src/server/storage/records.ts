@@ -42,6 +42,7 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
     .prepare(
       `
     SELECT id, name, automation, source, last_success AS lastSuccess
+      ${schemaVersion(database) >= 8 ? ', stock_issue AS stockIssue' : ''}
     FROM companies ORDER BY sort_order
   `,
     )
@@ -209,6 +210,7 @@ export function writeSnapshot(database: DatabaseSync, input: Snapshot): void {
       next_poll: state.connection.nextPoll,
     },
   ]);
+  const hasCompanyStockIssue = schemaVersion(database) >= 8;
   syncTable(
     database,
     'companies',
@@ -219,6 +221,7 @@ export function writeSnapshot(database: DatabaseSync, input: Snapshot): void {
       automation: Number(company.automation),
       source: company.source,
       last_success: company.lastSuccess,
+      ...(hasCompanyStockIssue && { stock_issue: company.stockIssue ?? null }),
       sort_order: index,
     })),
   );

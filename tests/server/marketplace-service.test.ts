@@ -466,6 +466,205 @@ async function mappedInventory(
   };
 }
 
+test('Inventory and Marketplaces report the same automatic stock state as setup and pending work change', async (t) => {
+  const s = await mappedInventory(t, 'manual', { coverage: false });
+  const status = () => {
+    const inventory = s.service.snapshot().listings.find((row) => row.id === s.listing.id)!;
+    const listing = s.f.service
+      .page(new URLSearchParams({ accountId: s.account.id }))
+      .listings.find((row) => row.id === s.remote.id)!;
+    assert.equal(listing.status, 'ACTIVE');
+    assert.equal(
+      listing.stockPolicies.find((row) => row.locationId === s.listing.location)?.automationStatus,
+      inventory.automationStatus,
+    );
+    return inventory.automationStatus!;
+  };
+  assert.equal(status(), 'Company updates off');
+  s.service.automation(s.item.companyId, true);
+  assert.match(status(), /Confirm the starting stock/);
+  s.service.pause(s.item.companyId, [s.listing.id], true);
+  assert.equal(status(), 'Paused');
+  await s.enableCoverage();
+  s.service.pause(s.item.companyId, [s.listing.id], false);
+  assert.equal(status(), 'Queued for a stock check');
+  await s.service.refresh(s.item.companyId);
+  assert.equal(status(), 'Ready for the next Tally change or verified sale');
+  s.f.store.updateMarketplace((market) => {
+    market.changes[0].state = 'uncertain';
+  });
+  assert.match(status(), /previous update result/);
+});
+
+test('company preview and trial use calculated stock, preserve drafts, and require fresh approval for each destination', async (t) => {
+  const s = await mappedInventory(t, 'manual', { packSize: 1, physical: 8, tyreFloor: false });
+  const companyId = s.item.companyId;
+  s.orders.push({
+    orderItemId: 'trial-sale',
+    orderId: 'trial-order',
+    invoiceNumber: null,
+    listingId: s.remote.id,
+    sku: s.remote.sku,
+    locationId: s.listing.location,
+    quantity: 2,
+    orderDate: new Date().toISOString(),
+  });
+  s.service.edit(companyId, s.listing.id, 0);
+  const previous = s.service.snapshot();
+  const journal = s.f.store.readStockCoverage(companyId);
+  const review = await s.service.automationReviews.preview(companyId);
+  assert.deepEqual(
+    review.rows.map((r) => [r.status, r.observed, r.proposed]),
+    [['ready', 5, 6]],
+  );
+  assert.deepEqual(s.service.snapshot(), previous);
+  assert.deepEqual(s.f.store.readStockCoverage(companyId), journal);
+  assert.equal(s.f.writes.length, 0);
+  const trial = () => s.service.automationReviews.trial(companyId, review.id, s.listing.id);
+  assert.equal((await trial()).status, 'confirmed');
+  assert.equal(s.remote.locations[0].quantity, 6);
+  assert.equal(s.remote.locations[1].quantity, 3);
+  const after = s.service.snapshot();
+  assert.equal(after.companies[0].automation, false);
+  assert.deepEqual(
+    after.proposals,
+    previous.proposals.map((draft) => ({ ...draft, stale: true })),
+  );
+  const row = after.listings.find((l) => l.id === s.listing.id)!;
+  assert.equal(row.policy, 'auto');
+  assert.equal(row.paused, false);
+  await assert.rejects(trial, /fresh company preview/);
+  const matching = await s.service.automationReviews.preview(companyId);
+  assert.equal(
+    (await s.service.automationReviews.trial(companyId, matching.id, s.listing.id)).status,
+    'unchanged',
+  );
+  assert.deepEqual(
+    s.f.writes.map((w) => w.quantity),
+    [6],
+  );
+});
+
+test('a trial refuses changed stock and uncertain updates; company approval includes hidden sellers and waiting rows', async (t) => {
+  const s = await mappedInventory(t);
+  const companyId = s.item.companyId;
+  const preview = () => s.service.automationReviews.preview(companyId);
+  const trial = (id: string) => s.service.automationReviews.trial(companyId, id, s.listing.id);
+  const enable = (id: string) =>
+    s.service.automationReviews.enable(companyId, id, () => s.service.automation(companyId, true));
+  const changed = await preview();
+  s.remote.locations[0].quantity = 1;
+  assert.equal((await trial(changed.id)).status, 'blocked');
+  assert.equal(s.f.writes.length, 0);
+  const stale = await preview();
+  s.remote.locations[0].quantity = 2;
+  await assert.rejects(enable(stale.id), /scope or stock changed/);
+  assert.equal(s.service.snapshot().companies[0].automation, false);
+  const beforeMapping = await preview();
+  const seller = await s.f.add('seller-b');
+  const other = s.service.snapshot().listings.find((l) => l.accountId === seller.id)!;
+  s.service.mapping({
+    itemId: s.item.id,
+    listingId: other.id,
+    listingVersion: other.version,
+    confirmPackEvidence: true,
+    packSource: 'manual',
+    packSize: 1,
+    sourceScope: 'company',
+    tyreFloor: false,
+  });
+  await assert.rejects(enable(beforeMapping.id), /mappings or stock evidence changed/);
+  s.service.pause(companyId, [other.id], true);
+  const waiting = await preview();
+  assert.equal(waiting.rows.length, 2);
+  assert.equal(waiting.rows.find((r) => r.listingId === other.id)?.status, 'paused');
+  assert.equal(waiting.rows.find((r) => r.listingId === s.listing.id)?.status, 'waiting');
+  assert.ok((await enable(waiting.id)).companies[0].automation);
+  assert.deepEqual(s.f.writes, []);
+  s.service.automation(companyId, false);
+  // A pending or uncertain previous request blocks a trial even for a calculated zero.
+  s.setPhysical(0);
+  await s.service.refresh();
+  const zero = await preview();
+  s.f.setFailWrite('after');
+  assert.equal((await trial(zero.id)).status, 'uncertain');
+  s.f.setFailRead(false);
+  const blocked = await preview();
+  assert.equal(blocked.rows.find((r) => r.listingId === s.listing.id)?.status, 'waiting');
+  assert.match(blocked.rows.find((r) => r.listingId === s.listing.id)!.reason!, /previous update/);
+  await assert.rejects(trial(blocked.id), /ready listing/);
+  assert.equal(s.f.writes.length, 1);
+});
+
+test('a trial rechecks its selected destination when another stock item changes after company preview', async (t) => {
+  const s = await mappedInventory(t, 'manual', { coverage: false });
+  const companyId = s.item.companyId;
+  const secondItem = {
+    ...s.item,
+    id: 'other-item',
+    externalId: 'other',
+    name: 'Another tyre',
+    physical: 0,
+  };
+  s.f.store.update((state) => state.items.push(secondItem));
+  const second = s.service.snapshot().listings.find((l) => l.location === 'warehouse-b')!;
+  s.service.mapping({
+    itemId: secondItem.id,
+    listingId: second.id,
+    listingVersion: second.version,
+    confirmPackEvidence: true,
+    packSize: 1,
+    packSource: 'manual',
+    sourceScope: 'company',
+    tyreFloor: false,
+  });
+  await s.enableCoverage();
+  const preview = await s.service.automationReviews.preview(companyId);
+  assert.equal(preview.rows.filter((r) => r.status === 'ready').length, 2);
+  s.f.store.update((state) => {
+    const item = state.items.find((i) => i.id === secondItem.id)!;
+    item.physical = 4;
+    item.version++;
+  });
+  const trial = await s.service.automationReviews.trial(companyId, preview.id, s.listing.id);
+  assert.equal(trial.status, 'confirmed', trial.message);
+  assert.deepEqual(
+    s.remote.locations.map((l) => l.quantity),
+    [7, 3],
+  );
+  assert.equal(s.service.snapshot().companies[0].automation, false);
+});
+
+test('the automation API requires the reviewed company before enabling and invalidates competing approvals', async (t) => {
+  const s = await mappedInventory(t);
+  const app = createApp(s.service, s.f.folder, undefined, undefined, s.f.service);
+  const address = await listen(app);
+  t.after(() => close(app));
+  const post = (path: string, fields: Record<string, unknown>) =>
+    fetch(address + '/api/automation' + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Stockbridge-Request': '1' },
+      body: JSON.stringify({ companyId: s.item.companyId, ...fields }),
+    });
+  assert.equal((await post('', { enabled: true })).status, 409);
+  const first = (await (await post('/preview', {})).json()) as { id: string };
+  assert.equal(
+    (await post('/trial', { previewId: first.id, listingId: 'outside-review' })).status,
+    409,
+  );
+  const a = (await (await post('/preview', {})).json()) as { id: string };
+  const b = (await (await post('/preview', {})).json()) as { id: string };
+  assert.equal(
+    (await post('', { enabled: true, previewId: a.id, companyId: 'another' })).status,
+    409,
+  );
+  assert.equal((await post('', { enabled: true, previewId: a.id })).status, 200);
+  assert.equal((await post('', { enabled: false })).status, 200);
+  assert.equal((await post('', { enabled: true, previewId: b.id })).status, 409);
+  assert.equal(s.service.snapshot().companies[0].automation, false);
+  assert.deepEqual(s.f.writes, []);
+});
+
 test('reviewed Inventory publication sends only the captured destination, confirms it, and rejects replay or stale proposals', async (t) => {
   const s = await mappedInventory(t);
   const review = s.prepare();
@@ -574,6 +773,72 @@ test('restocking from four to six publishes five until the Flipkart order is bil
     s.service.snapshot().listings.find((row) => row.id === s.listing.id)!.syncPendingItemVersion,
     null,
   );
+});
+
+test('the Tally poll publishes a healthy company while its peer fails and blocks a reviewed write after a company failure', async (t) => {
+  const s = await mappedInventory(t);
+  const due = new Map<number, () => void>();
+  let failing = 'b';
+  let slowReadStarted!: () => void;
+  let releaseRead!: () => void;
+  const readingPeer = new Promise<void>((resolve) => {
+    slowReadStarted = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    releaseRead = resolve;
+  });
+  const running = new InventoryService(s.f.store, {
+    marketplaces: s.f.service,
+    timers: {
+      now: Date.now,
+      schedule(callback, delay) {
+        due.set(delay, callback);
+        return () => due.delete(delay);
+      },
+    },
+    createTallyReader: () => ({
+      listCompanies: async () => [
+        { externalId: 'a', name: 'Tally company' },
+        { externalId: 'b', name: 'Other company' },
+      ],
+      async readStock(company) {
+        if (company.externalId === failing) throw new Error('Company unavailable');
+        if (company.externalId !== 'a') {
+          slowReadStarted();
+          await released;
+          return [];
+        }
+        const { externalId, name, unit, physical } = s.item;
+        return [{ externalId, name, unit, physical }];
+      },
+    }),
+  });
+  running.automation(s.item.companyId, true);
+  running.start();
+  try {
+    await running.idle();
+    const interval = s.service.snapshot().settings.tallySeconds * 1000;
+    due.get(interval)!();
+    await running.idle();
+    assert.deepEqual(
+      s.f.writes.map((write) => write.quantity),
+      [7],
+    );
+    assert.ok(due.has(interval), 'a working company keeps its normal interval');
+    running.edit(s.item.companyId, s.listing.id, 0);
+    const review = running.review(s.item.companyId, [s.listing.id]);
+    failing = 'a';
+    due.get(interval)!();
+    await readingPeer;
+    const [result] = (await running.publish(review.id)).rows;
+    assert.equal(result.status, 'blocked');
+    assert.match(result.message, /stale|refresh/i);
+    assert.equal(s.f.writes.length, 1);
+  } finally {
+    releaseRead();
+    running.stop();
+    await running.idle();
+  }
 });
 
 test('the order poll takes another seller’s pair offline after one single sells, without waiting for Tally', async (t) => {
@@ -807,11 +1072,43 @@ test('a manual edit during Calculate is preserved and an existing edited draft s
     s.service.edit(s.item.companyId, s.listing.id, 1);
   });
   const calculate = () => s.service.calculateAvailable(s.item.companyId, [s.listing.id]);
-  await assert.rejects(calculate(), /selected draft changed/);
+  const changed = await calculate();
+  assert.equal(changed.calculation[0].status, 'blocked');
+  assert.match(changed.calculation[0].reason!, /selected draft changed/);
   s.setOrdersOffline(true);
   const draft = (await calculate()).proposals[0];
   assert.equal(draft.quantity, 1);
   assert.equal(draft.edited, true);
+});
+
+test('bulk Calculate keeps a verified zero draft when shared order coverage blocks a positive row', async (t) => {
+  const s = await mappedInventory(t, 'manual', { coverage: false });
+  const zero = s.service.snapshot().listings.find((row) => row.location === 'warehouse-b')!;
+  s.service.mapping({
+    itemId: s.item.id,
+    listingId: zero.id,
+    listingVersion: zero.version,
+    confirmPackEvidence: true,
+    packSource: 'manual',
+    packSize: 50,
+    sourceScope: 'company',
+    tyreFloor: false,
+  });
+  await s.enableCoverage();
+  s.setOrdersOffline(true);
+  const result = await s.service.calculateAvailable(s.item.companyId, [s.listing.id, zero.id]);
+  assert.deepEqual(
+    result.calculation.map((row) => [row.listingId, row.status]),
+    [
+      [s.listing.id, 'blocked'],
+      [zero.id, 'ready'],
+    ],
+  );
+  assert.deepEqual(
+    result.proposals.map((p) => [p.listingId, p.quantity]),
+    [[zero.id, 0]],
+  );
+  assert.equal(s.f.writes.length, 0);
 });
 
 test('unknown order coverage and failed reads keep positive work pending and retry on unchanged Tally stock', async (t) => {

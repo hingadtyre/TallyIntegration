@@ -5,6 +5,7 @@ export interface Company {
   automation: boolean;
   source: 'tally' | 'demo';
   lastSuccess: string | null;
+  stockIssue?: 'read-failed' | 'unloaded' | 'not-checked';
 }
 export interface StockItem {
   id: string;
@@ -33,6 +34,8 @@ export interface FlipkartConnectionStatus {
   message: string;
 }
 export interface Listing {
+  /** Read-only status of automatic publication for this destination. */
+  automationStatus?: string;
   /** A Tally balance change still awaiting dispatch for this destination. */
   syncPendingItemVersion?: number | null;
   /** A verified order queued a decrease check for this shared stock item. */
@@ -70,6 +73,16 @@ export interface Proposal {
   ruleVersion: string;
   createdAt: string;
   stale: boolean;
+}
+export interface CalculationRow {
+  listingId: string;
+  status: 'ready' | 'preserved' | 'blocked';
+  reason?: string;
+  fix?: 'pack';
+}
+/** Per-row results belong only to the Calculate command that requested them. */
+export interface CalculationResult extends Snapshot {
+  calculation: CalculationRow[];
 }
 export interface Activity {
   id: string;

@@ -400,32 +400,42 @@ export class StockAvailabilityService {
     };
   }
 
-  async forItem(companyId: string, itemId: string, batch?: object): Promise<CheckedStock> {
-    return (await this.companyCheck(companyId, batch)).forItem(itemId);
+  async forItem(
+    companyId: string,
+    itemId: string,
+    batch?: object,
+    readOnly = false,
+  ): Promise<CheckedStock> {
+    return (await this.companyCheck(companyId, batch, readOnly)).forItem(itemId);
   }
 
   async checkOrders(companyId: string, batch: object): Promise<void> {
     await this.companyCheck(companyId, batch);
   }
 
-  private async companyCheck(companyId: string, batch?: object): Promise<CompanyCheck> {
+  private async companyCheck(
+    companyId: string,
+    batch?: object,
+    readOnly = false,
+  ): Promise<CompanyCheck> {
     let checks = batch && this.batches.get(batch);
     if (batch && !checks) {
       checks = new Map();
       this.batches.set(batch, checks);
     }
-    const recent = checks?.get(companyId);
+    const cacheKey = JSON.stringify([companyId, readOnly]);
+    const recent = checks?.get(cacheKey);
     if (recent && Date.now() <= recent.until) return recent.read;
     // Each reader merges an entire company journal. Serialize local readers so
     // overlapping destination updates never replace each other's observations.
     const previous = this.pending.get(companyId);
     const result = (previous ?? Promise.resolve())
       .catch(() => {})
-      .then(() => this.capture(companyId, batch));
+      .then(() => this.capture(companyId, batch, readOnly));
     this.pending.set(companyId, result);
     if (checks) {
       const entry = { until: Infinity, read: result };
-      checks.set(companyId, entry);
+      checks.set(cacheKey, entry);
       // The result is shared only with destinations in this Inventory operation.
       // A new operation always starts new reads, including after a failed batch.
       void result
@@ -441,7 +451,11 @@ export class StockAvailabilityService {
     }
   }
 
-  private async capture(companyId: string, batch?: object): Promise<CompanyCheck> {
+  private async capture(
+    companyId: string,
+    batch?: object,
+    readOnly = false,
+  ): Promise<CompanyCheck> {
     const ctx = configuration(this.store, companyId);
     const coverage = this.store.readStockCoverage(companyId);
     if (!coverage || coverage.signature !== ctx.signature)
@@ -509,15 +523,17 @@ export class StockAvailabilityService {
         }
         verify();
         coverage.orders = mergeOrders(coverage, rule.accountId, orders);
-        const queued = saveOrderReceipts(this.store, ctx, coverage, rule.accountId);
-        expected = journalVersion(coverage);
-        if (queued) this.onPending?.(companyId, batch);
+        if (!readOnly) {
+          const queued = saveOrderReceipts(this.store, ctx, coverage, rule.accountId);
+          expected = journalVersion(coverage);
+          if (queued) this.onPending?.(companyId, batch);
+        }
       }
       verify();
       // This watermark describes a complete order scan. Publication additionally
       // checks the bills and balances below even if every receipt is familiar.
       coverage.checkedThrough = to;
-      this.store.saveStockCoverage(coverage);
+      if (!readOnly) this.store.saveStockCoverage(coverage);
       const readBooks = async () => {
         try {
           const before = await balances();

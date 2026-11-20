@@ -36,7 +36,7 @@ export class Store {
         if (mode === 'live') {
           state.connection.tally = 'not-checked';
           state.connection.message = 'Fresh Tally verification required after startup.';
-          for (const company of state.companies) company.lastSuccess = null;
+          for (const company of state.companies) company.stockIssue = 'not-checked';
         }
       });
     } catch (error) {

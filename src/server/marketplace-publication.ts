@@ -38,7 +38,7 @@ type PendingStockSync = {
 };
 type InventoryEvidence = { available?: number; verify: () => void };
 
-function blocksListing(change: MarketplaceChange, accountId: string, listingId: string) {
+export function blocksListing(change: MarketplaceChange, accountId: string, listingId: string) {
   return (
     change.accountId === accountId &&
     change.listingId === listingId &&
@@ -181,7 +181,7 @@ function sameBaseline(
     : before.mrp === after.mrp && before.sellingPrice === after.sellingPrice;
 }
 
-function automaticRetryAt(
+export function automaticRetryAt(
   changes: MarketplaceChange[],
   listing: MarketplaceListing,
   edit: MarketplaceEdit,
@@ -360,7 +360,11 @@ export class MarketplacePublication {
       edit.kind === 'stock' &&
       listing.locations.find((loc) => loc.id === edit.locationId)?.status ===
         before.locations.find((loc) => loc.id === edit.locationId)?.status;
-    if (!orderStockDrift && !sameBaseline(listing, before, edit)) {
+    const baselineMatches = intent?.trial
+      ? before.locations.find((location) => location.id === intent.trial!.location)?.quantity ===
+        intent.trial.observed
+      : sameBaseline(listing, before, edit);
+    if (!orderStockDrift && !baselineMatches) {
       this.saveObservation(before);
       throw new InputError(
         'Flipkart changed since this editor was opened. Refresh and review the latest value.',
@@ -428,7 +432,7 @@ export class MarketplacePublication {
           throw new InputError('The stock target changed. Review the new calculation.', 409);
         activateInventoryIntent(state, intent, target.listing);
         if (matchesEdit(before, edit)) {
-          if (intent.orderOnly) {
+          if (intent.orderOnly || intent.trial) {
             const updated = { ...before, version: latest.version + 1 };
             current.listings[current.listings.indexOf(latest)] = updated;
             updateInventoryObservations(state, updated);

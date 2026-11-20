@@ -1,12 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 /** Each managed record has an explicit table. Array order is presentation state,
  * so sort_order is retained without making names or positions into identities. */
 export function createSchema(
   database: DatabaseSync,
-  version: 6 | 7 = CURRENT_SCHEMA_VERSION,
+  version: 6 | 7 | 8 = CURRENT_SCHEMA_VERSION,
 ): void {
   database.exec(`
     CREATE TABLE app_metadata (
@@ -110,7 +110,15 @@ export function createSchema(
   createPackSchema(database);
   createBillingSchema(database);
   createStockCoverageSchema(database);
-  if (version === 7) upgradeOrderSyncSchema(database);
+  if (version >= 7) upgradeOrderSyncSchema(database);
+  if (version >= 8) addCompanyStockIssue(database);
+}
+
+export function addCompanyStockIssue(database: DatabaseSync): void {
+  database.exec(`
+    ALTER TABLE companies ADD COLUMN stock_issue TEXT
+      CHECK (stock_issue IN ('read-failed', 'unloaded', 'not-checked'));
+  `);
 }
 
 /** Old uncertain writes have no recorded request finality and must stay that way. */

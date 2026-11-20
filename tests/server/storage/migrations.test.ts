@@ -216,6 +216,28 @@ test('schema five preserves saved billing setup and leaves the stock baseline un
   assert.deepEqual(store.read(), original);
 });
 
+test('upgrading a version-seven live company retains its last read and requires a fresh check on restart', (t) => {
+  const f = fixture(t);
+  const state = initialState('live', join(f.directory, 'backups'));
+  const lastSuccess = '2026-11-07T08:00:00.000Z';
+  state.companies.push({
+    id: 'tally:a',
+    name: 'Company A',
+    source: 'tally',
+    automation: false,
+    lastSuccess,
+  });
+  queryFile(f.file, (db) => {
+    createSchema(db, 7);
+    db.exec('PRAGMA user_version = 7');
+    writeSnapshot(db, state);
+  });
+  const store = f.open('live');
+  assert.ok(store.migrationBackupPath);
+  assert.deepEqual(store.read().companies, [{ ...state.companies[0], stockIssue: 'not-checked' }]);
+  assert.equal(f.open('live').read().companies[0].lastSuccess, lastSuccess);
+});
+
 test('a version-two migration failure rolls back new tables and preserves its pre-upgrade backup', (t) => {
   const f = fixture(t);
   const original = legacyState(f.directory);

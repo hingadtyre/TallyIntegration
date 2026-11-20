@@ -1,12 +1,21 @@
 import { useCallback, useState } from 'react';
-import type { Listing, Review, Snapshot, StockItem } from '../../shared/contracts.js';
+import type { AutomationPreview } from '../../shared/automation.js';
+import type {
+  CalculationRow,
+  Listing,
+  Review,
+  Snapshot,
+  StockItem,
+} from '../../shared/contracts.js';
 import { actionScope, inventoryGroups } from '../selectors.js';
 import { Icon, Stat } from '../components.js';
-import { formatDateTime as time } from '../format.js';
+import { formatCompanyStockIssue, formatDateTime as time } from '../format.js';
 import type { Workspace } from '../useWorkspace.js';
 import { ItemRows } from './InventoryTable.js';
 import { HistoryDialog, RemoveMappingDialog, ReviewDialog } from './InventoryDialogs.js';
 import { MappingDialog } from './MappingDialog.js';
+import { AutomationDialog } from './AutomationDialog.js';
+import { CalculationFeedback } from './CalculationFeedback.js';
 
 interface InventoryScreenProps {
   state: Snapshot;
@@ -34,9 +43,17 @@ export function InventoryScreen({
   const [dirtyListings, setDirtyListings] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [review, setReview] = useState<Review | null>(null);
+  const [automationReview, setAutomationReview] = useState<{
+    preview: AutomationPreview;
+    trial: boolean;
+  } | null>(null);
   const [mapping, setMapping] = useState<{ item: StockItem; listingId?: string } | null>(null);
   const [removeListing, setRemoveListing] = useState<Listing | null>(null);
   const [historyListing, setHistoryListing] = useState<Listing | null>(null);
+  const [lastCalculation, setLastCalculation] = useState<{
+    scope: string;
+    rows: CalculationRow[];
+  } | null>(null);
 
   const markDirty = useCallback((id: string, dirty: boolean) => {
     setDirtyListings((current) => {
@@ -51,6 +68,11 @@ export function InventoryScreen({
   const filters = { companyId, accountId, query, brand, pack };
   const groups = inventoryGroups(state, filters);
   const scope = actionScope(state, filters, selected);
+  const scopeKey = JSON.stringify([companyId, accountId, [...scope].sort()]);
+  const calculation = lastCalculation?.scope === scopeKey ? lastCalculation.rows : null;
+  const blockedIds = new Set(
+    calculation?.filter((row) => row.status === 'blocked').map((row) => row.listingId),
+  );
   const company = state.companies.find((value) => value.id === companyId);
   const account = state.accounts.find((value) => value.id === accountId);
   const companyItems = state.items.filter((item) => item.companyId === companyId);
@@ -67,7 +89,8 @@ export function InventoryScreen({
   const visibleIds = groups.flatMap((group) => group.listings.map((listing) => listing.id));
   const hiddenSelected = selected.filter((id) => !visibleIds.includes(id)).length;
   const proposals = new Map(state.proposals.map((proposal) => [proposal.listingId, proposal]));
-  const scopedProposalCount = scope.filter((id) => proposals.has(id)).length;
+  const reviewIds = scope.filter((id) => !blockedIds.has(id));
+  const scopedProposalCount = reviewIds.filter((id) => proposals.has(id)).length;
   const draftCount = companyListings.filter((listing) => proposals.has(listing.id)).length;
   const brandOptions = [...new Set(companyItems.map((item) => item.brand).filter(Boolean))].sort();
   const packOptions = [
@@ -78,14 +101,32 @@ export function InventoryScreen({
     ),
   ].sort((a, b) => a - b);
 
-  async function openReview(ids: string[] = scope) {
+  async function openReview(ids: string[] = reviewIds) {
     if (dirtyListings.length) return;
     const result = await workspace.prepareReview(companyId, ids);
     if (result.ok) setReview(result.value);
   }
+  async function calculate() {
+    setLastCalculation(null);
+    const result = await workspace.calculate(companyId, scope);
+    if (result.ok) setLastCalculation({ scope: scopeKey, rows: result.value });
+  }
   function toggleSelection(id: string) {
     setSelected((current) =>
       current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
+    );
+  }
+  async function openAutomation(trial: boolean) {
+    const result = await workspace.previewAutomation(companyId);
+    if (result.ok) setAutomationReview({ preview: result.value, trial });
+  }
+  function disableAutomation() {
+    setAutomationReview(null);
+    void mutate(
+      '/automation',
+      { companyId, enabled: false },
+      'Saving company automation',
+      'Automatic stock updates turned off for this company.',
     );
   }
   function toggleAll() {
@@ -165,22 +206,26 @@ export function InventoryScreen({
                 Tally stock changes and verified Flipkart sales that reduce shared stock.
               </small>
             </div>
-            <button
-              className="button secondary compact"
-              disabled={!!busy}
-              onClick={() =>
-                void mutate(
-                  '/automation',
-                  { companyId: company.id, enabled: !company.automation },
-                  'Saving company automation',
-                  company.automation
-                    ? 'Automatic stock updates turned off for this company.'
-                    : 'Automatic stock updates enabled for this company.',
-                )
-              }
-            >
-              {company.automation ? 'Turn off automatic updates' : 'Enable automatic updates'}
-            </button>
+            <div className="company-sync-actions">
+              {!company.automation && (
+                <button
+                  className="button secondary compact"
+                  disabled={!!busy}
+                  onClick={() => void openAutomation(true)}
+                >
+                  Try one listing
+                </button>
+              )}
+              <button
+                className="button secondary compact"
+                disabled={!!busy}
+                onClick={() =>
+                  company.automation ? disableAutomation() : void openAutomation(false)
+                }
+              >
+                {company.automation ? 'Turn off automatic updates' : 'Review automatic updates'}
+              </button>
+            </div>
           </div>
         )}
         <div className="filters">
@@ -265,14 +310,7 @@ export function InventoryScreen({
             <button
               className="button secondary compact"
               disabled={!!busy || !scope.length || dirtyListings.length > 0}
-              onClick={() =>
-                void mutate(
-                  '/calculate',
-                  { companyId, listingIds: scope },
-                  'Calculating',
-                  'Proposals calculated. Your edited drafts were preserved.',
-                )
-              }
+              onClick={() => void calculate()}
             >
               <Icon name="refresh" />
               Calculate
@@ -280,14 +318,15 @@ export function InventoryScreen({
             <button
               className="button secondary compact"
               disabled={!!busy || !scope.length || dirtyListings.length > 0}
-              onClick={() =>
-                void mutate(
+              onClick={async () => {
+                const result = await mutate(
                   '/zero',
                   { companyId, listingIds: scope },
                   'Preparing zero stock',
                   'Zero-stock drafts saved. Active policies and marketplace stock are unchanged.',
-                )
-              }
+                );
+                if (result.ok) setLastCalculation(null);
+              }}
             >
               <span className="zero-symbol">0</span>Set to zero
             </button>
@@ -296,7 +335,9 @@ export function InventoryScreen({
               disabled={!!busy || !scopedProposalCount || dirtyListings.length > 0}
               onClick={() => void openReview()}
             >
-              Review changes
+              {blockedIds.size > 0 && scopedProposalCount
+                ? 'Review ready drafts'
+                : 'Review changes'}
               {scopedProposalCount > 0 && (
                 <span className="button-count">{scopedProposalCount}</span>
               )}
@@ -304,6 +345,14 @@ export function InventoryScreen({
             </button>
           </div>
         </div>
+        {calculation && (
+          <CalculationFeedback
+            rows={calculation}
+            state={state}
+            busy={!!busy}
+            onFixPack={(item, listingId) => setMapping({ item, listingId })}
+          />
+        )}
         {companyItems.length === 0 ? (
           <div className="empty-state">
             <div className="empty-icon">
@@ -382,14 +431,16 @@ export function InventoryScreen({
                     onSelect={toggleSelection}
                     onMap={() => setMapping({ item })}
                     onEditPack={(listing) => setMapping({ item, listingId: listing.id })}
-                    onSave={(listing, amount) =>
-                      mutate(
+                    onSave={async (listing, amount) => {
+                      const result = await mutate(
                         '/proposals',
                         { companyId, listingId: listing.id, quantity: amount },
                         'Saving draft',
                         'Draft saved. Review it before publication; the active policy has not changed.',
-                      )
-                    }
+                      );
+                      if (result.ok) setLastCalculation(null);
+                      return result;
+                    }}
                     onPause={(listing) =>
                       void mutate(
                         '/pause',
@@ -413,7 +464,8 @@ export function InventoryScreen({
         <div className="table-footer">
           <span>
             <span className="status-dot" />
-            Last Tally observation: {time(company?.lastSuccess)}
+            {company?.stockIssue && `${formatCompanyStockIssue(company.stockIssue)}. `}
+            Last successful Tally read: {time(company?.lastSuccess)}
           </span>
         </div>
       </section>
@@ -434,6 +486,15 @@ export function InventoryScreen({
           onPublish={workspace.publishReview}
         />
       )}
+      {automationReview && !company?.automation && (
+        <AutomationDialog
+          initial={automationReview.preview}
+          startWithTrial={automationReview.trial}
+          demo={state.mode === 'demo'}
+          workspace={workspace}
+          onClose={() => setAutomationReview(null)}
+        />
+      )}
       {mapping && (
         <MappingDialog
           item={state.items.find((item) => item.id === mapping.item.id) ?? mapping.item}
@@ -442,9 +503,32 @@ export function InventoryScreen({
           accountId={accountId}
           busy={!!busy}
           onClose={() => setMapping(null)}
-          onSave={(input) =>
-            mutate('/mappings', input, 'Saving mapping', 'Mapping and Set of saved.')
-          }
+          onSave={async (input) => {
+            const saved = await mutate(
+              '/mappings',
+              input,
+              'Saving mapping',
+              'Mapping and Set of saved.',
+            );
+            if (
+              saved.ok &&
+              calculation?.some((row) => row.listingId === input.listingId && row.fix === 'pack')
+            ) {
+              const checked = await workspace.calculate(companyId, [input.listingId]);
+              if (checked.ok)
+                setLastCalculation((previous) =>
+                  previous?.scope === scopeKey
+                    ? {
+                        ...previous,
+                        rows: previous.rows.map((row) =>
+                          row.listingId === input.listingId ? checked.value[0] : row,
+                        ),
+                      }
+                    : previous,
+                );
+            }
+            return saved;
+          }}
         />
       )}
       {removeListing && (

@@ -287,6 +287,7 @@ for (const automation of ['once', 'pause'] as const)
         locationId: 'warehouse-2',
         listingId: 'inventory-1',
         companyName: 'Tally company A',
+        automationStatus: 'Company updates off',
         policy: 'auto',
         remaining: null,
         paused: false,
@@ -306,10 +307,13 @@ for (const automation of ['once', 'pause'] as const)
     );
     render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
     await openListings();
+    assert.ok(screen.getByRole('columnheader', { name: 'Flipkart status' }));
+    assert.ok(screen.getByText('Stockbridge · Company updates off'));
     fireEvent.click(
       screen.getByRole('button', { name: 'Edit stock for SKU-seller-a at warehouse-2' }),
     );
     const dialog = screen.getByRole('dialog', { name: 'Edit stock' });
+    assert.ok(within(dialog).getByText('Tally company A · Company updates off · Auto'));
     fireEvent.change(within(dialog).getByLabelText('Stock'), { target: { value: '9' } });
     assert.equal(
       (within(dialog).getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled,

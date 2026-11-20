@@ -91,11 +91,19 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
         saves these choices in this workspace and reloads them on restart.
       </p>
       <p>
+        Before enabling company sync, review the seller accounts, locations and expected quantities
+        in Inventory. Try one listing lets you approve a single update and verify it while company
+        sync stays off. Paused listings stay paused. Waiting listings can start when their checks
+        pass. If a Tally company cannot be read, check its last successful read. Other verified
+        companies can continue.
+      </p>
+      <p>
         Use Calculate, Review changes and Publish to send reviewed stock. For a positive manual edit
         on an Auto listing, choose Update once. With automatic updates enabled, a change in Tally
         stock recalculates eligible listings. A verified Flipkart sale can also lower stock on other
         listings supplied by the same Tally item before the sale is billed. Review any package-count
-        changes in the listing’s Set of cell.
+        changes in the listing’s Set of cell. If a bulk calculation reports blocked listings, use
+        Fix Set of where offered or review the ready drafts.
       </p>
       <p>
         To see which recent Flipkart orders you have billed, open Order matching. Select the Tally

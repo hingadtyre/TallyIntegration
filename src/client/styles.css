@@ -1059,6 +1059,20 @@ small {
   color: var(--text-muted);
 }
 
+.company-sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.automation-review {
+  padding: 0 20px 18px;
+}
+
+.automation-review h3 {
+  margin-bottom: 8px;
+}
+
 .listing-row td > small {
   display: block;
   font-size: var(--font-caption);
@@ -2889,4 +2903,19 @@ small {
   .marketplace-context {
     font-size: 11px;
   }
+}
+.calculation-results {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+.calculation-results ul {
+  margin: 0.55rem 0 0;
+  padding-inline-start: 1.3rem;
+}
+.calculation-results li + li,
+.calculation-results li button {
+  margin-block-start: 0.35rem;
+}
+.calculation-results li button {
+  margin-inline-start: 0.6rem;
 }

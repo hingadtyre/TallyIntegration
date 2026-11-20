@@ -69,3 +69,25 @@ test('a failed saved-state refresh retains the existing inventory and exposes th
   assert.equal(result.current.error, 'Saved inventory is unavailable.');
   assert.equal(result.current.busy, '');
 });
+
+test('an all-company refresh shows partial results and a failed selected company stays visible', async (t) => {
+  const state = initialState('demo', 'unused');
+  state.mode = 'live';
+  state.connection.tally = 'online';
+  state.companies[1].stockIssue = 'read-failed';
+  state.connection.message = 'Refreshed stock for 1 company. Stock read failed for Company B.';
+  t.mock.method(globalThis, 'fetch', async () => response(state));
+  const { result } = renderHook(() => useWorkspace());
+  await waitFor(() => assert.deepEqual(result.current.state, state));
+  await act(async () => {
+    await result.current.refreshTally();
+  });
+  assert.equal(result.current.notice, state.connection.message);
+  assert.equal(result.current.error, '');
+  await act(async () => {
+    await result.current.refreshTally(state.companies[1].id);
+  });
+  assert.equal(result.current.error, state.connection.message);
+  assert.equal(result.current.notice, '');
+  assert.deepEqual(result.current.state?.items, state.items);
+});

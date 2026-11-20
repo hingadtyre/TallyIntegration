@@ -14,6 +14,7 @@ import {
   createPackSchema,
   createBillingSchema,
   createStockCoverageSchema,
+  addCompanyStockIssue,
   upgradeOrderSyncSchema,
   CURRENT_SCHEMA_VERSION,
   schemaVersion,
@@ -67,15 +68,15 @@ export function prepareDatabase(
       throw new Error('Unversioned database contains existing tables. It was not changed.');
     inTransaction(database, () => {
       createSchema(database);
-      writeSnapshot(database, initialState(mode, join(dirname(file), 'backups')));
       database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
+      writeSnapshot(database, initialState(mode, join(dirname(file), 'backups')));
     });
     return null;
   }
-  if (version < 1 || version > 6) throw new Error(`Unsupported database schema ${version}.`);
+  if (version < 1 || version > 7) throw new Error(`Unsupported database schema ${version}.`);
 
   const revision = database.prepare('PRAGMA data_version').get()?.data_version;
-  if (version === 6) verifyStockCoverage(database);
+  if (version >= 6) verifyStockCoverage(database);
   const original = version === 1 ? legacyJson(database) : JSON.stringify(readSnapshot(database));
   const state = version === 1 ? parseLegacySnapshot(original) : readSnapshot(database);
   requireMode(state, mode);
@@ -100,6 +101,7 @@ export function prepareDatabase(
     }
     if (version === 1) {
       createSchema(database);
+      database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
       writeSnapshot(database, state);
       database.exec('DROP TABLE app_state;');
     } else {
@@ -107,7 +109,8 @@ export function prepareDatabase(
       if (version < 4) createPackSchema(database);
       if (version < 5) createBillingSchema(database);
       if (version < 6) createStockCoverageSchema(database);
-      upgradeOrderSyncSchema(database);
+      if (version < 7) upgradeOrderSyncSchema(database);
+      addCompanyStockIssue(database);
     }
     database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION};`);
   });

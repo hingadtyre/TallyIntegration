@@ -2,11 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { FlipkartListingError, FlipkartListingsClient } from '../adapters/flipkart-listings.js';
-import type { FlipkartConnectionStatus, InventoryPublishRow } from '../shared/contracts.js';
+import type {
+  FlipkartConnectionStatus,
+  InventoryPublishRow,
+  Snapshot,
+} from '../shared/contracts.js';
+import { checkAutomationDestination, indexAutomationCatalog } from './automation-preview.js';
 import { inventoryTarget, type InventoryIntent } from './inventory-publication.js';
 import type {
   MarketplaceAccount,
   MarketplaceAccountRecord,
+  MarketplaceListing,
   MarketplaceListingView,
   MarketplacePage,
 } from '../shared/marketplace-contracts.js';
@@ -21,7 +27,11 @@ import {
   seedSampleMarketplace,
   updateInventoryObservations,
 } from './marketplace-catalog.js';
-import { MarketplacePublication, type ListingTransport } from './marketplace-publication.js';
+import {
+  MarketplacePublication,
+  sameListingIdentity,
+  type ListingTransport,
+} from './marketplace-publication.js';
 import { desiredStock } from './proposals.js';
 import { StockAvailabilityService } from './stock-availability.js';
 import { MarketplaceStockRecovery } from './marketplace-stock-recovery.js';
@@ -49,6 +59,7 @@ const sampleStatus: FlipkartConnectionStatus = {
 
 /** Account commands serialize credentials, imports and writes within each seller account. */
 export class MarketplaceService {
+  readonly blockedSyncReasons = new Map<string, string>();
   private readonly connections = new Map<string, AccountConnection>();
   private readonly pending = new Map<string, Promise<unknown>>();
   private readonly verifiedAccounts = new Set<string>();
@@ -588,8 +599,15 @@ export class MarketplaceService {
           `${row.sku} ${row.title} ${row.productId}`.toLocaleLowerCase().includes(search)),
     );
     const state = this.store.read();
+    const visible = listings.slice((page - 1) * 20, page * 20);
+    const skus = new Set(visible.map((listing) => listing.sku));
+    this.describeAutomation(
+      state,
+      data,
+      state.listings.filter((row) => row.accountId === account.id && skus.has(row.sku)),
+    );
     return {
-      listings: listings.slice((page - 1) * 20, page * 20).map((row) => listingView(row, state)),
+      listings: visible.map((row) => listingView(row, state)),
       total: listings.length,
       page,
       pageSize: 20,
@@ -601,6 +619,82 @@ export class MarketplaceService {
             index < 200 || ['pending', 'sending', 'checking', 'uncertain'].includes(row.state),
         ),
     };
+  }
+
+  catalogVerified(accountId: string): boolean {
+    return this.mode === 'demo' || this.verifiedAccounts.has(accountId);
+  }
+
+  /** Enrich the response from saved observations; displaying a status never polls a source. */
+  describeAutomation(
+    state: Snapshot,
+    market = this.store.readMarketplace(),
+    rows = state.listings,
+  ) {
+    const companies = new Map(state.companies.map((company) => [company.id, company]));
+    const items = new Map(state.items.map((item) => [item.id, item]));
+    const coverage = new Map<string, boolean>();
+    let catalog: ReturnType<typeof indexAutomationCatalog> | undefined;
+    for (const row of rows) {
+      const item = items.get(row.itemId ?? '');
+      const company = item && companies.get(item.companyId);
+      if (!company) row.automationStatus = 'Not mapped to Tally';
+      else if (row.paused) row.automationStatus = 'Paused';
+      else if (!company.automation) row.automationStatus = 'Company updates off';
+      else {
+        try {
+          catalog ??= indexAutomationCatalog(market);
+          checkAutomationDestination(
+            state,
+            row,
+            catalog,
+            this.catalogVerified(row.accountId),
+            item,
+          );
+          const positive = desiredStock(state, row, 'current', undefined, item) > 0;
+          if (state.mode === 'live') {
+            if (!coverage.has(company.id)) {
+              coverage.set(
+                company.id,
+                this.availability.coverageCommand('/api/billing/coverage', {
+                  companyId: company.id,
+                  accountId: row.accountId,
+                }).current,
+              );
+            }
+            if (positive && !coverage.get(company.id))
+              throw new InputError(
+                'Confirm the starting stock in Order matching for this company.',
+              );
+            if (positive && row.policy === 'limited')
+              throw new InputError('Positive Limited sales need verified allowance accounting.');
+          }
+          const queued = row.syncPendingItemVersion != null || !!row.orderSyncPending;
+          const lastBlocker =
+            (queued && this.blockedSyncReasons.get(row.id)) ||
+            (positive && this.blockedSyncReasons.get('orders:' + company.id));
+          row.automationStatus = lastBlocker
+            ? 'Last check blocked. ' + lastBlocker
+            : queued
+              ? 'Queued for a stock check'
+              : coverage.get(company.id) === false
+                ? 'Ready for the next Tally change. Confirm starting stock in Order matching for sale checks.'
+                : 'Ready for the next Tally change or verified sale';
+        } catch (error) {
+          if (!(error instanceof InputError)) throw error;
+          row.automationStatus = 'Waiting. ' + error.message;
+        }
+      }
+    }
+  }
+
+  private currentListingView(listing: MarketplaceListing) {
+    const state = this.store.read();
+    const rows = state.listings.filter(
+      (row) => row.accountId === listing.accountId && row.sku === listing.sku,
+    );
+    this.describeAutomation(state, this.store.readMarketplace(), rows);
+    return listingView(listing, state);
   }
 
   private async verifiedToken(accountId: string): Promise<string | null> {
@@ -616,9 +710,15 @@ export class MarketplaceService {
 
   apply(input: Record<string, unknown>) {
     const account = this.account(input.accountId);
-    return this.serial(account.id, async () =>
-      this.publisher.apply(account.id, input, await this.verifiedToken(account.id)),
-    );
+    return this.serial(account.id, async () => {
+      const result = await this.publisher.apply(
+        account.id,
+        input,
+        await this.verifiedToken(account.id),
+      );
+      if (result) result.listing = this.currentListingView(result.listing);
+      return result;
+    });
   }
 
   private sellerGuard(accountId: string): () => void {
@@ -652,10 +752,26 @@ export class MarketplaceService {
     );
   }
 
-  availableStock(companyId: string, itemId: string, batch?: object) {
+  availableStock(companyId: string, itemId: string, batch?: object, readOnly = false) {
     return this.serial('stock-evidence:' + companyId, () =>
-      this.availability.forItem(companyId, itemId, batch),
+      this.availability.forItem(companyId, itemId, batch, readOnly),
     );
+  }
+
+  async observeAutomationListing(listing: MarketplaceListing) {
+    const verify = this.sellerGuard(listing.accountId);
+    const token = await this.verifiedToken(listing.accountId);
+    const current =
+      token === null
+        ? listing
+        : await this.client.getListing(token, listing, { requireCurrentStatus: true });
+    verify();
+    if (!sameListingIdentity(listing, current))
+      throw new InputError(
+        'Flipkart returned a different listing. Refresh the seller account before enabling updates.',
+        409,
+      );
+    return { current, verify };
   }
 
   checkStockOrders(companyId: string, batch: object): Promise<void> {
@@ -671,7 +787,11 @@ export class MarketplaceService {
     };
   }
 
-  async publishInventory(intent: InventoryIntent, batch?: object): Promise<InventoryPublishRow> {
+  async publishInventory(
+    intent: InventoryIntent,
+    batch?: object,
+    verifyReview?: () => void,
+  ): Promise<InventoryPublishRow> {
     const state = this.store.read();
     const row = state.listings.find((entry) => entry.id === intent.listingId);
     const identity = { listingId: intent.listingId, sku: row?.sku ?? '' };
@@ -712,6 +832,7 @@ export class MarketplaceService {
           {
             available: evidence?.available,
             verify: () => {
+              verifyReview?.();
               verifySeller();
               evidence?.verify();
             },
@@ -774,13 +895,14 @@ export class MarketplaceService {
 
   reconcile(input: Record<string, unknown>) {
     const account = this.account(input.accountId);
-    return this.serial(account.id, async () =>
-      this.publisher.reconcile(
+    return this.serial(account.id, async () => {
+      const result = await this.publisher.reconcile(
         account.id,
         requireText(input.changeId, 'Update'),
         await this.verifiedToken(account.id),
-      ),
-    );
+      );
+      return { ...result, listing: this.currentListingView(result.listing) };
+    });
   }
 
   recoverStock(input: Record<string, unknown>, action: 'review' | 'approve') {
@@ -791,13 +913,14 @@ export class MarketplaceService {
       const token = await this.verifiedToken(account.id);
       verify();
       if (action === 'review') return this.recovery.review(account.id, changeId, token, verify);
-      return this.recovery.approve(
+      const result = await this.recovery.approve(
         account.id,
         changeId,
         requireText(input.reviewId, 'Recovery review'),
         token,
         verify,
       );
+      return { ...result, listing: this.currentListingView(result.listing) };
     });
   }
 
@@ -806,7 +929,7 @@ export class MarketplaceService {
     return this.serial(account.id, async () => {
       if (input.confirmed !== true || input.policy !== 'auto')
         throw new InputError('Explicitly confirm returning this listing to automatic policy.');
-      return this.store.updateMarketplace((data, state) => {
+      const updated = this.store.updateMarketplace((data, state) => {
         const listing = findMarketplaceListing(
           data,
           account.id,
@@ -841,8 +964,9 @@ export class MarketplaceService {
           'marketplace-policy',
           `${listing.sku}: seller explicitly returned the location to automatic policy. Pause retained; marketplace stock unchanged.`,
         );
-        return listingView(listing, state);
+        return listing;
       });
+      return this.currentListingView(updated);
     });
   }
 

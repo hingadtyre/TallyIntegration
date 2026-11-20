@@ -1,4 +1,10 @@
-import type { Listing } from '../shared/contracts.js';
+import type { Company, Listing } from '../shared/contracts.js';
+
+export function formatCompanyStockIssue(issue: NonNullable<Company['stockIssue']>): string {
+  if (issue === 'unloaded') return 'Company unloaded in Tally';
+  if (issue === 'read-failed') return 'Stock read failed';
+  return 'Fresh stock check needed';
+}
 
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return 'Not yet observed';

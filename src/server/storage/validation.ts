@@ -91,6 +91,13 @@ function company(value: unknown, field: string): Company {
     automation: boolean(row.automation, `${field}.automation`),
     source: choice(row.source, ['tally', 'demo'], `${field}.source`),
     lastSuccess: nullableTimestamp(row.lastSuccess, `${field}.lastSuccess`),
+    ...(row.stockIssue != null && {
+      stockIssue: choice(
+        row.stockIssue,
+        ['read-failed', 'unloaded', 'not-checked'] as const,
+        `${field}.stockIssue`,
+      ),
+    }),
   };
 }
 

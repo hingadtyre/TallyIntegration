@@ -50,6 +50,7 @@ export function listingView(listing: MarketplaceListing, state: Snapshot): Marke
         policy: row.policy,
         remaining: row.remaining,
         paused: row.paused,
+        automationStatus: row.automationStatus,
       })),
   };
 }

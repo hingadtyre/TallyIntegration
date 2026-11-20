@@ -128,15 +128,21 @@ With **Set of 2** and the tyre minimum switched off, 13 physical units give six 
 
 ### Publish stock from Inventory
 
-1. Check the company, seller account and listing destinations. Select the rows to review and choose **Calculate**. To propose a different quantity, edit **Proposed stock** and save it. An edited positive quantity must fit within the current stock calculation.
+1. Check the company, seller account and listing destinations. Select the rows to review and choose **Calculate**. If some listings need attention, the result lists each SKU and location. **Fix Set of** opens that listing’s pack setting. **Review ready drafts** opens the successful rows. An existing manual draft keeps its quantity. Saving a corrected Set of recalculates that row and updates the result. To propose a different quantity, edit **Proposed stock** and save it. An edited positive quantity must fit within the current stock calculation.
 2. Choose **Review changes**. For an edited positive quantity on an **Auto** listing, choose **Update once**. This publishes the reviewed quantity and keeps the Auto policy. The next change to the item's Tally stock can replace it once automatic updates are enabled. The separate **Allow this many more sales** option needs order tracking and is unavailable for live listings. Publishing an edited zero sets a persistent out-of-stock hold.
 3. Check the observed and proposed quantities for each destination. Choose **Publish** for the indicated number of eligible listings. Read each result. **Confirmed** means Flipkart's stock matched on readback, **unchanged** means it already matched, and blocked, failed or uncertain results include the reason. For an uncertain result, check the listing in **Marketplaces** before attempting another update.
 
 ### Use automatic stock updates
 
-Choose **Enable automatic updates** in Inventory for the company. A Tally stock change recalculates eligible listings across all its participating seller accounts. With order coverage set up, Stockbridge also checks for new Flipkart sales on the **Marketplace stock** schedule. If two tyres supply both singles and pairs, selling one single can set the pair listing to zero as soon as Stockbridge verifies the sale. An order-triggered check only lowers stock. Repeated checks and billing the same sale count it once. **Refresh Tally** requests a check now.
+Open the automatic updates preview in **Inventory**. It covers every seller account mapped to the selected Tally company, including accounts hidden by your filter. Compare the observed and expected quantity for each seller, SKU and location. Paused listings stay paused. Waiting listings can start automatically once their checks pass. Newly verified mappings also follow the company setting.
+
+To check one result first, choose **Try one listing**, review the location and calculated quantity, then approve that listing’s update. In live mode this can change stock on Flipkart. When the two quantities already match, Stockbridge reports that result without sending stock. The trial preserves your drafts, stock policy and company setting. Open a fresh preview to enable automatic updates for the company.
+
+A Tally stock change recalculates eligible listings across all its participating seller accounts. With order coverage set up, Stockbridge also checks for new Flipkart sales on the **Marketplace stock** schedule. If two tyres supply both singles and pairs, selling one single can set the pair listing to zero as soon as Stockbridge verifies the sale. An order-triggered check only lowers stock. Repeated checks and billing the same sale count it once. **Refresh Tally** requests a check now.
 
 Before Stockbridge can publish a calculated quantity above zero to Flipkart, [set the starting stock for automatic updates](#set-the-starting-stock-for-automatic-updates). For a reviewed calculation, a changed available quantity blocks the old proposal. Automatic updates can publish the recalculated quantity. A one-time stock edit publishes the quantity you enter under the listing’s existing policy.
+
+Inventory and the marketplace stock editor show whether the company is syncing and whether a listing is paused or waiting. Flipkart’s listing status describes the offer on Flipkart. If one loaded Tally company fails a stock check, its last successful check remains visible and its stock waits for verification. Other successfully read companies can continue. If Tally itself cannot be reached, all companies wait.
 
 To stop automatic updates for a company, choose **Turn off automatic updates**. To pause one destination, choose **Pause automation** on its row. **Paused · resume** resumes it under its current policy.
 

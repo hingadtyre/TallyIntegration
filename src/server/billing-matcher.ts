@@ -286,6 +286,7 @@ export function matchBills(
       state.mode === 'demo' ||
       (state.connection.tally === 'online' &&
         company?.lastSuccess &&
+        !company.stockIssue &&
         item.observedAt &&
         Date.now() - Date.parse(item.observedAt) <=
           Math.max(120_000, state.settings.tallySeconds * 3000));

@@ -479,7 +479,7 @@ function MarketplaceListings({
               <thead>
                 <tr>
                   <th>Product</th>
-                  <th>Status</th>
+                  <th>Flipkart status</th>
                   <th>MRP</th>
                   <th>Selling price</th>
                   <th>Shipping packages</th>
@@ -719,9 +719,15 @@ function MarketplaceListingRow({
                 </button>
                 <small>
                   {policy
-                    ? `${policy.companyName} · ${policy.paused ? 'Paused' : 'Tally managed'} · ${policy.policy === 'hold' ? 'Kept out of stock' : policy.policy === 'limited' ? `${policy.remaining ?? '?'} sales remaining` : 'Auto'}`
+                    ? `${policy.companyName} · ${policy.policy === 'hold' ? 'Kept out of stock' : policy.policy === 'limited' ? `${policy.remaining ?? '?'} sales remaining` : 'Auto'}`
                     : 'Not mapped to Tally'}
                 </small>
+                {policy && (
+                  <small>
+                    Stockbridge ·{' '}
+                    {policy.automationStatus ?? (policy.paused ? 'Paused' : 'Status unavailable')}
+                  </small>
+                )}
               </div>
             );
           })}

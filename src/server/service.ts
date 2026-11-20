@@ -3,14 +3,16 @@ import { dirname, join } from 'node:path';
 import { TallyClient } from '../adapters/tally.js';
 import type {
   Activity,
+  CalculationResult,
   InventoryPublishResult,
-  Listing,
   Proposal,
   Review,
   Snapshot,
 } from '../shared/contracts.js';
 import type { MarketplaceService } from './marketplace-service.js';
+import { checkCalculationStock, saveCalculation } from './inventory-calculation.js';
 import { inventoryTarget } from './inventory-publication.js';
+import { AutomationReviews } from './automation-preview.js';
 import { recordActivity } from './activity.js';
 import { createBackup } from './backups.js';
 import { Diagnostics } from './diagnostics.js';
@@ -36,15 +38,6 @@ interface InventoryDependencies {
   timers?: PollingTimers;
 }
 
-function proposalInputs(state: Snapshot, listing: Listing): string {
-  return JSON.stringify([
-    listing.version,
-    listing.itemId,
-    state.items.find((item) => item.id === listing.itemId)?.version,
-    state.proposals.find((draft) => draft.listingId === listing.id),
-  ]);
-}
-
 /** Application commands own inventory transactions; collaborators own external work. */
 export class InventoryService {
   readonly diagnostics: Diagnostics;
@@ -57,8 +50,8 @@ export class InventoryService {
   private orderWake: Promise<void> | null = null;
   private unsubscribeOrders?: () => void;
   private readonly marketplaces?: MarketplaceService;
+  readonly automationReviews: AutomationReviews;
   private readonly reviews = new Map<string, { review: Review; drafts: Proposal[] }>();
-  private readonly blockedSyncReasons = new Map<string, string>();
 
   constructor(
     readonly store: Store,
@@ -67,6 +60,7 @@ export class InventoryService {
     this.diagnostics =
       dependencies.diagnostics ?? new Diagnostics(join(dirname(store.file), 'diagnostics.ndjson'));
     this.marketplaces = dependencies.marketplaces;
+    this.automationReviews = new AutomationReviews(store, this.marketplaces);
     const createReader =
       dependencies.createTallyReader ?? ((endpoint) => new TallyClient(endpoint));
     this.stockRefresh = new StockRefresh(store, createReader, this.diagnostics);
@@ -102,10 +96,11 @@ export class InventoryService {
   snapshot(): Snapshot {
     const state = this.store.read();
     state.publishingEnabled = !!this.marketplaces;
+    const market =
+      this.marketplaces || state.mode === 'live' ? this.store.readMarketplace() : undefined;
+    if (market) this.marketplaces?.describeAutomation(state, market);
     if (state.mode === 'live') {
-      const visibleAccounts = new Set(
-        this.store.readMarketplace().accounts.map((account) => account.id),
-      );
+      const visibleAccounts = new Set(market?.accounts.map((account) => account.id));
       // Older releases saved a placeholder seller before any account was added.
       // Hide unused records from the selector without deleting names or history.
       for (const listing of state.listings) visibleAccounts.add(listing.accountId);
@@ -131,71 +126,26 @@ export class InventoryService {
   }
 
   calculate(companyId: unknown, ids: unknown, zero = false): Snapshot {
-    return this.saveCalculation(companyId, ids, zero);
-  }
-
-  async calculateAvailable(companyId: unknown, ids: unknown): Promise<Snapshot> {
-    if (!this.marketplaces || !this.store.readStockCoverage(String(companyId)))
-      return this.calculate(companyId, ids);
     const state = this.store.read();
-    const listings = requireListings(state, companyId, ids);
-    const batch = {};
-    const sources = new Map<string, Awaited<ReturnType<MarketplaceService['availableStock']>>>();
-    const checked = new Map<string, { inputs: string; available?: number }>();
-    for (const listing of listings) {
-      const edited = state.proposals.some((p) => p.listingId === listing.id && p.edited);
-      let available;
-      if (!edited && desiredStock(state, listing) > 0) {
-        const itemId = listing.itemId!;
-        if (!sources.has(itemId))
-          sources.set(
-            itemId,
-            await this.marketplaces.availableStock(String(companyId), itemId, batch),
-          );
-        available = sources.get(itemId)!.available;
-      }
-      checked.set(listing.id, { inputs: proposalInputs(state, listing), available });
-    }
-    // Check every read at the end of the batch, before opening the save transaction.
-    for (const source of sources.values()) source.verify();
-    return this.saveCalculation(companyId, ids, false, checked);
-  }
-
-  private saveCalculation(
-    companyId: unknown,
-    ids: unknown,
-    zero: boolean,
-    checked?: Map<string, { inputs: string; available?: number }>,
-  ): Snapshot {
-    this.store.update((state) => {
-      const listings = requireListings(state, companyId, ids);
-      const drafts = listings.map((listing) => {
-        const evidence = checked?.get(listing.id);
-        if (checked && evidence?.inputs !== proposalInputs(state, listing))
-          throw new InputError(
-            'Stock, mapping or a selected draft changed during calculation. Calculate again.',
-            409,
-          );
-        if (zero) return prepareProposal(state, listing, 0);
-        const editedDraft = state.proposals.find(
-          (draft) => draft.listingId === listing.id && draft.edited,
-        );
-        return editedDraft ?? prepareProposal(state, listing, undefined, evidence?.available);
-      });
-      for (const draft of drafts) {
-        state.proposals = [
-          ...state.proposals.filter((row) => row.listingId !== draft.listingId),
-          draft,
-        ];
-      }
-      recordActivity(
-        state,
-        zero ? 'zero-draft' : 'calculate',
-        `${drafts.length} listing proposals prepared. No marketplace changes.`,
-        { companyId: String(companyId) },
-      );
+    const selected = requireListings(state, companyId, ids);
+    saveCalculation(this.store, state, String(companyId), selected, {
+      zero,
+      strict: zero || selected.length === 1,
     });
     return this.snapshot();
+  }
+
+  async calculateAvailable(companyId: unknown, ids: unknown): Promise<CalculationResult> {
+    const state = this.store.read();
+    const selected = requireListings(state, companyId, ids);
+    const sources =
+      this.marketplaces && this.store.readStockCoverage(String(companyId))
+        ? await checkCalculationStock(state, selected, String(companyId), this.marketplaces)
+        : undefined;
+    const calculation = saveCalculation(this.store, state, String(companyId), selected, {
+      sources,
+    });
+    return { ...this.snapshot(), calculation };
   }
 
   edit(companyId: unknown, listingId: unknown, value: unknown): Snapshot {
@@ -251,6 +201,7 @@ export class InventoryService {
     this.store.update((state) => {
       const company = requireCompany(state, companyId);
       if (company.automation === enabled) return;
+      this.automationReviews.companySettingChanged(company.id);
       company.automation = enabled;
       for (const listing of state.listings) {
         const item = state.items.find(
@@ -507,7 +458,8 @@ export class InventoryService {
   }
 
   settings(input: unknown): Snapshot {
-    saveSettings(this.store, input);
+    const sourceChanged = saveSettings(this.store, input);
+    if (sourceChanged) this.stockRefresh.sourceChanged();
     this.polling.settingsChanged();
     this.catalogPolling.settingsChanged();
     this.orderPolling.settingsChanged();
@@ -563,13 +515,13 @@ export class InventoryService {
         const key = 'orders:' + company.id;
         try {
           await this.marketplaces.checkStockOrders(company.id, batch);
-          this.blockedSyncReasons.delete(key);
+          this.marketplaces.blockedSyncReasons.delete(key);
         } catch (error) {
           success = false;
           const reason =
             error instanceof InputError ? error.message : 'Check the Flipkart account and retry.';
-          if (this.blockedSyncReasons.get(key) !== reason) {
-            this.blockedSyncReasons.set(key, reason);
+          if (this.marketplaces.blockedSyncReasons.get(key) !== reason) {
+            this.marketplaces.blockedSyncReasons.set(key, reason);
             this.store.update((current) =>
               recordActivity(
                 current,
@@ -636,11 +588,11 @@ export class InventoryService {
         batch,
       );
       if (result.status !== 'blocked') {
-        this.blockedSyncReasons.delete(listing.id);
+        this.marketplaces.blockedSyncReasons.delete(listing.id);
         continue;
       }
-      if (this.blockedSyncReasons.get(listing.id) === result.message) continue;
-      this.blockedSyncReasons.set(listing.id, result.message);
+      if (this.marketplaces.blockedSyncReasons.get(listing.id) === result.message) continue;
+      this.marketplaces.blockedSyncReasons.set(listing.id, result.message);
       const message = `${listing.sku}: automatic stock update waiting. ${result.message}`;
       this.store.update((current) => {
         recordActivity(current, 'inventory-sync-blocked', message, {

@@ -126,7 +126,15 @@ async function runCommand(
     case '/api/pause':
       return service.pause(input.companyId, input.listingIds, input.paused);
     case '/api/automation':
+      if (input.enabled === true)
+        return service.automationReviews.enable(input.companyId, input.previewId, () =>
+          service.automation(input.companyId, true),
+        );
       return service.automation(input.companyId, input.enabled);
+    case '/api/automation/preview':
+      return service.automationReviews.preview(input.companyId);
+    case '/api/automation/trial':
+      return service.automationReviews.trial(input.companyId, input.previewId, input.listingId);
     case '/api/review':
       return service.review(input.companyId, input.listingIds);
     case '/api/settings':

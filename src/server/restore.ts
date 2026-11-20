@@ -244,6 +244,7 @@ function restoredSnapshot(
   for (const company of restored.companies) {
     company.automation = false;
     company.lastSuccess = null;
+    company.stockIssue = 'not-checked';
   }
   for (const item of restored.items) {
     item.observedAt = null;
@@ -441,12 +442,13 @@ function writeStage(
   try {
     database.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;');
     createSchema(database);
+    database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
     writeSnapshot(database, snapshot);
     writeMarketplace(database, marketplace);
     writeBilling(database, billing);
     // A restored workspace must reconcile its starting stock again. An old
     // order journal can omit sales since the backup and cannot authorize increases.
-    database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}; COMMIT;`);
+    database.exec('COMMIT;');
     readCheckedSnapshot(database, snapshot.mode);
   } finally {
     database.close();

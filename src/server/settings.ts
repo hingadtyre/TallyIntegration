@@ -45,16 +45,20 @@ function validateSettings(value: unknown): Settings {
   return settings;
 }
 
-export function saveSettings(store: Store, input: unknown): void {
+export function saveSettings(store: Store, input: unknown): boolean {
   const settings = validateSettings(input);
-  store.update((state) => {
-    if (validateTallyUrl(state.settings.tallyUrl) !== settings.tallyUrl) {
+  return store.update((state) => {
+    const sourceChanged = validateTallyUrl(state.settings.tallyUrl) !== settings.tallyUrl;
+    if (sourceChanged) {
       state.connection.tally = 'not-checked';
       state.connection.message = 'Tally address changed. Refresh required.';
       // A selected-company refresh must not validate another company's old-source stock.
       const tallyCompanies = state.companies.filter((company) => company.source === 'tally');
       const tallyCompanyIds = new Set(tallyCompanies.map((company) => company.id));
-      for (const company of tallyCompanies) company.lastSuccess = null;
+      for (const company of tallyCompanies) {
+        company.lastSuccess = null;
+        company.stockIssue = 'not-checked';
+      }
       for (const item of state.items) {
         if (!tallyCompanyIds.has(item.companyId)) continue;
         if (item.observedAt !== null) item.version++;
@@ -70,5 +74,6 @@ export function saveSettings(store: Store, input: unknown): void {
       'settings-saved',
       'Settings saved. The next Tally poll uses the new interval; no restart needed. Marketplace polling is pending API setup.',
     );
+    return sourceChanged;
   });
 }

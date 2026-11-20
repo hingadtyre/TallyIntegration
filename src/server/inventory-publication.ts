@@ -13,6 +13,15 @@ export interface InventoryIntent {
   positiveEdits?: 'allowance' | 'once';
   /** Receipt authorizing a decrease-only check when there is no Tally change. */
   orderOnly?: string;
+  /** A seller-reviewed calculated update while company automation is off. */
+  trial?: {
+    marketplaceId: string;
+    productId: string;
+    sellerId: string | null;
+    location: string;
+    observed: number;
+    quantity: number;
+  };
 }
 
 export function inventoryTarget(
@@ -46,7 +55,20 @@ export function inventoryTarget(
       409,
     );
   const draft = intent.draft;
-  if (!draft) {
+  if (intent.trial) {
+    if (
+      company.automation ||
+      listing.paused ||
+      intent.trial.marketplaceId !== marketplace.id ||
+      intent.trial.productId !== marketplace.productId ||
+      intent.trial.sellerId !== marketplace.sellerId ||
+      intent.trial.location !== listing.location
+    )
+      throw new InputError(
+        'This listing or its automation changed. Preview the company again.',
+        409,
+      );
+  } else if (!draft) {
     const current = intent.orderOnly
       ? listing.orderSyncPending === intent.orderOnly && listing.syncPendingItemVersion == null
       : listing.syncPendingItemVersion === item.version;
@@ -67,6 +89,11 @@ export function inventoryTarget(
       throw new InputError('The reviewed proposal changed. Calculate and review it again.', 409);
   }
   let quantity = draft?.quantity ?? desiredStock(state, listing, 'current', availableUnits);
+  if (intent.trial && quantity !== intent.trial.quantity)
+    throw new InputError(
+      'The calculated stock changed. Preview the new quantity before trying this listing.',
+      409,
+    );
   if (intent.orderOnly) {
     const observed = marketplace.locations.find((loc) => loc.id === listing.location)?.quantity;
     if (observed == null)
@@ -113,6 +140,7 @@ export function activateInventoryIntent(
   intent: InventoryIntent,
   listing: Listing,
 ): void {
+  if (intent.trial) return;
   if (intent.draft?.edited && (intent.draft.quantity === 0 || intent.positiveEdits !== 'once')) {
     listing.policy = intent.draft.quantity === 0 ? 'hold' : 'limited';
     listing.remaining = intent.draft.quantity;

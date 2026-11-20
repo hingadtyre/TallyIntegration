@@ -14,11 +14,13 @@ function sourceFixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
     ]),
     reads: [] as string[],
     failCompany: '',
+    failDiscovery: false,
   };
   const f = fixture(t, mode, {
     createTallyReader: () => ({
       async listCompanies() {
         source.reads.push('companies');
+        if (source.failDiscovery) throw new Error('Discovery unavailable.');
         return source.companies;
       },
       async readStock(company) {
@@ -102,7 +104,7 @@ test('missing stock becomes unknown while an unloaded company retains its quanti
   f.source.items.set('company-b', [
     { externalId: 'item-b', name: 'Tyre B', unit: 'tyres', physical: 20 },
   ]);
-  await f.service.refresh();
+  const before = await f.service.refresh();
   f.source.companies.pop();
   f.source.items.set('company-a', []);
   const missing = await f.service.refresh();
@@ -116,10 +118,9 @@ test('missing stock becomes unknown while an unloaded company retains its quanti
     [unloadedItem.physical, unloadedItem.observedAt, unloadedItem.version],
     [20, null, 2],
   );
-  assert.equal(
-    missing.companies.find((company) => company.id === 'tally:company-b')!.lastSuccess,
-    null,
-  );
+  const unloaded = missing.companies.find((company) => company.id === 'tally:company-b')!;
+  assert.equal(unloaded.stockIssue, 'unloaded');
+  assert.equal(unloaded.lastSuccess, before.companies[1].lastSuccess);
   const again = await f.service.refresh();
   assert.deepEqual(
     again.items,
@@ -128,34 +129,103 @@ test('missing stock becomes unknown while an unloaded company retains its quanti
   );
 });
 
-test('a failed second company read or duplicate item rejects the complete refresh', async (t) => {
+test('company reads continue past a failure and a duplicate invalidates only that company', async (t) => {
   const f = sourceFixture(t);
-  const before = await f.service.refresh();
   f.source.companies.push({ externalId: 'company-b', name: 'Company B' });
-  f.source.items.get('company-a')![0].physical = 99;
-  f.source.failCompany = 'company-b';
-  const failed = await f.service.refresh();
-  assert.equal(failed.connection.tally, 'offline');
-  assert.deepEqual(failed.items, before.items);
-  const unverified = before.companies.map((company) => ({ ...company, lastSuccess: null }));
-  assert.deepEqual(failed.companies, unverified);
+  f.source.items.set('company-b', [
+    { externalId: 'item-b', name: 'Tyre B', unit: 'tyres', physical: 20 },
+  ]);
+  const before = await f.service.refresh();
+  f.source.failCompany = 'company-a';
+  f.source.items.get('company-b')![0].physical = 99;
+  const partial = await f.service.refresh();
+  assert.equal(partial.connection.tally, 'online');
+  assert.match(partial.connection.message, /1 company.*failed for Company A/);
+  assert.equal(partial.companies[0].stockIssue, 'read-failed');
+  assert.equal(partial.companies[0].lastSuccess, before.companies[0].lastSuccess);
+  assert.deepEqual(partial.items[0], before.items[0]);
+  assert.equal(partial.items[1].physical, 99);
+
   f.source.failCompany = '';
-  f.source.items.get('company-a')!.push({ ...f.source.items.get('company-a')![0] });
+  f.source.items.get('company-a')![0].physical = 8;
+  f.source.items.get('company-b')![0].physical = 123;
+  f.source.items.get('company-b')!.push({ ...f.source.items.get('company-b')![0] });
   const duplicate = await f.service.refresh();
-  assert.equal(duplicate.connection.tally, 'offline');
-  assert.deepEqual(duplicate.items, before.items);
-  assert.deepEqual(duplicate.companies, unverified);
+  assert.equal(duplicate.companies[0].stockIssue, undefined);
+  assert.equal(duplicate.items[0].physical, 8);
+  assert.equal(duplicate.companies[1].stockIssue, 'read-failed');
+  assert.deepEqual(duplicate.items[1], partial.items[1]);
   assert.match(f.service.logs(), /Duplicate Tally stock identity/);
+
+  f.source.failDiscovery = true;
+  const offline = await f.service.refresh('tally:company-b');
+  assert.equal(offline.connection.tally, 'offline');
+  assert.deepEqual(offline.items, duplicate.items);
+  assert.ok(offline.companies.every((company) => company.stockIssue === 'read-failed'));
+  f.source.failDiscovery = false;
+  await f.service.refresh('tally:company-a');
+  assert.equal(f.service.snapshot().companies[1].stockIssue, 'read-failed');
 });
 
-test('a selected company no longer loaded in Tally retains its observations and reports failure', async (t) => {
+test('discovery invalidates unloaded companies and healthy reads are immediately visible while another company waits', async (t) => {
+  const companies = [
+    { externalId: 'a', name: 'Company A' },
+    { externalId: 'b', name: 'Company B' },
+    { externalId: 'c', name: 'Company C' },
+  ];
+  let slowReadStarted!: () => void;
+  let releaseRead!: () => void;
+  const readingPeer = new Promise<void>((resolve) => {
+    slowReadStarted = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    releaseRead = resolve;
+  });
+  let delayed = false;
+  const f = fixture(t, 'live', {
+    createTallyReader: () => ({
+      listCompanies: async () => (delayed ? companies.slice(0, 2) : companies),
+      async readStock(company) {
+        if (delayed && company.externalId === 'b') {
+          slowReadStarted();
+          await released;
+        }
+        return [{ externalId: 'tyre', name: 'Tyre', unit: 'tyres', physical: delayed ? 8 : 4 }];
+      },
+    }),
+  });
+  const first = await f.service.refresh();
+  delayed = true;
+  const pending = f.service.refresh();
+  try {
+    await readingPeer;
+    const inFlight = f.service.snapshot();
+    assert.equal(inFlight.items.find((i) => i.companyId === 'tally:a')?.physical, 8);
+    assert.equal(inFlight.companies.find((c) => c.id === 'tally:c')?.stockIssue, 'unloaded');
+    assert.equal(inFlight.items.find((i) => i.companyId === 'tally:c')?.observedAt, null);
+    f.service.settings({ ...first.settings, tallyUrl: 'http://127.0.0.1:9001/' });
+    f.service.settings({ ...first.settings, tallySeconds: 60 });
+  } finally {
+    releaseRead();
+    await pending;
+  }
+  const after = f.service.snapshot();
+  assert.equal(after.connection.tally, 'not-checked');
+  assert.equal(after.settings.tallySeconds, 60);
+  assert.equal(after.items.find((i) => i.companyId === 'tally:b')?.physical, 4);
+  assert.ok(after.companies.every((c) => c.stockIssue === 'not-checked'));
+});
+
+test('a selected company unloaded in Tally retains its last successful read and quantity', async (t) => {
   const f = sourceFixture(t);
   const before = await f.service.refresh();
   f.source.companies = [];
   const failed = await f.service.refresh('tally:company-a');
-  assert.equal(failed.connection.tally, 'offline');
-  assert.deepEqual(failed.items, before.items);
-  assert.equal(failed.companies[0].lastSuccess, null);
+  assert.equal(failed.connection.tally, 'online');
+  assert.equal(failed.items[0].physical, before.items[0].physical);
+  assert.equal(failed.items[0].observedAt, null);
+  assert.equal(failed.companies[0].stockIssue, 'unloaded');
+  assert.equal(failed.companies[0].lastSuccess, before.companies[0].lastSuccess);
   await assert.rejects(f.service.refresh('unknown-company'), InputError);
 });
 

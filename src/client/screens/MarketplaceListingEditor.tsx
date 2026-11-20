@@ -227,7 +227,8 @@ export function MarketplaceListingEditor({
           >
             <legend>Tally stock automation</legend>
             <p>
-              {policy.companyName} · {policy.paused ? 'Paused' : 'Active'} ·{' '}
+              {policy.companyName} ·{' '}
+              {policy.automationStatus ?? (policy.paused ? 'Paused' : 'Status unavailable')} ·{' '}
               {policy.policy === 'hold'
                 ? 'Kept out of stock'
                 : policy.policy === 'limited'

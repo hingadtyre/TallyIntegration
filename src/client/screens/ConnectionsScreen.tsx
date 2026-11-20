@@ -1,7 +1,7 @@
 import type { Snapshot } from '../../shared/contracts.js';
 import type { Workspace } from '../useWorkspace.js';
 import { Icon } from '../components.js';
-import { formatDateTime as time } from '../format.js';
+import { formatCompanyStockIssue, formatDateTime as time } from '../format.js';
 import { CustomerSetup } from '../CustomerSetup.js';
 
 export function ConnectionsScreen({
@@ -63,6 +63,21 @@ export function ConnectionsScreen({
             </div>
           </dl>
           <div className="connection-note">{state.connection.message}</div>
+          {state.mode === 'live' && state.companies.length > 0 && (
+            <dl className="connection-details">
+              {state.companies.map((company) => (
+                <div key={company.id}>
+                  <dt>{company.name}</dt>
+                  <dd>
+                    {company.stockIssue && (
+                      <strong>{formatCompanyStockIssue(company.stockIssue)}. </strong>
+                    )}
+                    Last successful read: {time(company.lastSuccess)}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
           <button
             className="button secondary"
             disabled={!!busy}
