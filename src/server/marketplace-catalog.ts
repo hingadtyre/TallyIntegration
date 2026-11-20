@@ -52,6 +52,7 @@ export function listingView(listing: MarketplaceListing, state: Snapshot): Marke
           remaining: row.remaining,
           paused: row.paused,
           automationStatus: row.automationStatus,
+          ...(row.proposalIssue && { proposalIssue: row.proposalIssue }),
         };
       }),
   };
@@ -104,7 +105,8 @@ export function updateInventoryObservations(state: Snapshot, listing: Marketplac
         location.quantity > 0 &&
         !existing.paused &&
         existing.verified &&
-        (existing.policy === 'hold' || (existing.policy === 'limited' && existing.remaining === 0))
+        existing.policy === 'limited' &&
+        existing.remaining === 0
       ) {
         const item = state.items.find((row) => row.id === existing.itemId);
         if (

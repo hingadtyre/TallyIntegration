@@ -91,6 +91,8 @@ Synchronize stock from Tally to Flipkart initially, with support for other marke
 
 ## Accepted allowance lifecycle and manual zero
 
+The following records the November 7 design. On November 21 the seller replaced the manual zero hold with a pause for the affected listing and location. [Updated decision](../adr/0007-manual-zero-pauses-sync.md)
+
 - An exhausted listing allowance remains zero until the seller explicitly grants more sales or switches the listing back to Auto. Purchases, cancellations, and returns do not automatically reopen it; those events can be shown for review.
 - Editing proposed listing stock uses `Allow N more sales`; an edited zero means a manual out-of-stock hold for that listing. The reviewed publish action activates the change; a draft alone does not change Flipkart or active automation policy.
 - A manual out-of-stock hold takes precedence over positive Tally stock and the minimum-five advertising rule. It affects only selected listing destinations and leaves Tally and sibling listings unchanged.

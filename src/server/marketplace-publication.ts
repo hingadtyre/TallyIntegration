@@ -122,11 +122,6 @@ function validateStockPolicy(
       409,
     );
   for (const row of policyRows(state, listing, edit.locationId)) {
-    if (row.policy === 'hold' && edit.quantity > 0)
-      throw new InputError(
-        'This listing is kept out of stock. Change stock policy explicitly before applying positive stock.',
-        409,
-      );
     if (row.policy === 'limited' && (row.remaining === null || edit.quantity > row.remaining))
       throw new InputError(
         'This quantity exceeds the remaining sales allowance. Change stock policy explicitly first.',
@@ -402,14 +397,13 @@ export class MarketplacePublication {
       // determines whether this direct edit locks a destination.
       if (!intent && edit.kind === 'stock')
         edit.automation = destinations.some((row) => row.itemId !== null) ? 'pause' : 'once';
-      // Capture the automatic work an Inventory publication would supersede. An edited
-      // zero also activates a hold that needs correction if Flipkart rejects it.
+      if (intent?.draft?.edited && edit.kind === 'stock' && edit.quantity === 0)
+        edit.automation = 'pause';
+      // Only an unlocked Inventory publication can leave automatic work to retry.
       const pending =
-        intent && edit.kind === 'stock'
+        intent && edit.kind === 'stock' && edit.automation !== 'pause'
           ? destinations.flatMap((row) => {
-              const tallyVersion =
-                row.syncPendingItemVersion ??
-                (intent?.draft?.edited && edit.quantity === 0 ? intent.itemVersion : null);
+              const tallyVersion = row.syncPendingItemVersion;
               const itemVersion =
                 tallyVersion ??
                 (row.orderSyncPending
@@ -457,8 +451,23 @@ export class MarketplacePublication {
           row.orderSyncPending = null;
           if (row.itemId !== null) {
             row.paused = true;
+            delete row.proposalIssue;
             row.version++;
           }
+        }
+        if (edit.kind === 'stock' && edit.quantity === 0 && matchesEdit(before, edit)) {
+          const observed = { ...before, version: latest.version + 1 };
+          current.listings[current.listings.indexOf(latest)] = observed;
+          updateInventoryObservations(state, observed);
+          change.state = 'confirmed';
+          delete change.stockRequestFinality;
+          change.message =
+            edit.automation === 'pause'
+              ? 'Stock is already zero. Tally sync paused for this location.'
+              : 'Stock is already zero.';
+          current.changes.unshift(change);
+          recordActivity(state, 'marketplace-confirmed', `${listing.sku}: ${change.message}`);
+          return null;
         }
       }
       current.changes.unshift(change);
@@ -475,7 +484,16 @@ export class MarketplacePublication {
         orderPending,
       }));
     });
-    if (consumedWork === null) return null;
+    if (consumedWork === null) {
+      if (intent) return null;
+      return {
+        change,
+        listing: listingView(
+          findMarketplaceListing(this.store.readMarketplace(), accountId, listing.id),
+          this.store.read(),
+        ),
+      };
+    }
     return this.dispatch(change, token, before, expected, consumedWork);
   }
 

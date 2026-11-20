@@ -345,7 +345,7 @@ test('review reports stale or blocked destinations and keeps publication unavail
   );
 });
 
-test('choosing Update once for a positive edit preserves Auto and submits the reviewed quantity once', async () => {
+test('choosing Update once on a paused listing keeps the pause visible and submits the reviewed quantity once', async () => {
   const state = initialState('demo', 'unused');
   state.mode = 'live';
   const modes: unknown[] = [];
@@ -367,6 +367,7 @@ test('choosing Update once for a positive edit preserves Auto and submits the re
             observed: 4,
             policy: 'Allow 2 more sales',
             stale: false,
+            paused: true,
             problem: 'Sales allowances require order tracking.',
             oneTimeProblem: null,
           },
@@ -400,7 +401,7 @@ test('choosing Update once for a positive edit preserves Auto and submits the re
   assert.ok((screen.getByLabelText(/Allow this many more sales/) as HTMLInputElement).disabled);
   fireEvent.click(screen.getByLabelText(/Update once/));
   assert.equal(screen.queryByText('Sales allowances require order tracking.'), null);
-  assert.ok(screen.getByText('Auto · update once'));
+  assert.ok(screen.getByText('Tally sync paused · update once'));
   fireEvent.click(screen.getByRole('button', { name: 'Publish 1 eligible listing' }));
   await screen.findByText('Readback confirmed two sets.');
   assert.deepEqual(modes, [['positive-review', 'once']]);

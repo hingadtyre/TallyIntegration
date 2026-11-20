@@ -19,7 +19,6 @@ export function formatQuantity(value: number | null): string {
 }
 
 export function formatPolicy(listing: Listing): string {
-  if (listing.policy === 'hold') return 'Kept out of stock';
   if (listing.policy === 'limited') {
     if (listing.remaining === 0) return 'Allowance used up';
     return `${listing.remaining} ${listing.remaining === 1 ? 'sale' : 'sales'} remaining`;

@@ -88,7 +88,7 @@ export function useWorkspace() {
       path: string,
       body: unknown,
       label: string,
-      success: string,
+      success: string | ((snapshot: Snapshot) => string),
     ): Promise<ActionResult<Snapshot>> =>
       runAction(
         label,

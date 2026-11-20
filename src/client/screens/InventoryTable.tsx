@@ -163,7 +163,7 @@ export function ItemRows({
             </td>
             <td>
               <QuantityEditor
-                key={`${listing.id}:${proposals.get(listing.id)?.createdAt ?? 'new'}`}
+                key={`${listing.id}:${proposals.get(listing.id)?.createdAt ?? 'new'}:${proposals.get(listing.id)?.listingVersion ?? listing.proposalIssue ?? ''}`}
                 listing={listing}
                 proposal={proposals.get(listing.id)}
                 disabled={busy}
@@ -172,10 +172,12 @@ export function ItemRows({
               />
             </td>
             <td>
-              <span className={`policy-pill policy-${listing.policy}`}>
-                <span className="status-dot" />
-                {policyLabel(listing)}
-              </span>
+              {(!listing.paused || listing.policy === 'limited') && (
+                <span className={`policy-pill policy-${listing.policy}`}>
+                  <span className="status-dot" />
+                  {policyLabel(listing)}
+                </span>
+              )}
               {listing.paused ? (
                 <ResumeSyncButton
                   sku={listing.sku}

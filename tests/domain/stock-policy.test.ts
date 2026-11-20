@@ -65,7 +65,7 @@ test('pack arithmetic floors incomplete packs; advertising floor is a separate p
   });
 });
 
-test('limited sales uses remaining listing units, while a hold persists through purchases', () => {
+test('limited sales uses remaining listing units, including an exhausted allowance', () => {
   const limited: StockPolicy = { mode: 'limited', remaining: 1 };
   assert.deepEqual(calculateStock({ physical: 4, packSize: 2, policy: limited }), {
     completePacks: 2,
@@ -75,10 +75,6 @@ test('limited sales uses remaining listing units, while a hold persists through 
   assert.equal(calculateStock({ physical: 1, packSize: 2, policy: limited }).desired, 0);
   assert.equal(calculateStock({ physical: 20, packSize: 2, policy: limited }).desired, 1);
   assert.equal(limited.remaining, 1);
-  assert.equal(
-    calculateStock({ physical: 100, packSize: 1, policy: { mode: 'hold', remaining: 0 } }).desired,
-    0,
-  );
   assert.equal(
     calculateStock({ physical: 100, packSize: 1, policy: { mode: 'limited', remaining: 0 } })
       .desired,
@@ -101,10 +97,10 @@ test('an allowance above calculated stock does not increase the advertised quant
   assert.equal(policy.remaining, 20, 'recalculation does not consume or grant allowance');
 });
 
-test('invalid observations are rejected even when policy would otherwise hold at zero', () => {
+test('invalid observations are rejected even with an exhausted allowance', () => {
   for (const physical of [NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(
-      () => calculateStock({ physical, packSize: 1, policy: { mode: 'hold', remaining: 0 } }),
+      () => calculateStock({ physical, packSize: 1, policy: { mode: 'limited', remaining: 0 } }),
       InvalidStockInput,
     );
   }

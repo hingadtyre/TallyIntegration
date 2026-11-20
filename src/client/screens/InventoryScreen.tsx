@@ -118,6 +118,27 @@ export function InventoryScreen({
     const result = await workspace.calculate(companyId, scope);
     if (result.ok) setLastCalculation({ scope: scopeKey, rows: result.value });
   }
+  async function togglePause(listing: Listing) {
+    const result = await mutate(
+      '/pause',
+      {
+        companyId,
+        listingIds: [listing.id],
+        listingVersion: listing.version,
+        paused: !listing.paused,
+      },
+      listing.paused ? 'Unlocking listing and calculating proposed stock' : 'Pausing Tally sync',
+      listing.paused
+        ? (snapshot) => {
+            const draft = snapshot.proposals.find((row) => row.listingId === listing.id);
+            return draft && !draft.stale && !draft.edited
+              ? `${listing.sku} unlocked. Proposed stock recalculated to ${draft.quantity}.`
+              : `${listing.sku} unlocked. See the listing for the calculation result.`;
+          }
+        : 'Tally sync paused at this location until you choose Resume sync.',
+    );
+    if (listing.paused && result.ok) setLastCalculation(null);
+  }
   function toggleSelection(id: string) {
     setSelected((current) =>
       current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
@@ -326,7 +347,7 @@ export function InventoryScreen({
                   '/zero',
                   { companyId, listingIds: scope },
                   'Preparing zero stock',
-                  'Zero-stock drafts saved. Active policies and marketplace stock are unchanged.',
+                  'Zero-stock drafts saved. Review and publish to pause Tally sync for these locations.',
                 );
                 if (result.ok) setLastCalculation(null);
               }}
@@ -439,26 +460,12 @@ export function InventoryScreen({
                         '/proposals',
                         { companyId, listingId: listing.id, quantity: amount },
                         'Saving draft',
-                        'Draft saved. Review it before publication; the active policy has not changed.',
+                        'Draft saved. Review and publish when ready.',
                       );
                       if (result.ok) setLastCalculation(null);
                       return result;
                     }}
-                    onPause={(listing) =>
-                      void mutate(
-                        '/pause',
-                        {
-                          companyId,
-                          listingIds: [listing.id],
-                          listingVersion: listing.version,
-                          paused: !listing.paused,
-                        },
-                        'Saving automation setting',
-                        listing.paused
-                          ? 'Pause removed for this listing. Company automation and stock policy still apply.'
-                          : 'Automatic publication paused for this listing. Its underlying stock policy is preserved.',
-                      )
-                    }
+                    onPause={(listing) => void togglePause(listing)}
                     onReview={(listing) => void openReview([listing.id])}
                     onHistory={setHistoryListing}
                     onRemove={setRemoveListing}

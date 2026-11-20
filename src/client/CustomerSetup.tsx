@@ -99,11 +99,13 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
       </p>
       <p>
         Use Calculate, Review changes and Publish to send reviewed stock. For a positive manual edit
-        on an Auto listing, choose Update once. With automatic updates enabled, a change in Tally
-        stock recalculates eligible listings. A verified Flipkart sale can also lower stock on other
-        listings supplied by the same Tally item before the sale is billed. Review any package-count
-        changes in the listing’s Set of cell. If a bulk calculation reports blocked listings, use
-        Fix Set of where offered or review the ready drafts.
+        on an Auto listing, choose Update once. Publishing a zero you entered pauses Tally sync at
+        that location. When Tally stock falls too low to fill a set, Stockbridge can publish a
+        calculated zero and update the listing again after restocking. With automatic updates
+        enabled, a change in Tally stock recalculates eligible listings. A verified Flipkart sale
+        can also lower stock on other listings supplied by the same Tally item before the sale is
+        billed. Review any package-count changes in the listing’s Set of cell. If a bulk calculation
+        reports blocked listings, use Fix Set of where offered or review the ready drafts.
       </p>
       <p>
         To see which recent Flipkart orders you have billed, open Order matching. Select the Tally
@@ -118,13 +120,14 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
         In Marketplaces, use the pencil beside stock, MRP or selling price. Applying a manual stock
         edit to a Tally-mapped listing pauses sync at that warehouse. Flipkart can still deduct
         sales. Stockbridge skips automatic updates, including zero, until you choose Resume sync
-        beside the lock. With company sync on, the next eligible update can apply the calculated
-        stock. Existing holds and sales allowances require an explicit policy change before a
-        conflicting edit. If an update is uncertain, choose Check result. When the earlier stock
-        request can no longer take effect, choose Review current stock. Compare Flipkart stock with
-        the freshly calculated quantity and approve the value for that location. If the two match,
-        approval completes the review without sending stock. Settlement editing opens Flipkart
-        Seller Hub.
+        beside the lock. Resume replaces that location’s draft with a fresh proposed quantity. If
+        Stockbridge cannot verify the stock, the row shows what needs attention. With company sync
+        on, the next eligible update can publish. Existing sales allowances require an explicit
+        policy change before a conflicting edit. If an update is uncertain, choose Check result.
+        When the earlier stock request can no longer take effect, choose Review current stock.
+        Compare Flipkart stock with the freshly calculated quantity and approve the value for that
+        location. If the two match, approval completes the review without sending stock. Settlement
+        editing opens Flipkart Seller Hub.
       </p>
       <p>
         <a

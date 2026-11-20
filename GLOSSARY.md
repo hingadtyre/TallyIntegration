@@ -87,11 +87,11 @@ The seller’s permission for Stockbridge to publish automatic stock updates for
 A seller-approved publication of the calculated stock for one mapped listing at one seller location while company sync is off.
 
 **Automation pause**:
-A stop of all automatic stock publication for one seller's marketplace listing at one location, including zero updates, until the seller resumes sync. Stock observations, allowance accounting and Flipkart sales continue. The seller can still publish a reviewed quantity.
+A stop of all automatic stock publication for one seller's marketplace listing at one location, including zero updates, until the seller resumes sync. Applying a manually entered zero pauses that destination. A zero calculated from available stock can be published while sync continues. The seller can still review and publish a quantity while paused, and Flipkart can still record sales.
 _Avoid_: Disabled listing, deleted mapping
 
 **Manual override**:
-A seller-chosen adjustment to a listing's normal calculated stock behavior, such as a sales allowance or an out-of-stock hold.
+A seller-chosen adjustment to a listing's normal calculated stock behavior, such as a finite sales allowance.
 
 **Sales allowance**:
 A finite number of additional listing units the seller permits to be sold before that listing is advertised as out of stock. A listing unit is one complete pack, not necessarily one physical tyre.
@@ -100,16 +100,12 @@ _Avoid_: Stock cap, maximum displayed quantity, automation lock
 **Remaining allowance**:
 The unconsumed portion of a sales allowance. Physical stock availability and remaining allowance are separate constraints; purchases, cancellations and returns do not restore an exhausted allowance without the seller's explicit action.
 
-**Manual out-of-stock hold**:
-A seller instruction to keep a specific marketplace listing at zero advertised stock, even when its mapped Tally item has stock. It remains until the seller grants allowance or returns the listing to normal automatic calculation.
-_Avoid_: Deleting the listing, zeroing Tally stock, pausing all updates
-
 **Observed marketplace stock**:
 The stock quantity last read from a marketplace for a listing at a particular seller location, together with the time it was read.
 _Avoid_: Live stock when the value has not just been verified
 
 **Proposed stock**:
-A quantity prepared for review before publication to a marketplace. It may differ from observed marketplace stock.
+A quantity prepared for review before publication to a marketplace. Resuming sync replaces the saved proposal for that location with a fresh calculation. Observed marketplace stock is the quantity last seen at the location.
 
 **Stock publication**:
 An attempt to send a proposed stock quantity to a marketplace. A sent request and a confirmed marketplace update are distinct outcomes.

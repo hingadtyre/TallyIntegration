@@ -1,7 +1,7 @@
 /** Stock arithmetic only. Connection freshness, pack evidence and dispatch permissions
  * must be validated by the application before publishing any result. */
 export interface StockPolicy {
-  mode: 'auto' | 'limited' | 'hold';
+  mode: 'auto' | 'limited';
   remaining: number | null;
 }
 
@@ -51,7 +51,6 @@ export function calculateStock(input: {
   tyreFloor?: boolean;
   policy: StockPolicy;
 }): StockCalculation {
-  // Validate stock even for a hold: missing observations are not a real zero.
   const packs = completePacks(input.physical, input.packSize);
   const advertised = input.tyreFloor === false ? packs : applyFlipkartTyreFloor(packs);
   const { mode, remaining } = input.policy;
@@ -65,8 +64,6 @@ export function calculateStock(input: {
         throw new InvalidStockInput('Limited sales requires a remaining allowance.');
       }
       return { completePacks: packs, advertised, desired: Math.min(advertised, remaining) };
-    case 'hold':
-      return { completePacks: packs, advertised, desired: 0 };
     default:
       throw new InvalidStockInput('Unknown stock policy.');
   }

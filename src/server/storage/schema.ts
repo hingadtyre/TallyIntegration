@@ -1,12 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 /** Each managed record has an explicit table. Array order is presentation state,
  * so sort_order is retained without making names or positions into identities. */
 export function createSchema(
   database: DatabaseSync,
-  version: 6 | 7 | 8 = CURRENT_SCHEMA_VERSION,
+  version: 6 | 7 | 8 | 9 | 10 = CURRENT_SCHEMA_VERSION,
 ): void {
   database.exec(`
     CREATE TABLE app_metadata (
@@ -112,6 +112,11 @@ export function createSchema(
   createStockCoverageSchema(database);
   if (version >= 7) upgradeOrderSyncSchema(database);
   if (version >= 8) addCompanyStockIssue(database);
+  if (version >= 10) addProposalIssue(database);
+}
+
+export function addProposalIssue(database: DatabaseSync): void {
+  database.exec('ALTER TABLE listings ADD COLUMN proposal_issue TEXT');
 }
 
 export function addCompanyStockIssue(database: DatabaseSync): void {

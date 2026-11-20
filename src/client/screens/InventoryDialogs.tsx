@@ -42,7 +42,11 @@ export function ReviewDialog({
     return {
       ...row,
       problem: row.oneTimeProblem,
-      policy: row.oneTimeProblem ? 'Update once unavailable' : 'Auto · update once',
+      policy: row.oneTimeProblem
+        ? 'Update once unavailable'
+        : row.paused
+          ? 'Tally sync paused · update once'
+          : 'Auto · update once',
     };
   });
   const outcomes = new Map(result?.rows.map((entry) => [entry.listingId, entry]));
@@ -91,8 +95,7 @@ export function ReviewDialog({
       <p className="modal-intro">
         {state.mode === 'demo'
           ? 'This sample publication uses local data.'
-          : 'Publishing sends the eligible quantities below to Flipkart.'}{' '}
-        An edited zero keeps that listing out of stock.
+          : 'Publishing sends the eligible quantities below to Flipkart.'}
       </p>
       {hasPositiveEdits && (
         <fieldset className="pack-fields" disabled={pending || !!result || !!error}>
@@ -133,7 +136,7 @@ export function ReviewDialog({
               <th scope="col">Listing / destination</th>
               <th scope="col">Observed</th>
               <th scope="col">Proposed</th>
-              <th scope="col">Resulting policy</th>
+              <th scope="col">After publishing</th>
               {result && <th scope="col">Publication result</th>}
             </tr>
           </thead>
@@ -165,7 +168,7 @@ export function ReviewDialog({
                 </td>
                 <td>
                   <span className="review-cell-label" aria-hidden="true">
-                    Resulting policy
+                    After publishing
                   </span>
                   {row.policy}
                 </td>

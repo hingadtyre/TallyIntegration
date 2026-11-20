@@ -1285,15 +1285,6 @@ small {
   background: #c49e4e;
 }
 
-.policy-hold {
-  color: #75674f;
-  background: #f3f1eb;
-}
-
-.policy-hold .status-dot {
-  background: #a79982;
-}
-
 .automation-button {
   display: flex;
   align-items: center;

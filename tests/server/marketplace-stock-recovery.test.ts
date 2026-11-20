@@ -232,7 +232,7 @@ test('a newer order during a rejected stock increase preserves full Tally work a
           (row) => row.locationId === s.remote.locations[0].id,
         )!;
         assert.equal(destination.paused, true);
-        s.f.service.pause(
+        await s.f.service.pause(
           destination.companyId,
           [destination.listingId],
           false,

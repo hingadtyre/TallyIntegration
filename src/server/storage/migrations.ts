@@ -15,6 +15,7 @@ import {
   createBillingSchema,
   createStockCoverageSchema,
   addCompanyStockIssue,
+  addProposalIssue,
   upgradeOrderSyncSchema,
   CURRENT_SCHEMA_VERSION,
   schemaVersion,
@@ -73,7 +74,8 @@ export function prepareDatabase(
     });
     return null;
   }
-  if (version < 1 || version > 7) throw new Error(`Unsupported database schema ${version}.`);
+  if (version < 1 || version >= CURRENT_SCHEMA_VERSION)
+    throw new Error(`Unsupported database schema ${version}.`);
 
   const revision = database.prepare('PRAGMA data_version').get()?.data_version;
   if (version >= 6) verifyStockCoverage(database);
@@ -101,8 +103,6 @@ export function prepareDatabase(
     }
     if (version === 1) {
       createSchema(database);
-      database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
-      writeSnapshot(database, state);
       database.exec('DROP TABLE app_state;');
     } else {
       if (version === 2) createMarketplaceSchema(database);
@@ -110,9 +110,12 @@ export function prepareDatabase(
       if (version < 5) createBillingSchema(database);
       if (version < 6) createStockCoverageSchema(database);
       if (version < 7) upgradeOrderSyncSchema(database);
-      addCompanyStockIssue(database);
+      if (version < 8) addCompanyStockIssue(database);
+      if (version < 10) addProposalIssue(database);
     }
     database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION};`);
+    // The old-schema reader converted holds to pauses with their drafts and queued work.
+    writeSnapshot(database, state);
   });
   return backupPath;
 }

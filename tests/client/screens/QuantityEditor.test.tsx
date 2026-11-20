@@ -96,3 +96,59 @@ test('stale saved edits remain visible and must be saved again before review', (
     false,
   );
 });
+
+test('explicitly retyping a calculated zero makes it a manual draft only after Save', async () => {
+  const state = initialState('demo', 'unused');
+  const calculatedZero = { ...proposal, quantity: 0, calculated: 0 };
+  const saved: number[] = [];
+  function editor(edited: boolean) {
+    return (
+      <QuantityEditor
+        key={String(edited)}
+        listing={state.listings[0]}
+        proposal={{ ...calculatedZero, edited }}
+        disabled={false}
+        onDirty={() => {}}
+        onSave={async (quantity) => {
+          saved.push(quantity);
+          return { ok: true, value: state };
+        }}
+      />
+    );
+  }
+  const { rerender, container } = render(editor(false));
+  const input = screen.getByRole('spinbutton');
+  fireEvent.focus(input);
+  assert.ok(screen.getByText('Calculated draft'));
+  assert.equal(screen.queryByRole('button', { name: /Save draft/ }), null);
+  fireEvent.submit(container.querySelector('form')!);
+  assert.deepEqual(saved, []);
+  fireEvent.input(input, { target: { value: '0' } });
+  assert.deepEqual(saved, []);
+  fireEvent.click(screen.getByRole('button', { name: /Save draft/ }));
+  await waitFor(() => assert.deepEqual(saved, [0]));
+  rerender(editor(true));
+  assert.ok(screen.getByText('Publishing pauses Tally sync'));
+  assert.equal(screen.queryByRole('button', { name: /Save draft/ }), null);
+});
+
+test('an unchanged stale calculated zero requires recalculation and cannot be submitted as a manual zero', () => {
+  const state = initialState('demo', 'unused');
+  let saves = 0;
+  const { container } = render(
+    <QuantityEditor
+      listing={state.listings[0]}
+      proposal={{ ...proposal, quantity: 0, calculated: 0, stale: true }}
+      disabled={false}
+      onDirty={() => {}}
+      onSave={async () => {
+        saves++;
+        return { ok: true, value: state };
+      }}
+    />,
+  );
+  assert.ok(screen.getByText('Needs recalculation'));
+  assert.equal(screen.queryByRole('button', { name: /Save draft/ }), null);
+  fireEvent.submit(container.querySelector('form')!);
+  assert.equal(saves, 0);
+});

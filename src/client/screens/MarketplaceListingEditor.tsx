@@ -74,12 +74,10 @@ export function MarketplaceListingEditor({
     quantity >= 0 &&
     (target.kind !== 'stock' || Number.isSafeInteger(quantity));
   const conflict =
-    policy &&
+    policy?.policy === 'limited' &&
     valid &&
-    ((policy.policy === 'hold' && quantity > 0) ||
-      (policy.policy === 'limited' &&
-        quantity > 0 &&
-        (!demo || policy.remaining === null || quantity > policy.remaining)));
+    quantity > 0 &&
+    (!demo || policy.remaining === null || quantity > policy.remaining);
   const needsReconcile =
     !!change && ['pending', 'sending', 'checking', 'uncertain'].includes(change.state);
   const finished = change?.state === 'confirmed' || change?.state === 'reconciled';
@@ -224,13 +222,8 @@ export function MarketplaceListingEditor({
             )}
             <p>
               {policy.companyName}
-              {!policy.paused && ` · ${policy.automationStatus ?? 'Status unavailable'}`} · Stock
-              policy:{' '}
-              {policy.policy === 'hold'
-                ? 'Kept out of stock'
-                : policy.policy === 'limited'
-                  ? `Limited sales: ${policy.remaining ?? 'unknown'} remaining`
-                  : 'Auto'}
+              {!policy.paused && ` · ${policy.automationStatus ?? 'Status unavailable'}`}
+              {policy.policy === 'limited' && ` · ${policy.remaining ?? 'Unknown'} sales remaining`}
             </p>
             {policy.companyId && (
               <p>
@@ -249,11 +242,9 @@ export function MarketplaceListingEditor({
         {conflict && (
           <div className="marketplace-error" role="alert">
             <p>
-              {policy?.policy === 'hold'
-                ? 'This listing is kept out of stock. Change its stock policy before setting a positive quantity.'
-                : !demo
-                  ? 'Live sales allowance reconciliation is not yet available. Positive stock cannot be applied under Limited sales. Explicitly change the stock policy first.'
-                  : 'This quantity exceeds or cannot be checked against the remaining sales allowance. Change its stock policy first.'}
+              {!demo
+                ? 'Live sales allowance reconciliation is not yet available. Positive stock cannot be applied under Limited sales. Explicitly change the stock policy first.'
+                : 'This quantity exceeds or cannot be checked against the remaining sales allowance. Change its stock policy first.'}
             </p>
             <button
               className="text-button"
@@ -271,10 +262,8 @@ export function MarketplaceListingEditor({
           >
             <h3>Return to automatic stock policy?</h3>
             <p>
-              This explicitly removes the{' '}
-              {policy?.policy === 'hold' ? 'out-of-stock hold' : 'limited-sales allowance'} for this
-              destination. The current Pause setting stays unchanged. This policy change does not
-              send stock to Flipkart. Review the quantity and use Apply separately.
+              This removes the sales allowance at this location. Review the quantity and choose
+              Apply to update stock.
             </p>
             <button
               className="button secondary"

@@ -842,7 +842,10 @@ export class MarketplaceService {
           return {
             ...identity,
             status: 'unchanged',
-            message: 'The current marketplace quantity already matches.',
+            message:
+              intent.draft?.edited && quantity === 0
+                ? 'Stock is already zero. Tally sync paused for this location.'
+                : 'The current marketplace quantity already matches.',
           };
         const status =
           result.change.state === 'confirmed' || result.change.state === 'failed'

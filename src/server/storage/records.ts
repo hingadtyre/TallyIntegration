@@ -20,6 +20,7 @@ type TableName =
 /** Reconstruct the API read model from explicit records. Store supplies a read
  * transaction so all these queries observe the same committed database state. */
 export function readSnapshot(database: DatabaseSync): Snapshot {
+  const version = schemaVersion(database);
   const metadata = database.prepare('SELECT mode FROM app_metadata WHERE id = 1').get();
   const settings = database
     .prepare(
@@ -42,7 +43,7 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
     .prepare(
       `
     SELECT id, name, automation, source, last_success AS lastSuccess
-      ${schemaVersion(database) >= 8 ? ', stock_issue AS stockIssue' : ''}
+      ${version >= 8 ? ', stock_issue AS stockIssue' : ''}
     FROM companies ORDER BY sort_order
   `,
     )
@@ -61,10 +62,9 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
     )
     .all();
   const packs = new Map(
-    (schemaVersion(database) >= 4
-      ? database.prepare('SELECT * FROM listing_pack_settings').all()
-      : []
-    ).map((row) => [row.listing_id, row]),
+    (version >= 4 ? database.prepare('SELECT * FROM listing_pack_settings').all() : []).map(
+      (row) => [row.listing_id, row],
+    ),
   );
   const listings = database
     .prepare(
@@ -72,6 +72,7 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
     SELECT id, account_id AS accountId, sku, title, location, item_id AS itemId,
       pack_size AS packSize, pack_evidence AS packEvidence, verified, observed,
       observed_at AS observedAt, policy, remaining, paused, version
+      ${version >= 10 ? ', proposal_issue AS proposalIssue' : ''}
     FROM listings ORDER BY sort_order
   `,
     )
@@ -119,18 +120,21 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
       companyId: row.companyId ?? undefined,
       listingId: row.listingId ?? undefined,
     }));
-  return validateSnapshot({
-    mode: metadata?.mode,
-    publishingEnabled: false,
-    companies,
-    items,
-    accounts,
-    listings,
-    proposals,
-    activity,
-    settings,
-    connection,
-  });
+  return validateSnapshot(
+    {
+      mode: metadata?.mode,
+      publishingEnabled: false,
+      companies,
+      items,
+      accounts,
+      listings,
+      proposals,
+      activity,
+      settings,
+      connection,
+    },
+    { convertLegacyHolds: version < 9 },
+  );
 }
 
 /** Identifiers come only from the explicit mappings below, never from user input.
@@ -210,7 +214,7 @@ export function writeSnapshot(database: DatabaseSync, input: Snapshot): void {
       next_poll: state.connection.nextPoll,
     },
   ]);
-  const hasCompanyStockIssue = schemaVersion(database) >= 8;
+  const version = schemaVersion(database);
   syncTable(
     database,
     'companies',
@@ -221,7 +225,7 @@ export function writeSnapshot(database: DatabaseSync, input: Snapshot): void {
       automation: Number(company.automation),
       source: company.source,
       last_success: company.lastSuccess,
-      ...(hasCompanyStockIssue && { stock_issue: company.stockIssue ?? null }),
+      ...(version >= 8 && { stock_issue: company.stockIssue ?? null }),
       sort_order: index,
     })),
   );
@@ -274,6 +278,7 @@ export function writeSnapshot(database: DatabaseSync, input: Snapshot): void {
       policy: listing.policy,
       remaining: listing.remaining,
       paused: Number(listing.paused),
+      ...(version >= 10 && { proposal_issue: listing.proposalIssue ?? null }),
       version: listing.version,
       sort_order: index,
     })),

@@ -253,6 +253,7 @@ function restoredSnapshot(
   for (const listing of restored.listings) {
     if (!listing.paused) listing.version++;
     listing.paused = true;
+    delete listing.proposalIssue;
     listing.observedAt = null;
     if (listing.packageAvailable !== undefined) listing.packageAvailable = false;
     if (listing.syncPendingItemVersion != null) listing.syncPendingItemVersion = null;
@@ -297,12 +298,10 @@ function requirePreservedStockRestrictions(restored: Snapshot, current: Snapshot
     if (listing.policy === 'auto') continue;
     const protectedDestination = destinations.some(
       (row) =>
-        row.policy === 'hold' ||
-        (listing.policy === 'limited' &&
-          row.policy === 'limited' &&
-          row.remaining !== null &&
-          listing.remaining !== null &&
-          row.remaining <= listing.remaining),
+        row.policy === 'limited' &&
+        row.remaining !== null &&
+        listing.remaining !== null &&
+        row.remaining <= listing.remaining,
     );
     if (!protectedDestination)
       throw new Error(

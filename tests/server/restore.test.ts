@@ -648,30 +648,61 @@ test('a backup with disjoint catalogue ownership cannot attach its listings to a
   assert.deepEqual(queryFile(f.destination, readMarketplace), current);
 });
 
-test('restore refuses to remove a newer hold or reopen a consumed sales allowance', async (t) => {
-  for (const policy of ['hold', 'limited', 'missing-destination'] as const) {
-    await t.test(policy, async (nested) => {
-      const f = fixture(nested, 'demo');
-      const store = new Store(f.destination, 'demo');
-      let current;
-      try {
-        store.update((state) => {
-          const listing = state.listings[0];
-          listing.policy = policy === 'limited' ? 'limited' : 'hold';
-          listing.remaining = policy === 'limited' ? 0 : null;
-          if (policy === 'missing-destination') listing.location = 'newer-location';
-        });
-        current = store.read();
-      } finally {
-        store.close();
-      }
-      await assert.rejects(
-        restorePilotBackup(restoreOptions(f)),
-        /remove or weaken a current stock restriction.*Reconcile marketplace policies/s,
-      );
-      assert.deepEqual(queryFile(f.destination, readSnapshot), current);
-    });
+test('restore refuses to remove a destination allowance or reopen a consumed sales allowance', async (t) => {
+  for (const includedInBackup of [true, false]) {
+    await t.test(
+      includedInBackup ? 'consumed allowance' : 'missing destination',
+      async (nested) => {
+        const f = fixture(nested, 'demo');
+        const store = new Store(f.destination, 'demo');
+        let current;
+        try {
+          store.update((state) => {
+            const listing = state.listings[0];
+            listing.policy = 'limited';
+            listing.remaining = 0;
+            if (!includedInBackup) listing.location = 'newer-location';
+          });
+          current = store.read();
+        } finally {
+          store.close();
+        }
+        await assert.rejects(
+          restorePilotBackup(restoreOptions(f)),
+          /remove or weaken a current stock restriction.*Reconcile marketplace policies/s,
+        );
+        assert.deepEqual(queryFile(f.destination, readSnapshot), current);
+      },
+    );
   }
+});
+
+test('restoring an older backup converts a hold to a pause without changing its last observed quantity', async (t) => {
+  const f = fixture(t, 'demo');
+  queryFile(f.backupFile, (db) => {
+    db.exec('PRAGMA user_version = 8');
+    db.prepare(
+      "UPDATE listings SET policy = 'hold', remaining = 0, observed = 3, paused = 0 WHERE id = ?",
+    ).run('listing-1');
+  });
+  const manifest = JSON.parse(readFileSync(`${f.backupFile}.json`, 'utf8'));
+  writeFileSync(`${f.backupFile}.json`, JSON.stringify({ ...manifest, schemaVersion: 8 }));
+  const result = await restorePilotBackup(restoreOptions(f));
+  const state = queryFile(result.destination, readSnapshot);
+  const listing = state.listings.find((entry) => entry.id === 'listing-1')!;
+  assert.equal(listing.policy, 'auto');
+  assert.equal(listing.remaining, null);
+  assert.equal(listing.paused, true);
+  assert.equal(listing.observed, 3);
+  assert.equal(state.proposals.find((entry) => entry.listingId === listing.id)?.stale, true);
+  assert.equal(queryFile(result.destination, readMarketplace).changes.length, 0);
+  assert.equal(
+    queryFile(
+      f.backupFile,
+      (db) => db.prepare('SELECT policy FROM listings WHERE id = ?').get(listing.id)?.policy,
+    ),
+    'hold',
+  );
 });
 
 test('restore preserves existing paused destinations and refuses to discard a newer paused destination', async (t) => {

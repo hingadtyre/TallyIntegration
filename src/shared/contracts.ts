@@ -1,4 +1,4 @@
-export type PolicyMode = 'auto' | 'limited' | 'hold';
+export type PolicyMode = 'auto' | 'limited';
 export interface Company {
   id: string;
   name: string;
@@ -39,6 +39,8 @@ export interface Listing {
   marketplaceListingId?: string;
   /** Read-only status of automatic publication for this destination. */
   automationStatus?: string;
+  /** Reason the last calculation after Resume could not supply a proposed quantity. */
+  proposalIssue?: string;
   /** A Tally balance change still awaiting dispatch for this destination. */
   syncPendingItemVersion?: number | null;
   /** A verified order queued a decrease check for this shared stock item. */
@@ -122,6 +124,8 @@ export interface Snapshot {
   connection: ConnectionStatus;
 }
 export interface ReviewRow {
+  /** Whether the destination was paused when the seller opened this review. */
+  paused?: boolean;
   /** Present for positive manual edits, including null when Update once is eligible. */
   oneTimeProblem?: string | null;
   listingId: string;

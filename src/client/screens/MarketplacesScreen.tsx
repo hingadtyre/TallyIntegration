@@ -265,6 +265,12 @@ function MarketplaceAccountTile({
   );
 }
 
+interface ResumedProposal {
+  listingId: string;
+  version: number;
+  quantity: number;
+}
+
 function MarketplaceListings({
   account,
   demo,
@@ -292,6 +298,7 @@ function MarketplaceListings({
   const [editor, setEditor] = useState<MarketplaceEditorTarget | null>(null);
   const [recovery, setRecovery] = useState<MarketplaceChange | null>(null);
   const [pendingListings, setPendingListings] = useState<string[]>([]);
+  const [resumeResult, setResumeResult] = useState<ResumedProposal | null>(null);
   const [rowErrors, setRowErrors] = useState<
     Record<string, { message: string; uncertain: boolean }>
   >({});
@@ -496,6 +503,8 @@ function MarketplaceListings({
                     pending={pendingListings.includes(listing.id)}
                     failure={rowErrors[listing.id]}
                     onReload={() => setRevision((value) => value + 1)}
+                    resumeResult={resumeResult}
+                    onResumeCalculated={setResumeResult}
                     onEdit={setEditor}
                     onResult={applyResult}
                     onReviewRecovery={openRecovery}
@@ -580,6 +589,8 @@ function MarketplaceListingRow({
   pending,
   failure,
   onReload,
+  resumeResult,
+  onResumeCalculated,
   onEdit,
   onResult,
   onReviewRecovery,
@@ -589,6 +600,8 @@ function MarketplaceListingRow({
   pending: boolean;
   failure?: { message: string; uncertain: boolean };
   onReload: () => void;
+  resumeResult: ResumedProposal | null;
+  onResumeCalculated: (result: ResumedProposal) => void;
   onEdit: (target: MarketplaceEditorTarget) => void;
   onResult: (result: MarketplaceApplyResult) => void;
   onReviewRecovery: (change: MarketplaceChange) => void;
@@ -606,12 +619,20 @@ function MarketplaceListingRow({
     setResuming(true);
     setError('');
     try {
-      await requestJson('/pause', {
+      const snapshot = await requestJson<Snapshot>('/pause', {
         companyId: policy.companyId,
         listingIds: [policy.listingId],
         listingVersion: policy.listingVersion,
         paused: false,
       });
+      const destination = snapshot.listings.find((row) => row.id === policy.listingId);
+      const draft = snapshot.proposals.find((row) => row.listingId === policy.listingId);
+      if (destination && !destination.paused && draft && !draft.edited && !draft.stale)
+        onResumeCalculated({
+          listingId: destination.id,
+          version: destination.version,
+          quantity: draft.quantity,
+        });
       onReload();
     } catch (failure) {
       setError(errorMessage(failure));
@@ -754,9 +775,8 @@ function MarketplaceListingRow({
                   <span aria-hidden="true">✎</span>
                 </button>
                 <small>
-                  {policy
-                    ? `${policy.companyName} · ${policy.policy === 'hold' ? 'Kept out of stock' : policy.policy === 'limited' ? `${policy.remaining ?? '?'} sales remaining` : 'Auto'}`
-                    : 'Not mapped to Tally'}
+                  {policy?.companyName ?? 'Not mapped to Tally'}
+                  {policy?.policy === 'limited' && ` · ${policy.remaining ?? '?'} sales remaining`}
                 </small>
                 {policy?.paused && policy.companyId ? (
                   <ResumeSyncButton
@@ -773,6 +793,17 @@ function MarketplaceListingRow({
                     </small>
                   )
                 )}
+                {policy &&
+                  !policy.paused &&
+                  (policy.proposalIssue ? (
+                    <small className="text-amber" role="status">
+                      Last calculation could not verify stock. {policy.proposalIssue} Use Calculate
+                      in Inventory to retry.
+                    </small>
+                  ) : resumeResult?.listingId === policy.listingId &&
+                    resumeResult.version === policy.listingVersion ? (
+                    <small role="status">Proposed stock on resume: {resumeResult.quantity}</small>
+                  ) : null)}
               </div>
             );
           })}

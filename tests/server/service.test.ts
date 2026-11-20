@@ -115,17 +115,17 @@ test('mapping rejects missing records, existing mappings and unconfirmed pack ev
   }
 });
 
-test('commands reject empty, malformed, missing and mixed-company destination sets', (t) => {
+test('commands reject empty, malformed, missing and mixed-company destination sets', async (t) => {
   const f = fixture(t);
   const before = f.service.snapshot();
   for (const ids of [undefined, 'listing-1', [], [1], ['missing'], ['listing-1', 'listing-8']]) {
     assert.throws(() => f.service.calculate('demo-a', ids), InputError);
     assert.throws(() => f.service.review('demo-a', ids), InputError);
-    assert.throws(() => f.service.pause('demo-a', ids, true), InputError);
+    await assert.rejects(f.service.pause('demo-a', ids, true), InputError);
     assert.deepEqual(f.service.snapshot(), before);
   }
   assert.throws(() => f.service.calculate('missing', ['listing-1']), InputError);
-  assert.throws(() => f.service.pause('demo-a', ['listing-1'], 'true'), InputError);
+  await assert.rejects(f.service.pause('demo-a', ['listing-1'], 'true'), InputError);
   assert.deepEqual(f.service.snapshot(), before);
 });
 
@@ -333,20 +333,37 @@ test('review captures destinations and does not expand when later proposals are 
   assert.equal(captured.publishingEnabled, false);
 });
 
-test('pause and resume retain limited-sales and zero-hold policies', (t) => {
+test('paused listings calculate the current target and retain sales allowances after resume', async (t) => {
   const f = fixture(t);
   const original = f.service.snapshot();
-  f.service.pause('demo-a', ['listing-5', 'listing-6'], true);
+  await f.service.pause('demo-a', ['listing-5', 'listing-6'], true);
   f.service.calculate('demo-a', ['listing-5', 'listing-6']);
   const review = f.service.review('demo-a', ['listing-5', 'listing-6']);
   assert.deepEqual(
-    review.rows.map((row) => [row.quantity, row.problem]),
+    review.rows.map((row) => [row.quantity, row.policy, row.problem]),
     [
-      [0, null],
-      [1, null],
+      [5, 'Tally sync paused', null],
+      [1, 'Tally sync paused · 1 sale remaining', null],
     ],
   );
-  const resumed = f.service.pause('demo-a', ['listing-5', 'listing-6'], false);
+  f.service.edit('demo-a', 'listing-5', 0);
+  f.service.edit('demo-a', 'listing-6', 0);
+  const unrelated = f.service
+    .edit('demo-a', 'listing-2', 2)
+    .proposals.find((p) => p.listingId === 'listing-2')!;
+  const resumed = await f.service.pause('demo-a', ['listing-5', 'listing-6'], false);
+  assert.deepEqual(
+    resumed.proposals.find((p) => p.listingId === 'listing-2'),
+    unrelated,
+  );
+  const resumedDrafts = resumed.proposals.filter((p) => p.listingId !== 'listing-2');
+  assert.deepEqual(
+    resumedDrafts.map((p) => [p.listingId, p.quantity, p.edited, p.stale]),
+    [
+      ['listing-5', 5, false, false],
+      ['listing-6', 1, false, false],
+    ],
+  );
   for (const id of ['listing-5', 'listing-6']) {
     const before = original.listings.find((row) => row.id === id)!;
     const after = resumed.listings.find((row) => row.id === id)!;

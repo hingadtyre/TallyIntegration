@@ -37,10 +37,10 @@ test('a destination that becomes unavailable does not report a backup or change 
   assert.deepEqual(f.service.snapshot(), before);
   assert.equal(readFileSync(blocked, 'utf8'), 'retained fixture file');
 });
-test('saved drafts survive restart, callers cannot mutate stored state, and backup is readable', (t) => {
+test('saved drafts survive restart, callers cannot mutate stored state, and backup is readable', async (t) => {
   const f = fixture(t);
   f.service.edit('demo-a', 'listing-1', 1);
-  f.service.pause('demo-a', ['listing-5'], true);
+  await f.service.pause('demo-a', ['listing-5'], true);
   const saved = f.service.snapshot();
   const detached = f.service.snapshot();
   detached.listings[0].observed = 999;

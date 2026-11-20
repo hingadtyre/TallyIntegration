@@ -130,7 +130,7 @@ export function ResumeSyncButton({
       type="button"
       className="resume-sync"
       aria-label={`Resume sync for ${sku} at ${location}`}
-      title="Resume automatic stock updates at this location when company sync is on."
+      title="Unlock this location and replace its draft with a fresh stock calculation. Company sync controls automatic updates."
       disabled={disabled}
       onClick={onResume}
     >

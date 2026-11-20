@@ -49,6 +49,7 @@ export interface MarketplaceListingView extends MarketplaceListing {
     companyId?: string;
     companyName: string;
     automationStatus?: string;
+    proposalIssue?: string;
     policy: PolicyMode;
     remaining: number | null;
     paused: boolean;

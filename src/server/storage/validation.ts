@@ -127,8 +127,9 @@ function account(value: unknown, field: string): SellerAccount {
   };
 }
 
-function listing(value: unknown, field: string): Listing {
+function listing(value: unknown, field: string, legacyHolds?: Set<string>): Listing {
   const row = record(value, field);
+  const wasHeld = legacyHolds !== undefined && row.policy === 'hold';
   const result: Listing = {
     id: string(row.id, `${field}.id`),
     accountId: string(row.accountId, `${field}.accountId`),
@@ -173,16 +174,27 @@ function listing(value: unknown, field: string): Listing {
     ...(row.orderSyncPending != null && {
       orderSyncPending: string(row.orderSyncPending, `${field}.orderSyncPending`),
     }),
+    ...(row.proposalIssue != null && {
+      proposalIssue: string(row.proposalIssue, `${field}.proposalIssue`),
+    }),
     verified: boolean(row.verified, `${field}.verified`),
     observed: row.observed === null ? null : integer(row.observed, `${field}.observed`),
     observedAt: nullableTimestamp(row.observedAt, `${field}.observedAt`),
-    policy: choice(row.policy, ['auto', 'limited', 'hold'], `${field}.policy`),
+    policy: wasHeld ? 'auto' : choice(row.policy, ['auto', 'limited'], `${field}.policy`),
     remaining: row.remaining === null ? null : integer(row.remaining, `${field}.remaining`),
     paused: boolean(row.paused, `${field}.paused`),
     version: integer(row.version, `${field}.version`),
   };
   if (result.policy === 'limited' && result.remaining === null) {
     throw new InvalidStoredState(`${field}.remaining`, 'is required for Limited sales');
+  }
+  if (wasHeld) {
+    legacyHolds.add(result.id);
+    result.paused = true;
+    result.remaining = null;
+    result.version = integer(result.version + 1, `${field}.version`);
+    if (result.syncPendingItemVersion !== undefined) result.syncPendingItemVersion = null;
+    delete result.orderSyncPending;
   }
   return result;
 }
@@ -249,8 +261,12 @@ function unique(values: string[], field: string): Set<string> {
 
 /** The same validator protects migration input and every storage transaction.
  * Parsing creates detached values; TypeScript assertions cannot validate disk data. */
-export function validateSnapshot(value: unknown): Snapshot {
+export function validateSnapshot(
+  value: unknown,
+  options?: { convertLegacyHolds: boolean },
+): Snapshot {
   const row = record(value, 'snapshot');
+  const legacyHolds = options?.convertLegacyHolds ? new Set<string>() : undefined;
   if (row.publishingEnabled !== false)
     throw new InvalidStoredState('publishingEnabled', 'must remain false in this build');
   const state: Snapshot = {
@@ -259,7 +275,7 @@ export function validateSnapshot(value: unknown): Snapshot {
     companies: array(row.companies, 'companies', company),
     items: array(row.items, 'items', item),
     accounts: array(row.accounts, 'accounts', account),
-    listings: array(row.listings, 'listings', listing),
+    listings: array(row.listings, 'listings', (entry, field) => listing(entry, field, legacyHolds)),
     proposals: array(row.proposals, 'proposals', proposal),
     activity: array(row.activity, 'activity', activity),
     settings: settings(row.settings),
@@ -306,6 +322,7 @@ export function validateSnapshot(value: unknown): Snapshot {
   for (const proposal of state.proposals) {
     if (!listings.has(proposal.listingId))
       throw new InvalidStoredState('proposal.listingId', 'references a missing listing');
+    if (legacyHolds?.has(proposal.listingId)) proposal.stale = true;
   }
   return state;
 }
@@ -317,5 +334,5 @@ export function parseLegacySnapshot(json: string): Snapshot {
   } catch {
     throw new InvalidStoredState('snapshot', 'is not valid JSON');
   }
-  return validateSnapshot(value);
+  return validateSnapshot(value, { convertLegacyHolds: true });
 }

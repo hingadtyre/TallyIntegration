@@ -238,6 +238,88 @@ test('upgrading a version-seven live company retains its last read and requires 
   assert.equal(f.open('live').read().companies[0].lastSuccess, lastSuccess);
 });
 
+test('upgrading schema nine retains paused listings and drafts and can persist a later calculation issue', (t) => {
+  const f = fixture(t);
+  const state = legacyState(f.directory);
+  queryFile(f.file, (db) => {
+    createSchema(db, 9);
+    db.exec('PRAGMA user_version = 9');
+    writeSnapshot(db, state);
+  });
+  const store = f.open();
+  assert.equal(store.schemaVersion, CURRENT_SCHEMA_VERSION);
+  assert.ok(store.migrationBackupPath);
+  assert.deepEqual(store.read(), state);
+  queryFile(store.migrationBackupPath, (db) => {
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version, 9);
+    assert.deepEqual(readSnapshot(db), state);
+  });
+  const reason = 'Refresh stock for this company to calculate the proposal.';
+  store.update((saved) => {
+    saved.listings[1].proposalIssue = reason;
+  });
+  const reopened = f.open();
+  assert.equal(reopened.read().listings[1].proposalIssue, reason);
+  assert.equal(reopened.migrationBackupPath, null);
+});
+
+test('existing out-of-stock holds become paused exactly once, retaining stock and invalidating their drafts', (t) => {
+  const f = fixture(t);
+  const state = legacyState(f.directory);
+  const listing = state.listings[0];
+  listing.observed = 3;
+  listing.syncPendingItemVersion = 4;
+  listing.orderSyncPending = 'sale-to-check';
+  state.proposals[0].stale = false;
+  const allowance = state.listings[1];
+  allowance.policy = 'limited';
+  allowance.remaining = 0;
+  queryFile(f.file, (db) => {
+    createSchema(db, 8);
+    db.exec('PRAGMA user_version = 8');
+    writeSnapshot(db, state);
+    db.prepare("UPDATE listings SET policy = 'hold', paused = 0 WHERE id = ?").run(listing.id);
+  });
+  const store = f.open();
+  const converted = store.read();
+  assert.equal(converted.listings[0].policy, 'auto');
+  assert.equal(converted.listings[0].remaining, null);
+  assert.equal(converted.listings[0].paused, true);
+  assert.equal(converted.listings[0].observed, 3);
+  assert.equal(converted.listings[0].observedAt, listing.observedAt);
+  assert.equal(converted.listings[0].version, listing.version + 1);
+  assert.equal(converted.listings[0].syncPendingItemVersion, null);
+  assert.equal(converted.listings[0].orderSyncPending, undefined);
+  assert.deepEqual(converted.proposals, [{ ...state.proposals[0], stale: true }]);
+  assert.deepEqual(converted.listings[1], allowance);
+  assert.deepEqual(store.readMarketplace().changes, []);
+  assert.ok(store.migrationBackupPath);
+  queryFile(store.migrationBackupPath, (db) =>
+    assert.equal(
+      db.prepare('SELECT policy FROM listings WHERE id = ?').get(listing.id)?.policy,
+      'hold',
+    ),
+  );
+  const reopened = f.open();
+  assert.equal(reopened.migrationBackupPath, null);
+  assert.deepEqual(reopened.read(), converted);
+});
+
+test('version-one JSON holds migrate to pauses while preserving a seller draft for review', (t) => {
+  const f = fixture(t);
+  const state = legacyState(f.directory);
+  const previous = {
+    ...state,
+    listings: [{ ...state.listings[0], policy: 'hold', paused: false }, ...state.listings.slice(1)],
+  };
+  createLegacy(f.file, previous);
+  const converted = f.open().read();
+  assert.equal(converted.listings[0].policy, 'auto');
+  assert.equal(converted.listings[0].paused, true);
+  assert.equal(converted.listings[0].version, state.listings[0].version + 1);
+  assert.deepEqual(converted.proposals, state.proposals);
+});
+
 test('a version-two migration failure rolls back new tables and preserves its pre-upgrade backup', (t) => {
   const f = fixture(t);
   const original = legacyState(f.directory);

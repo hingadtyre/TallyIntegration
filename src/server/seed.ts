@@ -127,9 +127,9 @@ export function initialState(mode: 'live' | 'demo', backupFolder: string): Snaps
       verified: true,
       observed: index === 4 ? 0 : 5,
       observedAt: at,
-      policy: index === 4 ? 'hold' : 'auto',
-      remaining: index === 4 ? 0 : null,
-      paused: false,
+      policy: 'auto',
+      remaining: null,
+      paused: index === 4,
       version: 1,
     });
   state.listings.push({

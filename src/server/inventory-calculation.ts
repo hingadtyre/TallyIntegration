@@ -23,6 +23,7 @@ export async function checkCalculationStock(
   listings: Listing[],
   companyId: string,
   marketplaces: MarketplaceService,
+  readOnly: boolean,
 ): Promise<ItemEvidence> {
   const sources: ItemEvidence = new Map();
   const batch = {};
@@ -38,7 +39,7 @@ export async function checkCalculationStock(
       throw error;
     }
     try {
-      sources.set(itemId, await marketplaces.availableStock(companyId, itemId, batch));
+      sources.set(itemId, await marketplaces.availableStock(companyId, itemId, batch, readOnly));
     } catch (error) {
       if (!(error instanceof InputError)) throw error;
       sources.set(itemId, error);
@@ -90,6 +91,16 @@ export function saveCalculation(
           }
           continue;
         }
+        // A resumed live listing needs verified availability even before the company
+        // has set up order coverage. Keep that requirement on a later Calculate retry.
+        if (
+          !options.zero &&
+          !options.sources &&
+          state.mode === 'live' &&
+          listing.proposalIssue &&
+          desiredStock(state, listing) > 0
+        )
+          throw new InputError('Confirm the starting stock in Order matching.', 409);
         let available: number | undefined;
         if (options.sources && desiredStock(state, listing) > 0) {
           const source = options.sources.get(listing.itemId!);
@@ -99,9 +110,12 @@ export function saveCalculation(
         }
         const draft = prepareProposal(state, listing, options.zero ? 0 : undefined, available);
         state.proposals = [...state.proposals.filter((p) => p.listingId !== listing.id), draft];
+        delete listing.proposalIssue;
         rows.push({ listingId: listing.id, status: 'ready' });
       } catch (error) {
         if (!(error instanceof InputError) || options.strict) throw error;
+        if (listing?.proposalIssue && listing.version === original.version)
+          listing.proposalIssue = error.message;
         const needsPack =
           listing &&
           listing.itemId === original.itemId &&

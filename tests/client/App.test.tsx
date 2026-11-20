@@ -410,6 +410,13 @@ test('selected listings keep priority through zero draft, review, publication an
       commands.push(path);
       if (path === '/api/publish') {
         assert.deepEqual(JSON.parse(String(options?.body)), { reviewId: 'review-selected' });
+        state = {
+          ...state,
+          proposals: [],
+          listings: state.listings.map((listing) =>
+            listing.id === 'listing-2' ? { ...listing, paused: true, observed: 0 } : listing,
+          ),
+        };
         return response({
           rows: [
             {
@@ -458,7 +465,7 @@ test('selected listings keep priority through zero draft, review, publication an
             location: 'Sample warehouse',
             quantity: 0,
             observed: 5,
-            policy: 'Keep out of stock',
+            policy: 'Tally sync paused',
             stale: false,
             problem: null,
           },
@@ -474,15 +481,17 @@ test('selected listings keep priority through zero draft, review, publication an
   assert.ok(screen.getByText(/1 hidden by filters/));
   fireEvent.click(screen.getByRole('button', { name: /Set to zero/ }));
   await screen.findByText(
-    'Zero-stock drafts saved. Active policies and marketplace stock are unchanged.',
+    'Zero-stock drafts saved. Review and publish to pause Tally sync for these locations.',
   );
   fireEvent.click(screen.getByRole('button', { name: /Review changes/ }));
   const dialog = await screen.findByRole('dialog', { name: 'Review proposed stock' });
   assert.ok(within(dialog).getByText('1 listing destination'));
   assert.ok(within(dialog).getByText('SAMPLE-CEAT-2-2'));
+  assert.ok(within(dialog).getByText('Tally sync paused'));
   assert.equal(within(dialog).queryByText('SAMPLE-MRF-2'), null);
   assert.deepEqual(commands, ['/api/zero', '/api/review']);
   assert.equal(state.listings[1].observed, 5);
+  assert.equal(state.listings[1].paused, false);
   assert.equal(state.listings[1].policy, 'auto');
   fireEvent.click(within(dialog).getByRole('button', { name: 'Publish 1 eligible listing' }));
   await within(dialog).findByText('Readback confirmed zero.');
@@ -491,6 +500,10 @@ test('selected listings keep priority through zero draft, review, publication an
   assert.deepEqual(commands, ['/api/zero', '/api/review', '/api/publish']);
   fireEvent.click(within(dialog).getByRole('button', { name: 'Back to inventory' }));
   assert.equal(screen.queryByRole('dialog'), null);
+  fireEvent.change(screen.getByLabelText('Filter by brand'), { target: { value: 'CEAT' } });
+  const row = screen.getByRole('row', { name: /SAMPLE-CEAT-2-2/ });
+  assert.ok(within(row).getByRole('button', { name: /Resume sync/ }));
+  assert.equal(within(row).queryByText('Auto'), null);
 });
 
 test('company activation reviews every seller across filters and requires a fresh explicit decision after a trial', async (t) => {
@@ -721,6 +734,74 @@ test('pause and resume target one listing while preserving its limited-sales pol
   assert.equal(listing.remaining, 1);
   assert.equal(listing.observed, 1);
 });
+
+for (const blocked of [false, true]) {
+  test(`resume replaces a typed quantity with ${blocked ? 'the calculation issue' : 'fresh proposed stock'} while keeping the stock-check status and Auto badge`, async (t) => {
+    const state = initialState('demo', 'unused');
+    const listing = state.listings.find((row) => row.sku === 'SAMPLE-CEAT-2-2')!;
+    listing.paused = true;
+    const proposed = {
+      listingId: listing.id,
+      quantity: 0,
+      calculated: 0,
+      edited: true,
+      itemVersion: 1,
+      listingVersion: listing.version,
+      ruleVersion: 'flipkart-tyres-v1',
+      createdAt: '2026-11-08T00:00:00.000Z',
+      stale: false,
+    };
+    if (!blocked) state.proposals = [proposed];
+    const issue = 'Check the stock balance in Tally.';
+    let resumes = 0;
+    t.mock.method(
+      globalThis,
+      'fetch',
+      async (path: string | URL | Request, options?: RequestInit) => {
+        if (String(path) === '/api/state') return response(state);
+        assert.equal(String(path), '/api/pause');
+        const body = JSON.parse(String(options?.body));
+        assert.deepEqual(body.listingIds, [listing.id]);
+        assert.equal(body.paused, false);
+        resumes++;
+        listing.paused = false;
+        listing.version++;
+        listing.automationStatus = 'Queued for a stock check';
+        if (blocked) listing.proposalIssue = issue;
+        else
+          state.proposals = [
+            {
+              ...proposed,
+              quantity: 5,
+              calculated: 5,
+              edited: false,
+              listingVersion: listing.version,
+            },
+          ];
+        return response(state);
+      },
+    );
+    render(<App />);
+    const field = await screen.findByLabelText('Proposed stock for SAMPLE-CEAT-2-2');
+    const row = within(field.closest('tr')!);
+    const input = () => row.getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.change(input(), { target: { value: '9' } });
+    fireEvent.click(row.getByRole('button', { name: /Resume sync/ }));
+    await row.findByRole('button', { name: 'Pause automation' });
+    assert.equal(input().value, blocked ? '' : '5');
+    assert.ok(row.getByText('Auto'));
+    assert.ok(row.getByText('Queued for a stock check'));
+    assert.ok(
+      blocked
+        ? row.getByText(/Check the stock balance in Tally.*Calculate to retry/)
+        : row.getByText('Calculated draft'),
+    );
+    await waitFor(() => {
+      assert.ok(!screen.queryByText(/unsaved quantity edit/i), 'Resume clears the unsaved edit');
+    });
+    assert.equal(resumes, 1);
+  });
+}
 
 test('failed refresh retains the shown stock and a retry uses the selected company', async (t) => {
   const state = initialState('demo', 'unused');

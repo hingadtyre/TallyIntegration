@@ -89,9 +89,12 @@ export function isStaleProposal(state: Snapshot, draft: Proposal): boolean {
 }
 
 export function describeReviewPolicy(listing: Listing, draft?: Proposal): string {
-  if (draft?.edited)
-    return draft.quantity === 0 ? 'Kept out of stock' : `Allow ${draft.quantity} more sales`;
-  if (listing.policy === 'limited') return `Limited sales · ${listing.remaining} remaining`;
-  if (listing.policy === 'hold') return 'Kept out of stock';
-  return 'Auto';
+  const paused = listing.paused || (draft?.edited && draft.quantity === 0);
+  if (draft?.edited && draft.quantity > 0)
+    return `${paused ? 'Tally sync paused · ' : ''}Allow ${draft.quantity} more sales`;
+  if (listing.policy === 'limited')
+    return paused
+      ? `Tally sync paused · ${listing.remaining} ${listing.remaining === 1 ? 'sale' : 'sales'} remaining`
+      : `Limited sales · ${listing.remaining} remaining`;
+  return paused ? 'Tally sync paused' : 'Auto';
 }

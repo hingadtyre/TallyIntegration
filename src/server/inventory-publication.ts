@@ -118,7 +118,7 @@ export function inventoryTarget(
   const updateOnce = draft?.edited && quantity > 0 && intent.positiveEdits === 'once';
   if (updateOnce && listing.policy !== 'auto')
     throw new InputError(
-      'Update once requires Auto. The existing hold or sales allowance still applies.',
+      'Update once requires Auto. The existing sales allowance still applies.',
       409,
     );
   if (
@@ -141,10 +141,15 @@ export function activateInventoryIntent(
   listing: Listing,
 ): void {
   if (intent.trial) return;
-  if (intent.draft?.edited && (intent.draft.quantity === 0 || intent.positiveEdits !== 'once')) {
-    listing.policy = intent.draft.quantity === 0 ? 'hold' : 'limited';
-    listing.remaining = intent.draft.quantity;
-    listing.version++;
+  if (intent.draft?.edited) {
+    if (intent.draft.quantity === 0) {
+      listing.paused = true;
+      listing.version++;
+    } else if (intent.positiveEdits !== 'once') {
+      listing.policy = 'limited';
+      listing.remaining = intent.draft.quantity;
+      listing.version++;
+    }
   }
   if (intent.draft) state.proposals = state.proposals.filter((row) => row.listingId !== listing.id);
   listing.syncPendingItemVersion = null;

@@ -147,12 +147,22 @@ export class InventoryService {
     return this.snapshot();
   }
 
-  async calculateAvailable(companyId: unknown, ids: unknown): Promise<CalculationResult> {
+  async calculateAvailable(
+    companyId: unknown,
+    ids: unknown,
+    readOnly = false,
+  ): Promise<CalculationResult> {
     const state = this.store.read();
     const selected = requireListings(state, companyId, ids);
     const sources =
       this.marketplaces && this.store.readStockCoverage(String(companyId))
-        ? await checkCalculationStock(state, selected, String(companyId), this.marketplaces)
+        ? await checkCalculationStock(
+            state,
+            selected,
+            String(companyId),
+            this.marketplaces,
+            readOnly,
+          )
         : undefined;
     const calculation = saveCalculation(this.store, state, String(companyId), selected, {
       sources,
@@ -170,8 +180,10 @@ export class InventoryService {
         );
       }
       const draft = prepareProposal(state, listing, quantity);
+      delete listing.proposalIssue;
       state.proposals = [...state.proposals.filter((row) => row.listingId !== listing.id), draft];
-      const intent = quantity === 0 ? 'keep out of stock' : `review ${quantity} listing units`;
+      const intent =
+        quantity === 0 ? 'review zero and pause Tally sync' : `review ${quantity} listing units`;
       recordActivity(state, 'edit-proposal', `Draft saved: ${intent}. Active policy unchanged.`, {
         companyId: String(companyId),
         listingId: listing.id,
@@ -180,8 +192,14 @@ export class InventoryService {
     return this.snapshot();
   }
 
-  pause(companyId: unknown, ids: unknown, paused: unknown, listingVersion?: unknown): Snapshot {
+  async pause(
+    companyId: unknown,
+    ids: unknown,
+    paused: unknown,
+    listingVersion?: unknown,
+  ): Promise<Snapshot> {
     if (typeof paused !== 'boolean') throw new InputError('Pause must be true or false.');
+    const resumed = new Set<string>();
     this.store.update((state) => {
       const listings = requireListings(state, companyId, ids);
       if (
@@ -195,6 +213,13 @@ export class InventoryService {
       for (const listing of listings) {
         if (listing.paused !== paused) {
           listing.paused = paused;
+          if (paused) {
+            delete listing.proposalIssue;
+          } else {
+            // If the app closes mid-check, the missing draft still has an explanation.
+            listing.proposalIssue = 'Stock verification is incomplete.';
+            resumed.add(listing.id);
+          }
           listing.orderSyncPending = null;
           listing.version++;
           const item = state.items.find((row) => row.id === listing.itemId);
@@ -204,7 +229,7 @@ export class InventoryService {
         }
         const action = paused
           ? 'automatic publication paused'
-          : 'pause removed; fresh validation required before publishing';
+          : 'pause removed; stock will be checked before publishing';
         recordActivity(
           state,
           paused ? 'pause' : 'resume',
@@ -212,7 +237,10 @@ export class InventoryService {
           { companyId: String(companyId), listingId: listing.id },
         );
       }
+      if (resumed.size)
+        state.proposals = state.proposals.filter((draft) => !resumed.has(draft.listingId));
     });
+    if (resumed.size) return this.calculateAvailable(companyId, [...resumed], true);
     return this.snapshot();
   }
 
@@ -294,6 +322,7 @@ export class InventoryService {
         quantity: draft?.quantity ?? null,
         observed: listing.observed,
         policy: describeReviewPolicy(listing, draft),
+        paused: listing.paused,
         stale: draft?.stale ?? false,
         problem,
         ...(draft?.edited &&
@@ -455,6 +484,7 @@ export class InventoryService {
     this.store.update((state) => {
       const listing = requireListings(state, companyId, [listingId])[0];
       listing.itemId = null;
+      delete listing.proposalIssue;
       listing.orderSyncPending = null;
       listing.syncPendingItemVersion = null;
       if (listing.packSource) {
@@ -523,7 +553,7 @@ export class InventoryService {
     const attempted = new Set<string>();
     let success = true;
     if (checkOrders) {
-      // Existing holds and physical zeros can proceed before reading order history.
+      // Known zero quantities can proceed before reading order history.
       await this.publishPending(companyId, batch, attempted, true);
       const state = this.store.read();
       for (const company of state.companies) {
@@ -586,10 +616,8 @@ export class InventoryService {
         !state.companies.some((row) => row.id === item.companyId && row.automation)
       )
         continue;
-      // A hold or a Tally balance below one complete pack can already be
-      // taken offline while other destinations wait for their order history.
+      // An exhausted allowance or a balance below one pack already targets zero.
       const zero =
-        listing.policy === 'hold' ||
         (listing.policy === 'limited' && listing.remaining === 0) ||
         (listing.packSize !== null && item.physical !== null && item.physical < listing.packSize);
       if (!zeroOnly || zero) work.push({ listing, item, zero });

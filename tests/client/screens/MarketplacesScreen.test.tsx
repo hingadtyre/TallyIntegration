@@ -331,7 +331,10 @@ test('editing a mapped location locks it and resuming leaves company sync off', 
           listingVersion: 10,
           automationStatus: 'Company updates off',
         };
-        return response({});
+        return response({
+          listings: [{ id: 'inventory-1', paused: false, version: 10 }],
+          proposals: [{ listingId: 'inventory-1', quantity: 3, edited: false, stale: false }],
+        });
       }
       return baseResponse(input, item);
     },
@@ -344,7 +347,7 @@ test('editing a mapped location locks it and resuming leaves company sync off', 
     screen.getByRole('button', { name: 'Edit stock for SKU-seller-a at warehouse-2' }),
   );
   const dialog = screen.getByRole('dialog', { name: 'Edit stock' });
-  assert.ok(within(dialog).getByText('Tally company A · Company updates off · Stock policy: Auto'));
+  assert.ok(within(dialog).getByText('Tally company A · Company updates off'));
   fireEvent.change(within(dialog).getByLabelText('Stock'), { target: { value: '9' } });
   assert.equal(within(dialog).queryByRole('radio'), null);
   assert.ok(within(dialog).getByText(/including updates to zero/));
@@ -364,6 +367,7 @@ test('editing a mapped location locks it and resuming leaves company sync off', 
   await waitFor(() => assert.equal(screen.queryByText(/This mapping changed/), null));
   fireEvent.click(await screen.findByRole('button', resume));
   await screen.findByText('Stockbridge · Company updates off');
+  await screen.findByText('Proposed stock on resume: 3');
   assert.deepEqual(resumes, [
     {
       companyId: 'company-a',
@@ -379,6 +383,31 @@ test('editing a mapped location locks it and resuming leaves company sync off', 
     },
   ]);
   assert.equal(screen.queryByRole('button', { name: /Resume sync/ }), null);
+});
+
+test('a resumed marketplace location with an unverified draft shows the last calculation issue', async (t) => {
+  const item = listing();
+  item.stockPolicies = [
+    {
+      listingId: 'inventory-1',
+      locationId: 'warehouse-2',
+      companyId: 'company-a',
+      companyName: 'Tally company A',
+      policy: 'auto',
+      remaining: null,
+      paused: false,
+      proposalIssue: 'Check the stock balance in Tally.',
+    },
+  ];
+  t.mock.method(globalThis, 'fetch', async (path: string | URL | Request) =>
+    baseResponse(path, item),
+  );
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  assert.match(
+    screen.getByText(/Last calculation could not verify stock/).textContent ?? '',
+    /Check the stock balance in Tally.*Calculate in Inventory/,
+  );
 });
 
 for (const lostResponse of [false, true])
@@ -435,14 +464,14 @@ for (const lostResponse of [false, true])
       fireEvent.click(within(dialog).getByRole('button', { name: 'Reload saved result' }));
     }
     await within(dialog).findByText('Flipkart rejected the stock update.');
-    assert.ok(within(dialog).getByText('Tally company A · Stock policy: Auto'));
+    assert.ok(within(dialog).getByText('Tally company A'));
     assert.ok(within(dialog).getByText('Tally sync paused'));
-    assert.equal(within(dialog).queryByText('Tally company A · Active · Stock policy: Auto'), null);
+    assert.equal(within(dialog).queryByText(/Tally company A · Active/), null);
     assert.equal((within(dialog).getByLabelText('Stock') as HTMLInputElement).value, '9');
     assert.equal(writes, 1);
   });
 
-test('a stock hold blocks Apply even when pausing and requires a separate confirmed policy change', async (t) => {
+test('a live sales allowance permits zero while requiring a confirmed policy change for a positive edit', async (t) => {
   const item = listing();
   item.stockPolicies = [
     {
@@ -450,8 +479,8 @@ test('a stock hold blocks Apply even when pausing and requires a separate confir
       listingId: 'inventory-1',
       companyId: 'company-a',
       companyName: 'Tally company A',
-      policy: 'hold',
-      remaining: null,
+      policy: 'limited',
+      remaining: 1,
       paused: false,
     },
   ];
@@ -479,6 +508,15 @@ test('a stock hold blocks Apply even when pausing and requires a separate confir
     screen.getByRole('button', { name: 'Edit stock for SKU-seller-a at warehouse-1' }),
   );
   const dialog = screen.getByRole('dialog', { name: 'Edit stock' });
+  const stock = within(dialog).getByLabelText('Stock');
+  fireEvent.change(stock, { target: { value: '0' } });
+  assert.equal(
+    (within(dialog).getByRole('button', { name: 'Apply and pause sync' }) as HTMLButtonElement)
+      .disabled,
+    false,
+  );
+  assert.equal(within(dialog).queryByRole('button', { name: 'Change stock policy' }), null);
+  fireEvent.change(stock, { target: { value: '1' } });
   assert.equal(
     (within(dialog).getByRole('button', { name: 'Apply and pause sync' }) as HTMLButtonElement)
       .disabled,
