@@ -323,9 +323,9 @@ test('returning to Inventory immediately loads an added account and its imported
   const parent = screen.getByRole('row', { name: /Bridgestone Sturdo/ });
   fireEvent.click(within(parent).getByRole('button', { name: 'Map listing' }));
   const dialog = screen.getByRole('dialog', { name: 'Map an existing listing' });
-  assert.ok(
-    within(dialog).getByRole('option', { name: `${listing.sku} · ${listing.title} · warehouse-1` }),
-  );
+  const destination = within(dialog).getByRole('button', { name: /IMPORTED-TYRE/ });
+  assert.ok(within(destination).getByText(listing.title));
+  assert.ok(within(destination).getByText('warehouse-1'));
 });
 
 test('a search with no matches disables bulk actions and can reset to all company listings', async (t) => {
@@ -384,9 +384,7 @@ test('successful mapping closes the dialog and shows the listing under the chose
   const parent = await screen.findByRole('row', { name: /Bridgestone Sturdo/ });
   fireEvent.click(within(parent).getByRole('button', { name: 'Map listing' }));
   const dialog = screen.getByRole('dialog', { name: 'Map an existing listing' });
-  fireEvent.change(within(dialog).getByLabelText('Existing marketplace listing'), {
-    target: { value: 'listing-9' },
-  });
+  fireEvent.click(within(dialog).getByRole('button', { name: /SAMPLE-UNMAPPED-1/ }));
   assert.equal(
     (within(dialog).getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled,
     true,
@@ -848,8 +846,7 @@ test('failed mapping keeps the dialog, selected listing and confirmation availab
   const parent = await screen.findByRole('row', { name: /Bridgestone Sturdo/ });
   fireEvent.click(within(parent).getByRole('button', { name: 'Map listing' }));
   const dialog = screen.getByRole('dialog', { name: 'Map an existing listing' });
-  const select = within(dialog).getByLabelText('Existing marketplace listing') as HTMLSelectElement;
-  fireEvent.change(select, { target: { value: 'listing-9' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: /SAMPLE-UNMAPPED-1/ }));
   const confirmation = within(dialog).getByRole('checkbox', { name: /I confirm/ });
   fireEvent.click(confirmation);
   fireEvent.click(within(dialog).getByRole('button', { name: 'Save mapping' }));
@@ -857,7 +854,11 @@ test('failed mapping keeps the dialog, selected listing and confirmation availab
   const alert = await within(dialog).findByRole('alert');
   assert.match(alert.textContent ?? '', /Pack evidence changed/);
   assert.equal(screen.getByRole('dialog', { name: 'Map an existing listing' }), dialog);
-  assert.equal(select.value, 'listing-9');
+  assert.ok(
+    within(dialog)
+      .getByRole('group', { name: 'Selected listing' })
+      .textContent?.includes('SAMPLE-UNMAPPED-1'),
+  );
   assert.equal((confirmation as HTMLInputElement).checked, true);
   assert.equal(mappingAttempts, 1);
 });

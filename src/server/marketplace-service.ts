@@ -630,11 +630,11 @@ export class MarketplaceService {
     state: Snapshot,
     market = this.store.readMarketplace(),
     rows = state.listings,
+    catalog?: ReturnType<typeof indexAutomationCatalog>,
   ) {
     const companies = new Map(state.companies.map((company) => [company.id, company]));
     const items = new Map(state.items.map((item) => [item.id, item]));
     const coverage = new Map<string, boolean>();
-    let catalog: ReturnType<typeof indexAutomationCatalog> | undefined;
     for (const row of rows) {
       const item = items.get(row.itemId ?? '');
       const company = item && companies.get(item.companyId);

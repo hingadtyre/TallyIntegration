@@ -82,10 +82,13 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
       </p>
       <p>
         In Inventory, select the company and seller account, then choose Map listing on the Tally
-        item. For Set of, choose the shipping package count when it matches the Tally units used per
-        sale, or enter your own number. Confirm that the company-wide balance supplies the selected
-        Flipkart location. Enable the tyre minimum only for eligible tyre listings. Stockbridge
-        saves these choices in this workspace and reloads them on restart.
+        item. Search your imported listings by seller SKU, product title when available, FSN
+        (Flipkart product ID) or Flipkart listing ID. Check the product and warehouse before
+        selecting a suggested listing. For Set of, choose the shipping package count when it matches
+        the Tally units used per sale, or enter your own number. Confirm that the company-wide
+        balance supplies the selected Flipkart location. Enable the tyre minimum only for eligible
+        tyre listings. Stockbridge saves these choices in this workspace and reloads them on
+        restart.
       </p>
       <p>
         Before enabling company sync, review the seller accounts, locations and expected quantities

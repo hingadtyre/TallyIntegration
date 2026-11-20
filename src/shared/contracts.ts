@@ -34,6 +34,9 @@ export interface FlipkartConnectionStatus {
   message: string;
 }
 export interface Listing {
+  /** Read-only identifiers from this destination's last successful catalogue import. */
+  productId?: string;
+  marketplaceListingId?: string;
   /** Read-only status of automatic publication for this destination. */
   automationStatus?: string;
   /** A Tally balance change still awaiting dispatch for this destination. */

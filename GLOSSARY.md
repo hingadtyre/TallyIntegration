@@ -36,6 +36,14 @@ A seller's offer for a product on a marketplace, identified in the context of it
 **Seller SKU**:
 A seller-assigned code identifying an offered product within its seller account. The same text in different accounts need not identify the same offer.
 
+**FSN (Flipkart Serial Number)**
+
+Flipkart’s product ID. Multiple sellers can offer the product identified by one FSN.
+
+**Flipkart listing ID**
+
+Flipkart’s identifier for a seller’s offer. Stockbridge also uses the seller location to identify which warehouse stock a mapping supplies.
+
 **Stock mapping**:
 The association identifying which Tally stock item supplies a marketplace listing.
 _Avoid_: Creating a Tally product, creating a marketplace listing

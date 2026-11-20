@@ -1757,6 +1757,16 @@ test('demo edits simulate confirmation without credentials or external transport
   const f = fixture(t, 'demo');
   const account = (await f.service.accounts()).accounts[0];
   const listing = f.listing(account.id);
+  const sample = new InventoryService(f.store)
+    .snapshot()
+    .listings.find(
+      (row) =>
+        row.accountId === account.id &&
+        row.sku === listing.sku &&
+        row.location === listing.locations[0].id,
+    )!;
+  assert.equal(sample.productId, listing.productId);
+  assert.equal(sample.marketplaceListingId, listing.id);
   const result = await f.service.apply({
     accountId: account.id,
     listingId: listing.id,
@@ -1799,6 +1809,66 @@ test('an unresolved listing omitted by refresh and older than the history previe
   assert.equal(f.writes.length, 1);
 });
 
+test('Inventory reads saved Flipkart identifiers by seller, SKU and location without refreshing the catalogue', async (t) => {
+  const f = fixture(t);
+  const sellerA = await f.add();
+  const sellerB = await f.add('seller-b');
+  const remoteB = f.remote.get('seller-b')![0];
+  remoteB.id = 'listing-b';
+  remoteB.productId = 'product-b';
+  await f.service.refresh(sellerB.id);
+  await f.restart();
+  f.setFailImport(true);
+  await assert.rejects(f.service.refresh(sellerA.id));
+  const inventory = new InventoryService(f.store, { marketplaces: f.service });
+  const calls = f.transportCalls.length;
+  const rows = inventory.snapshot().listings;
+  assert.deepEqual(
+    rows
+      .filter((row) => row.accountId === sellerA.id)
+      .map((row) => [row.marketplaceListingId, row.productId]),
+    [
+      ['listing-one', 'product-one'],
+      ['listing-one', 'product-one'],
+    ],
+  );
+  assert.deepEqual(
+    rows
+      .filter((row) => row.accountId === sellerB.id)
+      .map((row) => [row.marketplaceListingId, row.productId]),
+    [
+      ['listing-b', 'product-b'],
+      ['listing-b', 'product-b'],
+    ],
+  );
+  assert.equal(f.transportCalls.length, calls);
+  assert.ok(
+    f.store
+      .read()
+      .listings.every((row) => !('marketplaceListingId' in row) && !('productId' in row)),
+  );
+
+  f.setFailImport(false);
+  f.remote.get('seller-a')![0].locations.shift();
+  await f.service.refresh(sellerA.id);
+  const remaining = inventory.snapshot().listings.filter((row) => row.accountId === sellerA.id);
+  assert.deepEqual(
+    remaining.map((row) => [row.location, row.marketplaceListingId, row.productId]),
+    [
+      ['warehouse-a', undefined, undefined],
+      ['warehouse-b', 'listing-one', 'product-one'],
+    ],
+  );
+  f.remote.set('seller-a', []);
+  await f.service.refresh(sellerA.id);
+  assert.ok(
+    inventory
+      .snapshot()
+      .listings.filter((row) => row.accountId === sellerA.id)
+      .every((row) => !row.productId && !row.marketplaceListingId),
+  );
+});
+
 test('a recreated unprotected SKU imports with fresh Inventory identities and rejects the old listing editor', async (t) => {
   const f = fixture(t);
   const account = await f.add();
@@ -1834,6 +1904,15 @@ test('a recreated unprotected SKU imports with fresh Inventory identities and re
     ['warehouse-a', 'warehouse-c'],
   );
   assert.ok(inventory.every((row) => !oldInventory.some((oldRow) => oldRow.id === row.id)));
+  const recreated = new InventoryService(f.store)
+    .snapshot()
+    .listings.filter((row) => row.accountId === account.id);
+  assert.ok(
+    recreated.every(
+      (row) =>
+        row.productId === 'different-product' && row.marketplaceListingId === 'different-listing',
+    ),
+  );
   assert.ok(
     inventory.every((row) => row.itemId === null && row.packSize === null && !row.verified),
   );

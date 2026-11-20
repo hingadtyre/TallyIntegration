@@ -50,11 +50,127 @@ test('mapping offers only unmapped listings from the selected seller account', (
     />,
   );
 
-  const choices = screen
-    .getAllByRole('option')
-    .map((option) => (option as HTMLOptionElement).value);
-  assert.deepEqual(choices, ['', 'listing-9']);
-  assert.equal(screen.queryByText('OTHER-ACCOUNT'), null);
+  assert.ok(screen.getByRole('button', { name: /SAMPLE-UNMAPPED-1/ }));
+  assert.equal(screen.queryByRole('button', { name: /OTHER-ACCOUNT/ }), null);
+  assert.equal(screen.queryByRole('button', { name: /SAMPLE-CEAT-/ }), null);
+  const search = screen.getByRole('searchbox', { name: 'Search listings' });
+  fireEvent.change(search, { target: { value: 'OTHER-ACCOUNT' } });
+  assert.ok(screen.getByText(/No matching listings/));
+  assert.equal(screen.queryByRole('button', { name: /OTHER-ACCOUNT/ }), null);
+  fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+  assert.equal(document.activeElement, search);
+  assert.ok(screen.getByRole('button', { name: /SAMPLE-UNMAPPED-1/ }));
+});
+
+test('mapping requires a selected seller before showing inventory destinations', () => {
+  const state = initialState('demo', 'unused');
+  render(
+    <MappingDialog
+      item={state.items[3]}
+      state={state}
+      accountId=""
+      busy={false}
+      onClose={() => {}}
+      onSave={async () => ({ ok: true, value: state })}
+    />,
+  );
+  assert.ok(screen.getByRole('heading', { name: 'Choose a seller account' }));
+  assert.equal(screen.queryByRole('searchbox'), null);
+  assert.equal(screen.queryByRole('button', { name: /SAMPLE-UNMAPPED-1/ }), null);
+  assert.ok((screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled);
+});
+
+test('possible matches keep both warehouses distinct and require a confirmed destination before manual save', async () => {
+  const state = initialState('demo', 'unused');
+  const item = state.items[2];
+  const destination = {
+    ...state.listings[8],
+    id: 'north-destination',
+    sku: 'ALNAC-195',
+    title: item.name,
+    productId: 'TYR-FSN-247',
+    marketplaceListingId: 'LST-247',
+    location: 'North warehouse',
+  };
+  state.listings.push(destination, {
+    ...destination,
+    id: 'south-destination',
+    location: 'South warehouse',
+  });
+  let savedId = '';
+  render(
+    <MappingDialog
+      item={item}
+      state={state}
+      accountId={destination.accountId}
+      busy={false}
+      onClose={() => {}}
+      onSave={async (input) => {
+        savedId = input.listingId;
+        return { ok: true, value: state };
+      }}
+    />,
+  );
+  const matches = screen.getByRole('region', { name: 'Possible matches for this item' });
+  assert.ok(within(matches).getByRole('button', { name: /North warehouse/ }));
+  assert.ok(within(matches).getByRole('button', { name: /South warehouse/ }));
+  assert.equal(within(matches).queryByRole('button', { name: /Bridgestone/ }), null);
+  assert.ok(screen.getByRole('button', { name: /Bridgestone/ }));
+  assert.equal(screen.queryByLabelText(/I confirm the item/), null);
+  assert.ok((screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled);
+  const search = screen.getByRole('searchbox', { name: 'Search listings' });
+  fireEvent.change(search, { target: { value: 'tyr-fsn-247' } });
+  assert.equal(screen.queryByRole('region', { name: 'Possible matches for this item' }), null);
+  const results = screen.getByRole('region', { name: 'Search results' });
+  assert.equal(within(results).getAllByRole('button').length, 2);
+  const south = within(results).getByRole('button', { name: /South warehouse/ });
+  assert.match(south.textContent ?? '', /LST-247/);
+  fireEvent.click(south);
+  assert.ok(
+    screen
+      .getByRole('group', { name: 'Selected listing' })
+      .textContent?.includes('South warehouse'),
+  );
+  assert.equal(document.activeElement, screen.getByRole('button', { name: 'Change listing' }));
+  assert.ok((screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled);
+  fireEvent.click(screen.getByRole('checkbox', { name: /I confirm/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save mapping' }));
+  await waitFor(() => assert.equal(savedId, 'south-destination'));
+});
+
+test('sellers can browse additional suggested warehouses or search beyond the first page', () => {
+  const state = initialState('demo', 'unused');
+  const item = state.items[2];
+  const sample = state.listings[8];
+  state.listings = Array.from({ length: 12 }, (_, index) => ({
+    ...sample,
+    title: item.name,
+    id: 'destination-' + index,
+    sku: 'VARIANT-' + index,
+    location: 'Warehouse ' + index,
+  }));
+  render(
+    <MappingDialog
+      item={item}
+      state={state}
+      accountId={sample.accountId}
+      busy={false}
+      onClose={() => {}}
+      onSave={async () => ({ ok: true, value: state })}
+    />,
+  );
+  const suggestions = screen.getByRole('region', { name: 'Possible matches for this item' });
+  assert.equal(within(suggestions).getAllByRole('button').length, 10);
+  fireEvent.click(screen.getByRole('button', { name: /Show more listings/ }));
+  assert.equal(within(suggestions).getAllByRole('button').length, 12);
+  assert.equal(
+    document.activeElement,
+    within(suggestions).getByRole('button', { name: /Warehouse 10/ }),
+  );
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'VARIANT-11' } });
+  assert.equal(screen.getAllByRole('button', { name: /VARIANT-/ }).length, 1);
+  assert.ok(screen.getByRole('button', { name: /Warehouse 11/ }));
+  assert.ok((screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled);
 });
 
 test('changing destination resets confirmation and a missing package count accepts only a positive whole custom size', () => {
@@ -77,13 +193,14 @@ test('changing destination resets confirmation and a missing package count accep
       onSave={async () => ({ ok: true, value: state })}
     />,
   );
-  const select = screen.getByLabelText('Existing marketplace listing');
   const save = () => screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement;
-  fireEvent.change(select, { target: { value: 'listing-9' } });
+  fireEvent.click(screen.getByRole('button', { name: /SAMPLE-UNMAPPED-1/ }));
   fireEvent.click(screen.getByRole('checkbox', { name: /I confirm/ }));
   assert.equal(save().disabled, false);
 
-  fireEvent.change(select, { target: { value: 'unverified-listing' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Change listing' }));
+  assert.equal(document.activeElement, screen.getByRole('searchbox'));
+  fireEvent.click(screen.getByRole('button', { name: /UNVERIFIED/ }));
   const confirmation = screen.getByRole('checkbox', { name: /I confirm/ }) as HTMLInputElement;
   assert.equal(confirmation.checked, false);
   assert.equal(confirmation.disabled, true);
@@ -100,7 +217,8 @@ test('changing destination resets confirmation and a missing package count accep
   });
   fireEvent.click(confirmation);
   assert.equal(save().disabled, false);
-  fireEvent.change(select, { target: { value: 'listing-9' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Change listing' }));
+  fireEvent.click(screen.getByRole('button', { name: /SAMPLE-UNMAPPED-1/ }));
   assert.equal(
     (screen.getByRole('checkbox', { name: /I confirm/ }) as HTMLInputElement).checked,
     false,
@@ -169,7 +287,7 @@ test('mapping without available listings explains the empty state and keeps save
   );
 
   assert.ok(screen.getByRole('heading', { name: 'No unmapped listings available' }));
-  assert.equal(screen.queryByRole('combobox'), null);
+  assert.equal(screen.queryByRole('searchbox'), null);
   assert.equal(
     (screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled,
     true,

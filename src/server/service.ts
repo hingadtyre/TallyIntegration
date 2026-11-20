@@ -12,7 +12,7 @@ import type {
 import type { MarketplaceService } from './marketplace-service.js';
 import { checkCalculationStock, saveCalculation } from './inventory-calculation.js';
 import { inventoryTarget } from './inventory-publication.js';
-import { AutomationReviews } from './automation-preview.js';
+import { AutomationReviews, indexAutomationCatalog } from './automation-preview.js';
 import { recordActivity } from './activity.js';
 import { createBackup } from './backups.js';
 import { Diagnostics } from './diagnostics.js';
@@ -96,11 +96,23 @@ export class InventoryService {
   snapshot(): Snapshot {
     const state = this.store.read();
     state.publishingEnabled = !!this.marketplaces;
-    const market =
-      this.marketplaces || state.mode === 'live' ? this.store.readMarketplace() : undefined;
-    if (market) this.marketplaces?.describeAutomation(state, market);
+    const market = this.store.readMarketplace();
+    const catalog = indexAutomationCatalog(market);
+    for (const row of state.listings) {
+      const matches = catalog.listingsFor(row);
+      if (!row.observedAt || matches.length !== 1) continue;
+      const [listing] = matches;
+      if (
+        !listing.observedAt ||
+        !listing.locations.some((location) => location.id === row.location)
+      )
+        continue;
+      row.productId = listing.productId;
+      row.marketplaceListingId = listing.id;
+    }
+    this.marketplaces?.describeAutomation(state, market, state.listings, catalog);
     if (state.mode === 'live') {
-      const visibleAccounts = new Set(market?.accounts.map((account) => account.id));
+      const visibleAccounts = new Set(market.accounts.map((account) => account.id));
       // Older releases saved a placeholder seller before any account was added.
       // Hide unused records from the selector without deleting names or history.
       for (const listing of state.listings) visibleAccounts.add(listing.accountId);

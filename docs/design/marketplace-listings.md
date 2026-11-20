@@ -19,7 +19,7 @@ Navigation: **Marketplaces -> seller-account tile -> Listings**. A new live work
 
 Fresh live storage has no seeded seller account or Tally company. Inventory's selector omits older unused placeholder seller records without changing their stored names. Explicitly added accounts and legacy accounts with listing records remain visible; saved legacy credentials are adopted before the initial dashboard snapshot. Company names come from Tally discovery. Returning from Marketplaces to Inventory refreshes the saved workspace snapshot immediately.
 
-The Inventory mapping picker is account-scoped, but a new live import cannot complete mapping until pack evidence is verified. Imported rows deliberately start with unknown pack size and unverified evidence; the production verification workflow remains unfinished. This limitation must stay explicit in setup guidance and the mapping dialog.
+In Inventory, **Map listing** searches the selected seller account’s imported, unmapped listing locations by seller SKU, available title, FSN or Flipkart listing ID. Exact identifiers take priority over partial matches. Similar names or models can surface candidates when the seller opens the picker. Each location remains a separate choice, including when several warehouses share the same SKU or several offers share an FSN. The seller chooses the destination, confirms how many Tally units make up its **Set of**, confirms the company stock source and saves the mapping.
 
 Use one parent row per listing: image/title, seller SKU and product reference, status, MRP, seller selling price, observed stock and actions. Show the last successful refresh time and connection errors. Title and SKU remain display-only unless a supported edit operation is verified.
 

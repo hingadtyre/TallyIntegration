@@ -3,6 +3,7 @@ import type { Listing, MappingInput, Snapshot, StockItem } from '../../shared/co
 import type { ActionResult } from '../api.js';
 import { Icon, Modal } from '../components.js';
 import { formatDateTime } from '../format.js';
+import { MappingListingPicker } from './MappingListingPicker.js';
 
 type SaveMapping = (mapping: MappingInput) => Promise<ActionResult<Snapshot>>;
 
@@ -24,12 +25,12 @@ export function MappingDialog({
   onSave: SaveMapping;
 }) {
   const [selectedId, setSelectedId] = useState(editListingId ?? '');
-  const listings = state.listings.filter(
-    (listing) =>
-      (!accountId || listing.accountId === accountId) &&
-      (editListingId
-        ? listing.id === editListingId && listing.itemId === item.id
-        : listing.itemId === null),
+  const listings = state.listings.filter((listing) =>
+    editListingId
+      ? listing.id === editListingId &&
+        listing.itemId === item.id &&
+        (!accountId || listing.accountId === accountId)
+      : Boolean(accountId) && listing.accountId === accountId && listing.itemId === null,
   );
   const listing = listings.find((entry) => entry.id === selectedId);
   const company =
@@ -52,22 +53,24 @@ export function MappingDialog({
             <strong className="sku">{listing.sku}</strong> · {listing.title}
           </p>
         )
+      ) : !accountId ? (
+        <div className="empty-state compact-empty">
+          <Icon name="marketplaces" />
+          <h3>Choose a seller account</h3>
+          <p>Select a Flipkart seller account in Inventory to see its listings.</p>
+        </div>
       ) : listings.length > 0 ? (
-        <label className="field">
-          <span>Existing marketplace listing</span>
-          <select
-            value={selectedId}
-            disabled={busy}
-            onChange={(event) => setSelectedId(event.target.value)}
-          >
-            <option value="">Choose a listing</option>
-            {listings.map((value) => (
-              <option key={value.id} value={value.id}>
-                {value.sku} · {value.title} · {value.location}
-              </option>
-            ))}
-          </select>
-        </label>
+        <MappingListingPicker
+          key={JSON.stringify([accountId, item.id])}
+          listings={listings}
+          item={item}
+          accountName={
+            state.accounts.find((account) => account.id === accountId)?.name ?? accountId
+          }
+          selected={listing}
+          onChoose={setSelectedId}
+          busy={busy}
+        />
       ) : (
         <div className="empty-state compact-empty">
           <Icon name="connections" />
@@ -77,7 +80,7 @@ export function MappingDialog({
       )}
       {listing ? (
         <PackForm
-          key={JSON.stringify([listing.id, listing.version, item.unit])}
+          key={JSON.stringify([listing.id, listing.version, item.id, item.unit])}
           listing={listing}
           item={item}
           company={company}

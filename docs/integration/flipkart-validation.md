@@ -39,6 +39,12 @@ On 20 November, [standard listing search](https://flipkart.github.io/fk-api-plat
 
 The read-only check used the application’s token client, listing adapter and account service against an isolated in-memory workspace. Both complete imports returned the same 217 listing identities through standard search, with 22 successful detail batches per import. The second import verified ownership continuity without a returned seller ID. Only 137 listings exposed a stock location. The sample pair `145/70R12_X3_2_2` had zero locations, so its stock cannot currently be published through Stockbridge.
 
+## Listing search for inventory mapping on 2026-11-20
+
+Flipkart documents an optional `searchText` on its product search endpoint. The response includes the seller SKU, product title, product ID (FSN) and listing ID. The public contract leaves the fields matched by `searchText`, prefix matching and ranking unspecified. Standard listing search enumerates listing, product and SKU IDs by status and page. Listing details accepts up to ten exact seller SKUs per request. [Product search](https://flipkart.github.io/fk-api-platform-docs/docs/mp-api_versioned/product-search) · [Standard listing search](https://flipkart.github.io/fk-api-platform-docs/docs/mp-api_versioned/listing-search) · [Listing details](https://seller.flipkart.com/api-docs/listing-api-docs/LMAPIRef.html#post-listings-v3-details)
+
+An authenticated read on 20 November again returned HTTP 404 for the first ACTIVE product-search batch. The earlier standard search on 18 November returned 217 listings, as recorded below. Stockbridge therefore searches the seller’s locally imported listing locations in **Map listing**, including titles when Flipkart supplies them. Stockbridge derives any suggestions from those records and the selected Tally item.
+
 ## Live read-only package check on 2026-11-18
 
 The user supplied their seller-owned credentials and requested an inspection of existing listings. Requests went directly to Flipkart's production API from a temporary local script. No Stockbridge account was added, no customer database was changed, and no stock/price/write endpoint was called. Credentials and tokens were not saved in the repository or the diagnostic evidence.
