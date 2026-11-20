@@ -1,6 +1,6 @@
 import type { Listing, Proposal, Snapshot, StockItem } from '../../shared/contracts.js';
 import type { ActionResult } from '../api.js';
-import { Icon } from '../components.js';
+import { Icon, ResumeSyncButton } from '../components.js';
 import {
   formatDateTime as time,
   formatQuantity as quantity,
@@ -176,20 +176,27 @@ export function ItemRows({
                 <span className="status-dot" />
                 {policyLabel(listing)}
               </span>
-              <small>{listing.automationStatus ?? 'Stockbridge status unavailable'}</small>
-              <button
-                className={`automation-button ${listing.paused ? 'is-paused' : ''}`}
-                disabled={busy}
-                onClick={() => onPause(listing)}
-                title={
-                  listing.paused
-                    ? 'Resume automatic publication with the current policy'
-                    : 'Pause all automatic publication; preserve the current policy'
-                }
-              >
-                <Icon name={listing.paused ? 'play' : 'pause'} />
-                {listing.paused ? 'Paused · resume' : 'Pause automation'}
-              </button>
+              {listing.paused ? (
+                <ResumeSyncButton
+                  sku={listing.sku}
+                  location={listing.location}
+                  disabled={busy}
+                  onResume={() => onPause(listing)}
+                />
+              ) : (
+                <>
+                  <small>{listing.automationStatus ?? 'Stockbridge status unavailable'}</small>
+                  <button
+                    className="automation-button"
+                    disabled={busy}
+                    onClick={() => onPause(listing)}
+                    title="Pause automatic stock updates at this location."
+                  >
+                    <Icon name="pause" />
+                    Pause automation
+                  </button>
+                </>
+              )}
             </td>
             <td>
               <details className="row-menu">

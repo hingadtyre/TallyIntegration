@@ -45,6 +45,8 @@ export interface MarketplaceListingView extends MarketplaceListing {
   stockPolicies: Array<{
     locationId: string;
     listingId: string;
+    listingVersion?: number;
+    companyId?: string;
     companyName: string;
     automationStatus?: string;
     policy: PolicyMode;
@@ -62,15 +64,19 @@ export interface MarketplacePage {
   changes: MarketplaceChange[];
 }
 
-export type MarketplaceEdit =
-  | { kind: 'stock'; locationId: string; quantity: number; automation: 'once' | 'pause' }
-  | { kind: 'price'; field: 'mrp' | 'sellingPrice'; value: number };
+type StockEdit = { kind: 'stock'; locationId: string; quantity: number };
+type PriceEdit = { kind: 'price'; field: 'mrp' | 'sellingPrice'; value: number };
+type StockEditAutomation = 'once' | 'pause';
+
+/** History records the effect on Tally sync that the server actually applied. */
+export type MarketplaceEdit = (StockEdit & { automation: StockEditAutomation }) | PriceEdit;
 
 export interface MarketplaceApplyInput {
   accountId: string;
   listingId: string;
   version: number;
-  edit: MarketplaceEdit;
+  /** Older clients included an automation preference on direct stock edits. */
+  edit: (StockEdit & { automation?: StockEditAutomation }) | PriceEdit;
 }
 
 export interface MarketplaceChange {

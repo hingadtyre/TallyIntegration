@@ -62,14 +62,13 @@ const page = (item = listing()): MarketplacePage => ({
 function result(
   input: MarketplaceApplyInput,
   state: MarketplaceApplyResult['change']['state'] = 'confirmed',
+  item = listing(input.accountId),
 ): MarketplaceApplyResult {
-  const item = listing(input.accountId);
-  if (input.edit.kind === 'price') item[input.edit.field] = input.edit.value;
+  const { edit } = input;
+  if (edit.kind === 'price') item[edit.field] = edit.value;
   else
     item.locations = item.locations.map((location) =>
-      location.id === (input.edit.kind === 'stock' && input.edit.locationId)
-        ? { ...location, quantity: input.edit.kind === 'stock' ? input.edit.quantity : 0 }
-        : location,
+      location.id === edit.locationId ? { ...location, quantity: edit.quantity } : location,
     );
   return {
     listing: { ...item, version: 4 },
@@ -78,7 +77,17 @@ function result(
       accountId: input.accountId,
       listingId: input.listingId,
       sku: item.sku,
-      edit: input.edit,
+      edit:
+        edit.kind === 'stock'
+          ? {
+              ...edit,
+              automation: item.stockPolicies.some(
+                (policy) => policy.locationId === edit.locationId && policy.companyId,
+              )
+                ? 'pause'
+                : 'once',
+            }
+          : edit,
       state,
       message:
         state === 'confirmed'
@@ -279,60 +288,98 @@ test('price Apply sends only that field, keeps stock untouched and shows verifie
   assert.equal(screen.queryByRole('button', { name: /Edit settlement/ }), null);
 });
 
-for (const automation of ['once', 'pause'] as const)
-  test(`mapped stock requires an explicit ${automation} decision and targets one location`, async (t) => {
-    const item = listing();
-    item.stockPolicies = [
-      {
-        locationId: 'warehouse-2',
-        listingId: 'inventory-1',
-        companyName: 'Tally company A',
-        automationStatus: 'Company updates off',
-        policy: 'auto',
-        remaining: null,
-        paused: false,
-      },
-    ];
-    let submitted: MarketplaceApplyInput | undefined;
-    t.mock.method(
-      globalThis,
-      'fetch',
-      async (input: string | URL | Request, options?: RequestInit) => {
-        if (String(input) === '/api/marketplaces/apply') {
-          submitted = JSON.parse(String(options?.body));
-          return response(result(submitted!));
-        }
-        return baseResponse(input, item);
-      },
-    );
-    render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
-    await openListings();
-    assert.ok(screen.getByRole('columnheader', { name: 'Flipkart status' }));
-    assert.ok(screen.getByText('Stockbridge · Company updates off'));
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Edit stock for SKU-seller-a at warehouse-2' }),
-    );
-    const dialog = screen.getByRole('dialog', { name: 'Edit stock' });
-    assert.ok(within(dialog).getByText('Tally company A · Company updates off · Auto'));
-    fireEvent.change(within(dialog).getByLabelText('Stock'), { target: { value: '9' } });
-    assert.equal(
-      (within(dialog).getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled,
-      true,
-    );
-    fireEvent.click(
-      within(dialog).getByRole('radio', {
-        name: automation === 'once' ? /Update once/ : /Pause Tally sync and update/,
-      }),
-    );
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
-    await within(dialog).findByText('Updated');
-    assert.deepEqual(submitted?.edit, {
-      kind: 'stock',
+test('editing a mapped location locks it and resuming leaves company sync off', async (t) => {
+  const item = listing();
+  item.stockPolicies = [
+    {
       locationId: 'warehouse-2',
-      quantity: 9,
-      automation,
-    });
+      listingId: 'inventory-1',
+      listingVersion: 7,
+      companyId: 'company-a',
+      companyName: 'Tally company A',
+      automationStatus: 'Company updates off',
+      policy: 'auto',
+      remaining: null,
+      paused: false,
+    },
+  ];
+  let submitted: MarketplaceApplyInput | undefined;
+  const resumes: unknown[] = [];
+  t.mock.method(
+    globalThis,
+    'fetch',
+    async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input) === '/api/marketplaces/apply') {
+        submitted = JSON.parse(String(options?.body));
+        item.stockPolicies[0] = {
+          ...item.stockPolicies[0],
+          paused: true,
+          listingVersion: 8,
+          automationStatus: 'Paused',
+        };
+        return response(result(submitted!, 'confirmed', item));
+      }
+      if (String(input) === '/api/pause') {
+        resumes.push(JSON.parse(String(options?.body)));
+        if (resumes.length === 1) {
+          item.stockPolicies[0] = { ...item.stockPolicies[0], listingVersion: 9 };
+          return response({ error: 'This mapping changed.' }, 409);
+        }
+        item.stockPolicies[0] = {
+          ...item.stockPolicies[0],
+          paused: false,
+          listingVersion: 10,
+          automationStatus: 'Company updates off',
+        };
+        return response({});
+      }
+      return baseResponse(input, item);
+    },
+  );
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  assert.ok(screen.getByRole('columnheader', { name: 'Flipkart status' }));
+  assert.ok(screen.getByText('Stockbridge · Company updates off'));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Edit stock for SKU-seller-a at warehouse-2' }),
+  );
+  const dialog = screen.getByRole('dialog', { name: 'Edit stock' });
+  assert.ok(within(dialog).getByText('Tally company A · Company updates off · Stock policy: Auto'));
+  fireEvent.change(within(dialog).getByLabelText('Stock'), { target: { value: '9' } });
+  assert.equal(within(dialog).queryByRole('radio'), null);
+  assert.ok(within(dialog).getByText(/including updates to zero/));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Apply and pause sync' }));
+  await within(dialog).findByText('Updated');
+  assert.deepEqual(submitted?.edit, {
+    kind: 'stock',
+    locationId: 'warehouse-2',
+    quantity: 9,
   });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
+  assert.equal(screen.queryByRole('button', { name: /Resume sync.*warehouse-1/ }), null);
+  const resume = { name: 'Resume sync for SKU-seller-a at warehouse-2' };
+  fireEvent.click(screen.getByRole('button', resume));
+  await screen.findByText(/This mapping changed/);
+  fireEvent.click(screen.getByRole('button', { name: 'Reload listings' }));
+  await waitFor(() => assert.equal(screen.queryByText(/This mapping changed/), null));
+  fireEvent.click(await screen.findByRole('button', resume));
+  await screen.findByText('Stockbridge · Company updates off');
+  assert.deepEqual(resumes, [
+    {
+      companyId: 'company-a',
+      listingIds: ['inventory-1'],
+      listingVersion: 8,
+      paused: false,
+    },
+    {
+      companyId: 'company-a',
+      listingIds: ['inventory-1'],
+      listingVersion: 9,
+      paused: false,
+    },
+  ]);
+  assert.equal(screen.queryByRole('button', { name: /Resume sync/ }), null);
+});
 
 for (const lostResponse of [false, true])
   test(`a rejected stock update shows its retained Pause after ${lostResponse ? 'recovering a lost response' : 'Apply'}`, async (t) => {
@@ -341,6 +388,7 @@ for (const lostResponse of [false, true])
       {
         locationId: 'warehouse-2',
         listingId: 'inventory-1',
+        companyId: 'company-a',
         companyName: 'Tally company A',
         policy: 'auto',
         remaining: null,
@@ -381,15 +429,15 @@ for (const lostResponse of [false, true])
     );
     const dialog = screen.getByRole('dialog', { name: 'Edit stock' });
     fireEvent.change(within(dialog).getByLabelText('Stock'), { target: { value: '9' } });
-    fireEvent.click(within(dialog).getByRole('radio', { name: /Pause Tally sync and update/ }));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply and pause sync' }));
     if (lostResponse) {
       await within(dialog).findByText('Network response lost.');
       fireEvent.click(within(dialog).getByRole('button', { name: 'Reload saved result' }));
     }
     await within(dialog).findByText('Flipkart rejected the stock update.');
-    assert.ok(within(dialog).getByText('Tally company A · Paused · Auto'));
-    assert.equal(within(dialog).queryByText('Tally company A · Active · Auto'), null);
+    assert.ok(within(dialog).getByText('Tally company A · Stock policy: Auto'));
+    assert.ok(within(dialog).getByText('Tally sync paused'));
+    assert.equal(within(dialog).queryByText('Tally company A · Active · Stock policy: Auto'), null);
     assert.equal((within(dialog).getByLabelText('Stock') as HTMLInputElement).value, '9');
     assert.equal(writes, 1);
   });
@@ -400,6 +448,7 @@ test('a stock hold blocks Apply even when pausing and requires a separate confir
     {
       locationId: 'warehouse-1',
       listingId: 'inventory-1',
+      companyId: 'company-a',
       companyName: 'Tally company A',
       policy: 'hold',
       remaining: null,
@@ -430,9 +479,9 @@ test('a stock hold blocks Apply even when pausing and requires a separate confir
     screen.getByRole('button', { name: 'Edit stock for SKU-seller-a at warehouse-1' }),
   );
   const dialog = screen.getByRole('dialog', { name: 'Edit stock' });
-  fireEvent.click(within(dialog).getByRole('radio', { name: /Pause Tally sync and update/ }));
   assert.equal(
-    (within(dialog).getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled,
+    (within(dialog).getByRole('button', { name: 'Apply and pause sync' }) as HTMLButtonElement)
+      .disabled,
     true,
   );
   fireEvent.click(within(dialog).getByRole('button', { name: 'Change stock policy' }));
@@ -440,7 +489,8 @@ test('a stock hold blocks Apply even when pausing and requires a separate confir
   fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm automatic policy' }));
   await waitFor(() =>
     assert.equal(
-      (within(dialog).getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled,
+      (within(dialog).getByRole('button', { name: 'Apply and pause sync' }) as HTMLButtonElement)
+        .disabled,
       false,
     ),
   );

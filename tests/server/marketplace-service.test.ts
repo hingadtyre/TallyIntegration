@@ -155,7 +155,7 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live', billingSources?
   function listing(accountId: string) {
     return service.page(new URLSearchParams({ accountId })).listings[0];
   }
-  function stock(accountId: string, quantity: number, automation = 'once') {
+  function stock(accountId: string, quantity: number, automation?: 'once' | 'pause') {
     const current = listing(accountId);
     return service.apply({
       accountId,
@@ -1299,7 +1299,7 @@ test('new automatic quantities supersede rejected writes and uncertain attempts 
   );
 });
 
-test('a rejected direct Update once preserves an automatic zero for the next unchanged Tally fetch', async (t) => {
+test('a rejected manual stock change keeps its sync lock until resume, including a pending zero', async (t) => {
   const s = await mappedInventory(t);
   s.setPhysical(1);
   await s.service.refresh();
@@ -1307,6 +1307,14 @@ test('a rejected direct Update once preserves an automatic zero for the next unc
   s.f.setFailWrite('before');
   assert.equal((await s.f.stock(s.account.id, 2)).change.state, 'failed');
   s.f.setFailWrite('no');
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [2],
+  );
+  assert.equal(s.remote.locations[0].quantity, 5);
+  assert.equal(s.f.store.read().listings.find((row) => row.id === s.listing.id)!.paused, true);
+  s.service.pause(s.item.companyId, [s.listing.id], false);
   await s.service.refresh();
   assert.deepEqual(
     s.f.writes.map((write) => write.quantity),
@@ -1349,7 +1357,7 @@ test('a rejected reviewed zero activates the hold and queues its correction', as
   assert.equal(s.remote.locations[0].quantity, 0);
 });
 
-test('an uncertain Update once supersedes earlier pending stock only after the outcome is checked', async (t) => {
+test('an uncertain manual stock change stays locked when its outcome is checked', async (t) => {
   const s = await mappedInventory(t);
   s.service.automation(s.item.companyId, true);
   s.f.setFailWrite('lost-readback');
@@ -1363,6 +1371,10 @@ test('an uncertain Update once supersedes earlier pending stock only after the o
     changeId: result.change.id,
   });
   assert.equal(checked.change.state, 'confirmed');
+  assert.equal(
+    checked.listing.stockPolicies.find((row) => row.listingId === s.listing.id)?.paused,
+    true,
+  );
   await s.service.refresh();
   assert.deepEqual(
     s.f.writes.map((write) => write.quantity),
@@ -1491,8 +1503,10 @@ test('live account tiles are empty until added; multiple credentials and same-SK
   const second = await f.add('seller-b');
   assert.equal((await f.service.accounts()).accounts.length, 2);
   assert.equal(f.store.read().companies.length, 0);
-  const result = await f.stock(first.id, 2);
+  const result = await f.stock(first.id, 2, 'pause');
   assert.equal(result.change.state, 'confirmed');
+  assert.equal(result.change.edit.kind === 'stock' && result.change.edit.automation, 'once');
+  assert.ok(f.store.read().listings.every((row) => !row.paused));
   assert.equal(f.listing(first.id).locations[0].quantity, 2);
   assert.equal(f.listing(first.id).locations[1].quantity, 3);
   assert.equal(f.listing(second.id).locations[0].quantity, 5);
@@ -1585,8 +1599,7 @@ test('fresh read conflicts prevent overwriting stock changed since the editor op
 });
 
 test('hold and sales allowance cannot be bypassed by Apply or Pause; policy change is explicit', async (t) => {
-  const f = fixture(t);
-  const account = await f.add();
+  const { f, account } = await mappedInventory(t);
   f.store.update((state) => {
     const row = state.listings.find(
       (row) => row.accountId === account.id && row.location === 'warehouse-a',
@@ -1658,14 +1671,65 @@ test('an acknowledged write with missing readback blocks replay and can be confi
   assert.equal(f.writes.length, 1);
 });
 
-test('a rejected stock write keeps the requested pause and reports failure without changing stock', async (t) => {
-  const f = fixture(t);
-  const account = await f.add();
-  f.setFailWrite('before');
-  const result = await f.stock(account.id, 2, 'pause');
-  assert.equal(result.change.state, 'failed');
-  assert.equal(result.listing.locations[0].quantity, 5);
-  assert.equal(f.store.read().listings.find((row) => row.location === 'warehouse-a')!.paused, true);
+test('a manual stock edit locks only its mapped warehouse and resume queues the latest Tally stock', async (t) => {
+  const s = await mappedInventory(t, 'manual', { physical: 7, packSize: 1, tyreFloor: false });
+  s.service.automation(s.item.companyId, true);
+  await s.service.refresh();
+  const otherSeller = await s.f.add('seller-b');
+  const sibling = s.f.store
+    .read()
+    .listings.find((row) => row.accountId === s.account.id && row.location === 'warehouse-b')!;
+  const other = s.f.store
+    .read()
+    .listings.find(
+      (row) => row.accountId === otherSeller.id && row.location === s.listing.location,
+    )!;
+  for (const row of [sibling, other]) {
+    s.service.mapping({
+      itemId: s.item.id,
+      listingId: row.id,
+      listingVersion: row.version,
+      confirmPackEvidence: true,
+      packSize: 1,
+      packSource: 'manual',
+      sourceScope: 'company',
+      tyreFloor: false,
+    });
+  }
+  const staleVersion = s.f.store.read().listings.find((row) => row.id === s.listing.id)!.version;
+  const edit = await s.f.stock(s.account.id, 2, 'once'); // Previous clients could request a one-time direct edit.
+  assert.equal(edit.change.state, 'confirmed');
+  assert.equal(edit.change.edit.kind === 'stock' && edit.change.edit.automation, 'pause');
+  const destination = edit.listing.stockPolicies.find((row) => row.listingId === s.listing.id)!;
+  assert.equal(destination.companyId, s.item.companyId);
+  assert.equal(destination.paused, true);
+  assert.deepEqual(
+    s.f.store
+      .read()
+      .listings.filter((row) => row.paused)
+      .map((row) => row.id),
+    [s.listing.id],
+  );
+  assert.throws(
+    () => s.service.pause(destination.companyId, [destination.listingId], false, staleVersion),
+    /listing changed/i,
+  );
+  s.setPhysical(0);
+  await s.service.refresh();
+  assert.equal(s.remote.locations[0].quantity, 2);
+  assert.equal(s.remote.locations[1].quantity, 0);
+  s.service.pause(
+    destination.companyId,
+    [destination.listingId],
+    false,
+    destination.listingVersion,
+  );
+  const unlocked = s.f.store.read().listings.find((row) => row.id === s.listing.id)!;
+  assert.equal(unlocked.paused, false);
+  assert.ok(unlocked.syncPendingItemVersion);
+  assert.equal(s.remote.locations[0].quantity, 2);
+  await s.service.refresh();
+  assert.equal(s.remote.locations[0].quantity, 0);
 });
 
 test('seller recovery via HTTP rereads Tally and unbilled orders and resumes at four without resending five', async (t) => {

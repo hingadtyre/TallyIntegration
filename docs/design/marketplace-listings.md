@@ -10,7 +10,7 @@
 - Use the Seller Hub listing page as the interaction reference: product/title, SKU, MRP, price, stock, settlement where supported, search and filters. The seller wants real marketplace edits, not only local stock proposals.
 - The first version includes stock, MRP and seller selling-price editing. The seller accepted an Open in Flipkart action for settlement until a supported API is verified. Creating products, order management and full Seller Hub feature parity have not been requested for this flow.
 - Each stock or price editor has its own Apply action, following Seller Hub. There is no required global Review changes -> Publish step for this view.
-- When editing stock on a Tally-managed listing, let the seller choose Update once or Pause Tally sync and update. Price-only edits leave stock automation unchanged.
+- Applying a stock edit in Marketplaces pauses automatic stock updates for the exact Tally-mapped listing and seller location. Show the lock and **Resume sync** on the destination.
 - Existing Limited sales and Kept out of stock rules remain effective for direct stock edits. If the quantity conflicts with the rule, require an explicit policy change first; neither Apply nor Pause silently removes a hold or grants allowance.
 
 ## Implemented view
@@ -36,7 +36,7 @@ A recreated SKU can be imported with fresh, unmapped Inventory observations only
 The seller selected field-level Apply rather than a global review/publication step. The observed Seller Hub interaction is a pencil beside a row's value, a small editor and its own Apply button. The following details implement that choice:
 
 1. Open the editor for the selected listing's stock or price value. Keep the current observed value visible and let the seller enter a new value; typing does not publish.
-2. For Tally-managed stock, show the current automation state and the Update once / Pause Tally sync and update choice in that editor. Display an existing Limited sales or Kept out of stock rule and offer Change stock policy if the entered quantity conflicts. That action must explicitly change the policy through its existing workflow; returning to the stock editor revalidates the edit. Unmapped listings do not need a Tally choice. Price and MRP editors do not alter stock automation.
+2. For Tally-mapped stock, tell the seller that applying the edit pauses automatic updates for that location. Display the existing policy and offer **Change stock policy** when the entered quantity conflicts with Limited sales or Kept out of stock. Revalidate the edit after the seller confirms the policy change. Only stock edits at a mapped location create a pause.
 3. Apply validates and submits only that edit for the displayed account and destination. It must not submit other rows' drafts or unrelated price/stock edits. When the price API requires both MRP and selling price, preserve the unedited companion value from a fresh read; report a conflicting change rather than silently overwriting it.
 4. Show Applying, Checking result, Updated or the specific failure beside the edit. Prevent duplicate submission while it is in progress. Preserve the entered value on failure so it can be corrected or retried; an uncertain result needs reconciliation before replay.
 5. Closing or cancelling an editor before Apply discards its unsent edit. A later API result must stay bound to the original account/listing/location even if the user navigates to another account.
@@ -68,9 +68,9 @@ The direct-edit command means "set this account/listing/location stock to N". It
 
 The seller explicitly chose to preserve Limited sales and Kept out of stock constraints. A held listing cannot receive a positive direct stock update until the seller changes that policy. If the remaining allowance is one, a direct quantity of five cannot bypass it. Show the current rule and an explicit Change stock policy action; never treat the entered stock as an implicit allowance grant. This applies even when automation is paused. Revalidate the current policy and allowance at dispatch as well as when opening the editor.
 
-Update once leaves the current automation setting and saved policy in place, so an eligible later Tally update can replace the quantity. It does not resume an already paused listing. Pause Tally sync and update stops automatic stock writes, including zero corrections, until resumed. The saved policy and allowance accounting remain in place. Pausing alone is not approval to erase a hold or grant more allowance. These consequences must appear in the stock editor before Apply.
+Once the validated Marketplace stock edit is recorded for submission, its mapped destination is paused. Rejected and uncertain submissions retain the pause. A seller can identify the location by its lock icon and **Tally sync paused** status in Inventory or Marketplaces. Flipkart sales can still reduce stock. Stockbridge continues observing stock and orders and skips automatic writes to that destination, including zero corrections. **Resume sync** removes the pause immediately. If company sync is enabled, a verified mapping is queued for a fresh calculation on the next eligible pass, even if the Tally balance has stayed the same. The saved hold or allowance still applies. When company sync is off, the destination waits for company enablement.
 
-Price-only changes should leave stock automation unchanged. All stock writers must coordinate the same canonical destination and ordered publication path, so old Tally jobs cannot silently replay over a newer manual decision. Recheck destination, current versions and the chosen automation behavior at dispatch. Track per-field/per-destination results: a price update may succeed while its stock update fails, and retry must not resend already confirmed changes unnecessarily.
+Price-only changes should leave stock automation unchanged. All stock writers must coordinate the same canonical destination and ordered publication path, so old Tally jobs cannot silently replay over a newer manual decision. Recheck destination, current versions and policy at dispatch. Track per-field/per-destination results: a price update may succeed while its stock update fails, and retry must not resend already confirmed changes unnecessarily.
 
 ## Implementation boundaries
 
@@ -82,14 +82,14 @@ Price-only changes should leave stock automation unchanged. All stock writers mu
 
 ## Decisions from the follow-up interview rounds
 
-- **Q4 accepted:** choose the automation behavior when editing stock: Update once or Pause Tally sync and update.
+- **Q4 revised on 2026-11-21.** The 18 November design offered **Update once** and **Pause Tally sync and update** in Marketplaces. The seller chose a single behavior so that a later Tally change cannot overwrite a manually entered marketplace quantity before the seller unlocks that destination. **Update once** remains available for separately reviewed Inventory proposals.
 - **Q5 corrected by the seller:** use Seller Hub-style Apply for each stock or price editor. The earlier global Review changes -> Publish recommendation was not accepted for this view.
 - **Q6 accepted:** start with supported stock, MRP and selling-price edits, with Open in Flipkart for settlement until a supported API is verified.
 - **Q7 accepted:** require an explicit policy change before a direct stock edit can conflict with Limited sales or Kept out of stock. The alternative of silently overriding those rules was rejected.
 
 ## Delivery and remaining acceptance
 
-The seller approved independent account tiles, account-wide listing views, supported fields, per-editor Apply, explicit stock-automation choice, preserved policies and Seller Hub settlement fallback. Implementation is authorized; no further design-confirmation gate remains.
+The seller approved independent account tiles, account-wide listing views, supported fields, per-editor Apply, destination-specific automation pauses for direct stock edits, preserved policies and Seller Hub settlement fallback.
 
 Direct Apply is available in live mode; sample Apply only changes sample observations. Mapped Inventory destinations also support reviewed publication and company-enabled automatic updates after Tally stock changes. A verified Flipkart sale can also reduce other eligible listings backed by the same item. Positive live stock under Limited sales is blocked because order reconciliation is unfinished. The separate Confirm automatic policy action removes a destination's hold/allowance, retains Pause and sends no stock by itself.
 

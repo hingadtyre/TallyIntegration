@@ -447,7 +447,12 @@ export function InventoryScreen({
                     onPause={(listing) =>
                       void mutate(
                         '/pause',
-                        { companyId, listingIds: [listing.id], paused: !listing.paused },
+                        {
+                          companyId,
+                          listingIds: [listing.id],
+                          listingVersion: listing.version,
+                          paused: !listing.paused,
+                        },
                         'Saving automation setting',
                         listing.paused
                           ? 'Pause removed for this listing. Company automation and stock policy still apply.'

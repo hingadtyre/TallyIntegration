@@ -87,11 +87,11 @@ The seller’s permission for Stockbridge to publish automatic stock updates for
 A seller-approved publication of the calculated stock for one mapped listing at one seller location while company sync is off.
 
 **Automation pause**:
-A deliberate stop of all automatic stock publication for a marketplace listing, including zero updates, maintained until the seller resumes automation. Its underlying stock policy remains in place; observations and allowance accounting continue, and reviewed manual publication is still possible.
+A stop of all automatic stock publication for one seller's marketplace listing at one location, including zero updates, until the seller resumes sync. Stock observations, allowance accounting and Flipkart sales continue. The seller can still publish a reviewed quantity.
 _Avoid_: Disabled listing, deleted mapping
 
 **Manual override**:
-A seller-chosen adjustment to a listing's normal calculated stock behavior. Its effect must be stated explicitly, such as a sales allowance, rather than assuming that editing a quantity pauses automation.
+A seller-chosen adjustment to a listing's normal calculated stock behavior, such as a sales allowance or an out-of-stock hold.
 
 **Sales allowance**:
 A finite number of additional listing units the seller permits to be sold before that listing is advertised as out of stock. A listing unit is one complete pack, not necessarily one physical tyre.
@@ -124,7 +124,7 @@ The Tally units already committed to a verified Flipkart order but still awaitin
 A seller’s comparison of the current marketplace quantity with the newly calculated available stock after an earlier update had an uncertain outcome. Recovery requires evidence that the earlier request can no longer change stock.
 
 **Direct stock update**:
-A seller instruction to set an absolute marketplace stock quantity for a specified listing and seller location. It is distinct from changing physical Tally stock or granting a sales allowance.
+A seller instruction in Marketplaces to set the stock quantity for a specified listing and seller location. For a Tally-mapped location this includes an automation pause under its existing stock policy.
 
 **Unmapped stock item**:
 A Tally stock item with no associated listing in the marketplace account currently being viewed.

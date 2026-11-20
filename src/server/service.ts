@@ -180,10 +180,19 @@ export class InventoryService {
     return this.snapshot();
   }
 
-  pause(companyId: unknown, ids: unknown, paused: unknown): Snapshot {
+  pause(companyId: unknown, ids: unknown, paused: unknown, listingVersion?: unknown): Snapshot {
     if (typeof paused !== 'boolean') throw new InputError('Pause must be true or false.');
     this.store.update((state) => {
-      for (const listing of requireListings(state, companyId, ids)) {
+      const listings = requireListings(state, companyId, ids);
+      if (
+        listingVersion !== undefined &&
+        (listings.length !== 1 || listings[0].version !== listingVersion)
+      )
+        throw new InputError(
+          'The listing changed. Refresh before changing its Tally sync setting.',
+          409,
+        );
+      for (const listing of listings) {
         if (listing.paused !== paused) {
           listing.paused = paused;
           listing.orderSyncPending = null;

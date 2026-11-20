@@ -39,19 +39,21 @@ export function listingView(listing: MarketplaceListing, state: Snapshot): Marke
           row.sku === listing.sku &&
           (row.itemId !== null || row.policy !== 'auto' || row.paused),
       )
-      .map((row) => ({
-        listingId: row.id,
-        locationId: row.location,
-        companyName:
-          state.companies.find(
-            (company) =>
-              company.id === state.items.find((item) => item.id === row.itemId)?.companyId,
-          )?.name ?? 'Not mapped',
-        policy: row.policy,
-        remaining: row.remaining,
-        paused: row.paused,
-        automationStatus: row.automationStatus,
-      })),
+      .map((row) => {
+        const companyId = state.items.find((item) => item.id === row.itemId)?.companyId;
+        return {
+          listingId: row.id,
+          listingVersion: row.version,
+          locationId: row.location,
+          companyId,
+          companyName:
+            state.companies.find((company) => company.id === companyId)?.name ?? 'Not mapped',
+          policy: row.policy,
+          remaining: row.remaining,
+          paused: row.paused,
+          automationStatus: row.automationStatus,
+        };
+      }),
   };
 }
 

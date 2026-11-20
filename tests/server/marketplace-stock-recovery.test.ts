@@ -158,6 +158,7 @@ test('approval sends a separate current quantity and saves the old attempt even 
       const next = await s.approve(change.id, review.reviewId);
       assert.notEqual(next.change.id, change.id);
       assert.equal(next.change.state, reject ? 'failed' : 'confirmed');
+      assert.equal(next.listing.stockPolicies[0].paused, true);
       const prior = s.f.store.readMarketplace().changes.find((c) => c.id === change.id)!;
       assert.equal(prior.state, 'reconciled');
       assert.match(prior.message, /separate stock update of 3/);
@@ -225,7 +226,19 @@ test('a newer order during a rejected stock increase preserves full Tally work a
   for (const origin of ['automatic', 'recovery'] as const)
     await t.test(origin, async (t) => {
       const s = setup(t);
-      const old = origin === 'recovery' ? (await s.write(5)).change : null;
+      const prior = origin === 'recovery' ? await s.write(5) : null;
+      if (prior) {
+        const destination = prior.listing.stockPolicies.find(
+          (row) => row.locationId === s.remote.locations[0].id,
+        )!;
+        assert.equal(destination.paused, true);
+        s.f.service.pause(
+          destination.companyId,
+          [destination.listingId],
+          false,
+          destination.listingVersion,
+        );
+      }
       const older = '00000000-0000-4000-8000-000000000001';
       const newer = '00000000-0000-4000-8000-000000000002';
       const intent = s.f.store.update((state) => {
@@ -250,9 +263,9 @@ test('a newer order during a rejected stock increase preserves full Tally work a
           state.listings[0].orderSyncPending = newer;
         }),
       );
-      if (old) {
-        const review = await s.review(old.id);
-        assert.equal((await s.approve(old.id, review.reviewId)).change.state, 'failed');
+      if (prior) {
+        const review = await s.review(prior.change.id);
+        assert.equal((await s.approve(prior.change.id, review.reviewId)).change.state, 'failed');
       } else {
         const market = s.f.store.readMarketplace().listings[0];
         const result = await s.publisher.apply(

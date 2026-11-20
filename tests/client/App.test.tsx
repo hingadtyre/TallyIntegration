@@ -697,6 +697,7 @@ test('pause and resume target one listing while preserving its limited-sales pol
       assert.deepEqual(body, {
         companyId: 'demo-a',
         listingIds: ['listing-6'],
+        listingVersion: state.listings.find((row) => row.id === 'listing-6')!.version,
         paused: pauses.length > 0,
       });
       pauses.push(body.paused);
@@ -711,9 +712,9 @@ test('pause and resume target one listing while preserving its limited-sales pol
   );
   render(<App />);
   const row = await screen.findByRole('row', { name: /SAMPLE-MRF-2/ });
-  fireEvent.click(within(row).getByRole('button', { name: 'Paused · resume' }));
+  fireEvent.click(within(row).getByRole('button', { name: /Resume sync for SAMPLE-MRF-2/ }));
   fireEvent.click(await within(row).findByRole('button', { name: 'Pause automation' }));
-  await within(row).findByRole('button', { name: 'Paused · resume' });
+  await within(row).findByRole('button', { name: /Resume sync for SAMPLE-MRF-2/ });
   assert.deepEqual(pauses, [false, true]);
   const listing = state.listings.find((value) => value.id === 'listing-6')!;
   assert.equal(listing.policy, 'limited');

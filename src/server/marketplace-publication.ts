@@ -81,13 +81,13 @@ function parseEdit(input: unknown): MarketplaceEdit {
   if (!input || typeof input !== 'object') throw new InputError('Choose a stock or price edit.');
   const edit = input as Record<string, unknown>;
   if (edit.kind === 'stock') {
-    if (edit.automation !== 'once' && edit.automation !== 'pause')
-      throw new InputError('Choose how this edit affects Tally synchronization.');
+    if (edit.automation !== undefined && edit.automation !== 'once' && edit.automation !== 'pause')
+      throw new InputError('Invalid Tally synchronization setting.');
     return {
       kind: 'stock',
       locationId: requireText(edit.locationId, 'Location'),
       quantity: requireWholeNumber(edit.quantity, 'Stock', 0, 5000),
-      automation: edit.automation,
+      automation: 'once',
     };
   }
   if (edit.kind === 'price' && (edit.field === 'mrp' || edit.field === 'sellingPrice'))
@@ -397,11 +397,16 @@ export class MarketplacePublication {
         );
       if (latest.version !== version)
         throw new InputError('The listing changed. Refresh before applying.', 409);
-      // Capture the automatic work this Update once would supersede. An edited
+      const destinations = edit.kind === 'stock' ? policyRows(state, latest, edit.locationId) : [];
+      // Older clients sent an automation choice. The mapping at the moment of Apply
+      // determines whether this direct edit locks a destination.
+      if (!intent && edit.kind === 'stock')
+        edit.automation = destinations.some((row) => row.itemId !== null) ? 'pause' : 'once';
+      // Capture the automatic work an Inventory publication would supersede. An edited
       // zero also activates a hold that needs correction if Flipkart rejects it.
       const pending =
-        edit.kind === 'stock' && edit.automation === 'once'
-          ? policyRows(state, latest, edit.locationId).flatMap((row) => {
+        intent && edit.kind === 'stock'
+          ? destinations.flatMap((row) => {
               const tallyVersion =
                 row.syncPendingItemVersion ??
                 (intent?.draft?.edited && edit.quantity === 0 ? intent.itemVersion : null);
@@ -447,17 +452,13 @@ export class MarketplacePublication {
         }
       } else {
         validateStockPolicy(state, latest, edit);
-        if (edit.kind === 'stock') {
-          for (const row of policyRows(state, latest, edit.locationId)) {
-            row.syncPendingItemVersion = null;
-            row.orderSyncPending = null;
+        for (const row of destinations) {
+          row.syncPendingItemVersion = null;
+          row.orderSyncPending = null;
+          if (row.itemId !== null) {
+            row.paused = true;
+            row.version++;
           }
-        }
-      }
-      if (edit.kind === 'stock' && edit.automation === 'pause') {
-        for (const row of policyRows(state, latest, edit.locationId)) {
-          row.paused = true;
-          row.version++;
         }
       }
       current.changes.unshift(change);

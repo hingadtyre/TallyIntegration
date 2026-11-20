@@ -124,7 +124,7 @@ async function runCommand(
     case '/api/proposals':
       return service.edit(input.companyId, input.listingId, input.quantity);
     case '/api/pause':
-      return service.pause(input.companyId, input.listingIds, input.paused);
+      return service.pause(input.companyId, input.listingIds, input.paused, input.listingVersion);
     case '/api/automation':
       if (input.enabled === true)
         return service.automationReviews.enable(input.companyId, input.previewId, () =>

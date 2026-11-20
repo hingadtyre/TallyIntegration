@@ -115,14 +115,16 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
         units before calculating how many sets to publish.
       </p>
       <p>
-        Use the pencil beside stock, MRP or selling price, then Apply for that value only. For a
-        Tally-managed listing, choose Update once or Pause Tally sync and update. Pause also stops
-        automatic zero corrections until resumed. Existing holds and sales allowances require an
-        explicit policy change before a conflicting edit. If an update is uncertain, choose Check
-        result. When the earlier stock request can no longer take effect, choose Review current
-        stock. Compare Flipkart stock with the freshly calculated quantity and approve the value for
-        that location. If the two match, approval completes the review without sending stock.
-        Settlement editing opens Flipkart Seller Hub.
+        In Marketplaces, use the pencil beside stock, MRP or selling price. Applying a manual stock
+        edit to a Tally-mapped listing pauses sync at that warehouse. Flipkart can still deduct
+        sales. Stockbridge skips automatic updates, including zero, until you choose Resume sync
+        beside the lock. With company sync on, the next eligible update can apply the calculated
+        stock. Existing holds and sales allowances require an explicit policy change before a
+        conflicting edit. If an update is uncertain, choose Check result. When the earlier stock
+        request can no longer take effect, choose Review current stock. Compare Flipkart stock with
+        the freshly calculated quantity and approve the value for that location. If the two match,
+        approval completes the review without sending stock. Settlement editing opens Flipkart
+        Seller Hub.
       </p>
       <p>
         <a

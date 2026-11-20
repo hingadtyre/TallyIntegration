@@ -5,7 +5,7 @@ import type {
   MarketplaceListingView,
 } from '../../shared/marketplace-contracts.js';
 import { errorMessage, RequestError } from '../api.js';
-import { Modal } from '../components.js';
+import { Icon, Modal } from '../components.js';
 import { marketplaceApi } from '../marketplace-api.js';
 import { StockRecoveryAction } from './MarketplaceStockRecovery.js';
 
@@ -61,7 +61,6 @@ export function MarketplaceListingEditor({
   const label =
     target.kind === 'stock' ? 'Stock' : target.field === 'mrp' ? 'MRP' : 'Selling price';
   const [value, setValue] = useState(original == null ? '' : String(original));
-  const [automation, setAutomation] = useState<'once' | 'pause' | ''>('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [change, setChange] = useState<MarketplaceChange | null>(null);
@@ -85,11 +84,7 @@ export function MarketplaceListingEditor({
     !!change && ['pending', 'sending', 'checking', 'uncertain'].includes(change.state);
   const finished = change?.state === 'confirmed' || change?.state === 'reconciled';
   async function apply(reconcile = false) {
-    if (
-      submitting.current ||
-      (!reconcile && (lostResponse || !valid || conflict || (policy && !automation)))
-    )
-      return;
+    if (submitting.current || (!reconcile && (lostResponse || !valid || conflict))) return;
     submitting.current = true;
     setPending(true);
     onPending(true);
@@ -108,7 +103,6 @@ export function MarketplaceListingEditor({
                       kind: 'stock',
                       locationId: target.locationId,
                       quantity,
-                      automation: automation || 'once',
                     }
                   : { kind: 'price', field: target.field, value: quantity },
             });
@@ -221,51 +215,30 @@ export function MarketplaceListingEditor({
           />
         </label>
         {policy && (
-          <fieldset
-            className="marketplace-policy"
-            disabled={pending || lostResponse || needsReconcile || finished}
-          >
-            <legend>Tally stock automation</legend>
+          <div className="marketplace-policy">
+            {policy.companyId && (
+              <strong className="sync-lock-label">
+                <Icon name="lock" />
+                {policy.paused ? 'Tally sync paused' : 'Applying stock pauses Tally sync'}
+              </strong>
+            )}
             <p>
-              {policy.companyName} ·{' '}
-              {policy.automationStatus ?? (policy.paused ? 'Paused' : 'Status unavailable')} ·{' '}
+              {policy.companyName}
+              {!policy.paused && ` · ${policy.automationStatus ?? 'Status unavailable'}`} · Stock
+              policy:{' '}
               {policy.policy === 'hold'
                 ? 'Kept out of stock'
                 : policy.policy === 'limited'
                   ? `Limited sales: ${policy.remaining ?? 'unknown'} remaining`
                   : 'Auto'}
             </p>
-            <label>
-              <input
-                type="radio"
-                name="stock-automation"
-                checked={automation === 'once'}
-                onChange={() => setAutomation('once')}
-              />{' '}
-              <span>
-                <strong>Update once</strong>
-                <small>
-                  Keep the current automation setting. A later Tally stock change or a verified
-                  Flipkart sale can update this quantity. A paused listing stays paused.
-                </small>
-              </span>
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="stock-automation"
-                checked={automation === 'pause'}
-                onChange={() => setAutomation('pause')}
-              />{' '}
-              <span>
-                <strong>Pause Tally sync and update</strong>
-                <small>
-                  Stop all automatic stock writes, including zero corrections, until resumed.
-                  Existing holds and sales allowances stay in place.
-                </small>
-              </span>
-            </label>
-          </fieldset>
+            {policy.companyId && (
+              <p>
+                Flipkart sales still reduce stock. Stockbridge skips automatic updates for this
+                location, including updates to zero, until you choose Resume sync.
+              </p>
+            )}
+          </div>
         )}
         {target.kind === 'price' && (
           <p className="marketplace-help">
@@ -365,10 +338,14 @@ export function MarketplaceListingEditor({
             !finished && (
               <button
                 className="button primary"
-                disabled={pending || !valid || !!conflict || (!!policy && !automation)}
+                disabled={pending || !valid || !!conflict}
                 onClick={() => void apply()}
               >
-                {pending ? 'Applying…' : 'Apply'}
+                {pending
+                  ? 'Applying…'
+                  : policy?.companyId && !policy.paused
+                    ? 'Apply and pause sync'
+                    : 'Apply'}
               </button>
             )
           )}

@@ -6,6 +6,8 @@
 
 The seller approved the separate [account/listing flow](marketplace-listings.md) on 2026-11-18. Marketplaces works independently of Tally setup and shows explicitly added accounts with separate protected credentials, seller bindings and all-state listing imports. Search and status filters cover the last complete import. Live Apply sends only the selected stock/location or price edit; fresh reads check conflicts and the result. Sample mode makes no external request.
 
+A direct stock edit in Marketplaces pauses automatic stock publication for the mapped seller, listing and location. A later Tally purchase, Tally sale or verified Flipkart order cannot trigger an automatic write to that location while paused. Flipkart can still deduct customer orders. Resuming clears the location's pause immediately. If company sync is on and the mapping is eligible, the next sync pass checks the current target under the saved policy and can publish it. Company sync is enabled separately.
+
 Holds and allowances constrain direct stock edits. Positive live Limited sales updates are blocked while order reconciliation is unfinished. The seller can explicitly return the destination to Auto before applying; this removes the hold/allowance, retains Pause and sends no stock by itself. Price-only edits leave automation unchanged.
 
 Schema 4 persists mapping choices, package observations and pending Tally stock changes alongside durable marketplace attempts. Writes are serialized per account. An unfinished attempt becomes uncertain after restart. Fresh Tally and marketplace reads are required for live Inventory publication. Offline restore preserves seller bindings, clears freshness, pauses listings and disables company automation.
@@ -114,7 +116,7 @@ On each catalogue refresh, save the latest valid package count and check time fo
 
 ## Modes and operations
 
-Saving the same confirmed mapping preserves its pending work and existing proposals. A seller can review Set of without refilling stock that has already sold on Flipkart. If Flipkart definitively rejects a one-time edit, a previously pending Tally change can still run after fresh checks. An uncertain stock request requires evidence of completion or non-dispatch before the seller can approve a recovery.
+Saving the same confirmed mapping preserves its pending work and existing proposals. A seller can review Set of without refilling stock that has already sold on Flipkart. If Flipkart definitively rejects a reviewed Inventory **Update once** edit, a previously pending Tally change can still run after fresh checks. An uncertain stock request requires evidence of completion or non-dispatch before the seller can approve a recovery.
 
 | State or action                       | Effect                                                                                                                                                                                                                                                                                     |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

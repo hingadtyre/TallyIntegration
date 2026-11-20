@@ -16,8 +16,8 @@ export type IconName =
   | 'check'
   | 'close'
   | 'arrow'
+  | 'lock'
   | 'pause'
-  | 'play'
   | 'box'
   | 'info';
 const iconPaths: Record<IconName, ReactNode> = {
@@ -74,12 +74,17 @@ const iconPaths: Record<IconName, ReactNode> = {
   check: <path d="m5 12 4 4L19 6" />,
   close: <path d="m6 6 12 12M18 6 6 18" />,
   arrow: <path d="M4 12h16m-6-6 6 6-6 6" />,
+  lock: (
+    <>
+      <rect x="5" y="10" width="14" height="11" rx="2" />
+      <path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v3" />
+    </>
+  ),
   pause: (
     <>
       <path d="M8 5v14M16 5v14" />
     </>
   ),
-  play: <path d="m8 4 12 8-12 8Z" />,
   box: (
     <>
       <path d="m12 3 9 5v9l-9 5-9-5V8Z" />
@@ -107,6 +112,34 @@ export function Icon({ name, className = '' }: { name: IconName; className?: str
     >
       {iconPaths[name]}
     </svg>
+  );
+}
+export function ResumeSyncButton({
+  sku,
+  location,
+  disabled,
+  onResume,
+}: {
+  sku: string;
+  location: string;
+  disabled: boolean;
+  onResume: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="resume-sync"
+      aria-label={`Resume sync for ${sku} at ${location}`}
+      title="Resume automatic stock updates at this location when company sync is on."
+      disabled={disabled}
+      onClick={onResume}
+    >
+      <span className="sync-lock-label">
+        <Icon name="lock" />
+        Tally sync paused
+      </span>
+      <span className="resume-sync-action">Resume sync</span>
+    </button>
   );
 }
 export function Modal({

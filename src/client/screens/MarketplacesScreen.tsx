@@ -8,8 +8,8 @@ import type {
   MarketplaceListingView,
   MarketplacePage,
 } from '../../shared/marketplace-contracts.js';
-import { errorMessage } from '../api.js';
-import { Icon } from '../components.js';
+import { errorMessage, requestJson } from '../api.js';
+import { Icon, ResumeSyncButton } from '../components.js';
 import { formatDateTime as time } from '../format.js';
 import { marketplaceApi } from '../marketplace-api.js';
 import { MarketplaceAccountForm } from './MarketplaceAccountForm.js';
@@ -595,11 +595,30 @@ function MarketplaceListingRow({
 }) {
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
+  const [resuming, setResuming] = useState(false);
   const unresolved = changes.find((change) =>
     ['pending', 'sending', 'checking', 'uncertain'].includes(change.state),
   );
   const latest =
     unresolved ?? [...changes].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  async function resume(policy: MarketplaceListingView['stockPolicies'][number]) {
+    if (resuming || !policy.companyId) return;
+    setResuming(true);
+    setError('');
+    try {
+      await requestJson('/pause', {
+        companyId: policy.companyId,
+        listingIds: [policy.listingId],
+        listingVersion: policy.listingVersion,
+        paused: false,
+      });
+      onReload();
+    } catch (failure) {
+      setError(errorMessage(failure));
+    } finally {
+      setResuming(false);
+    }
+  }
   async function reconcile() {
     if (!unresolved || checking) return;
     setChecking(true);
@@ -663,7 +682,16 @@ function MarketplaceListingRow({
         )}
         {error && (
           <p className="marketplace-error" role="alert">
-            {error}
+            {error}{' '}
+            <button
+              className="text-button"
+              onClick={() => {
+                setError('');
+                onReload();
+              }}
+            >
+              Reload listings
+            </button>
           </p>
         )}
         {failure && (
@@ -686,7 +714,9 @@ function MarketplaceListingRow({
         <td key={field}>
           <button
             className="marketplace-value"
-            disabled={!!unresolved || pending || !!failure?.uncertain || !listing.observedAt}
+            disabled={
+              !!unresolved || pending || resuming || !!failure?.uncertain || !listing.observedAt
+            }
             aria-label={`Edit ${field === 'mrp' ? 'MRP' : 'selling price'} for ${listing.sku}`}
             onClick={() => onEdit({ listing, kind: 'price', field })}
           >
@@ -710,7 +740,13 @@ function MarketplaceListingRow({
                 </span>
                 <button
                   className="marketplace-value"
-                  disabled={!!unresolved || pending || !!failure?.uncertain || !listing.observedAt}
+                  disabled={
+                    !!unresolved ||
+                    pending ||
+                    resuming ||
+                    !!failure?.uncertain ||
+                    !listing.observedAt
+                  }
                   aria-label={`Edit stock for ${listing.sku} at ${location.id}`}
                   onClick={() => onEdit({ listing, kind: 'stock', locationId: location.id })}
                 >
@@ -722,11 +758,20 @@ function MarketplaceListingRow({
                     ? `${policy.companyName} · ${policy.policy === 'hold' ? 'Kept out of stock' : policy.policy === 'limited' ? `${policy.remaining ?? '?'} sales remaining` : 'Auto'}`
                     : 'Not mapped to Tally'}
                 </small>
-                {policy && (
-                  <small>
-                    Stockbridge ·{' '}
-                    {policy.automationStatus ?? (policy.paused ? 'Paused' : 'Status unavailable')}
-                  </small>
+                {policy?.paused && policy.companyId ? (
+                  <ResumeSyncButton
+                    sku={listing.sku}
+                    location={location.id}
+                    disabled={pending || checking || resuming}
+                    onResume={() => void resume(policy)}
+                  />
+                ) : (
+                  policy && (
+                    <small>
+                      Stockbridge ·{' '}
+                      {policy.automationStatus ?? (policy.paused ? 'Paused' : 'Status unavailable')}
+                    </small>
+                  )
                 )}
               </div>
             );
