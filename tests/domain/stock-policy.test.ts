@@ -10,6 +10,18 @@ import {
 
 const auto: StockPolicy = { mode: 'auto', remaining: null };
 
+test('a listing using ordinary pack arithmetic advertises only complete packs', () => {
+  for (const [physical, expected] of [
+    [1, 0],
+    [2, 1],
+    [7, 3],
+    [14, 7],
+  ]) {
+    const result = calculateStock({ physical, packSize: 2, policy: auto, tyreFloor: false });
+    assert.equal(result.desired, expected);
+  }
+});
+
 test('one physical tyre advertises five singles but no larger pack', () => {
   assert.deepEqual(
     [1, 2, 3, 4].map((packSize) => calculateStock({ physical: 1, packSize, policy: auto }).desired),

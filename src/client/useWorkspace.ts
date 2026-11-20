@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Review, Snapshot } from '../shared/contracts.js';
+import type { InventoryPublishResult, Review, Snapshot } from '../shared/contracts.js';
 import { errorMessage, requestJson, type ActionResult } from './api.js';
 
 interface BackupResult {
@@ -105,6 +105,31 @@ export function useWorkspace() {
     [runAction],
   );
 
+  const publishReview = useCallback(
+    (reviewId: string, positiveEdits?: 'once' | 'allowance') =>
+      runAction(
+        'Publishing reviewed stock',
+        async () => {
+          const result = await requestJson<InventoryPublishResult>('/publish', {
+            reviewId,
+            positiveEdits,
+          });
+          try {
+            const next = await requestJson<Snapshot>('/state');
+            if (mounted.current) setState(next);
+          } catch {
+            if (mounted.current)
+              setError(
+                'Publication results are available. Inventory will refresh on the next check.',
+              );
+          }
+          return result;
+        },
+        '',
+      ),
+    [runAction],
+  );
+
   const refreshSnapshot = useCallback(
     () =>
       runAction(
@@ -165,6 +190,7 @@ export function useWorkspace() {
     refreshSnapshot,
     refreshTally,
     prepareReview,
+    publishReview,
     backUpNow,
     dismissError: () => setError(''),
     dismissNotice: () => setNotice(''),

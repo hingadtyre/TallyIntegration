@@ -103,7 +103,7 @@ img{max-width:100%}blockquote,.pilot{padding:12px 18px;border-left:4px solid #b1
 .build{color:#5c665e;font-size:14px}li{margin:8px 0}@media(max-width:600px){body{padding:10px}main{padding:18px}}
 </style></head><body><main>
 <nav><a href="${relativeUrl(outputPath, 'Read Me.html')}">Setup guide</a><a href="${relativeUrl(outputPath, 'documentation/index.html')}">All documentation</a></nav>
-<p class="pilot"><strong>Read-only pilot.</strong> Tally stock review and manual backups are available. Flipkart connection and marketplace publication are not available.</p>
+<p class="pilot"><strong>Live workspace.</strong> Stockbridge reads Tally stock. Reviewed changes and enabled automatic updates can publish stock to Flipkart.</p>
 <p class="build">Version ${escapeHtml(build.version)} · ${escapeHtml(build.commit.slice(0, 12))}${build.dirty ? ' · includes uncommitted changes' : ''} · built ${escapeHtml(build.createdAt)}</p>
 ${body}
 </main></body></html>\n`;

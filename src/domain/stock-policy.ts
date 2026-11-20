@@ -47,11 +47,13 @@ export function applyFlipkartTyreFloor(packs: number): number {
 export function calculateStock(input: {
   physical: number;
   packSize: number;
+  /** Existing callers model the original tyre policy. New mappings explicitly select a rule. */
+  tyreFloor?: boolean;
   policy: StockPolicy;
 }): StockCalculation {
   // Validate stock even for a hold: missing observations are not a real zero.
   const packs = completePacks(input.physical, input.packSize);
-  const advertised = applyFlipkartTyreFloor(packs);
+  const advertised = input.tyreFloor === false ? packs : applyFlipkartTyreFloor(packs);
   const { mode, remaining } = input.policy;
   if (remaining !== null) requireNonnegativeUnits(remaining, 'Remaining allowance');
 

@@ -9,6 +9,7 @@ export type IconName =
   | 'marketplaces'
   | 'refresh'
   | 'search'
+  | 'edit'
   | 'chevron'
   | 'plus'
   | 'check'
@@ -66,6 +67,7 @@ const iconPaths: Record<IconName, ReactNode> = {
     </>
   ),
   chevron: <path d="m8 4 8 8-8 8" />,
+  edit: <path d="m14.5 5.5 4 4M4 20l4.5-1 12-12-3.5-3.5-12 12L4 20Z" />,
   plus: <path d="M12 5v14M5 12h14" />,
   check: <path d="m5 12 4 4L19 6" />,
   close: <path d="m6 6 12 12M18 6 6 18" />,

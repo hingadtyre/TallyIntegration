@@ -245,7 +245,7 @@ export function App() {
                 ? state.mode === 'demo'
                   ? 'Sample simulation · no external changes'
                   : 'Marketplace edits apply individually'
-                : 'Tally inventory review · automatic publishing unavailable')}
+                : 'Tally inventory')}
           </span>
         </footer>
       </div>

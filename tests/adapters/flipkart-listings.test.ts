@@ -140,6 +140,7 @@ test('account import reads every state and page, batches details by ten and uses
   );
   assert.deepEqual(result[0], {
     ...listing,
+    packageCount: null,
     title: 'Tyre 1',
     mrp: 2200,
     sellingPrice: 1900,
@@ -156,6 +157,72 @@ test('account import reads every state and page, batches details by ten and uses
   );
   assert.ok(result.every((row) => row.sellerId === 'seller-1' && row.accountId === 'account-a'));
   assert.ok(result.every((row) => !Object.hasOwn(row, 'settlement')));
+});
+
+test('standard listing search uses the complete cursor chain and reads exact SKUs with parcel counts', async () => {
+  const cursors: unknown[] = [];
+  const originalSku = ' tyre/2';
+  const client = new FlipkartListingsClient({
+    request: async (url, options) => {
+      const path = new URL(String(url)).pathname;
+      const body = JSON.parse(String(options?.body));
+      if (path.endsWith('/product/search')) return new Response(null, { status: 404 });
+      if (path.endsWith('/search')) {
+        cursors.push(body.page_id);
+        const first = body.page_id === null;
+        return Response.json({
+          listings: [
+            {
+              listing_id: first ? 'listing-1' : 'listing-2',
+              product_id: first ? 'product-1' : 'product-2',
+              sku_id: first ? originalSku : 'sku-2',
+            },
+          ],
+          has_more: first,
+          next_page_id: first ? 'next' : null,
+        });
+      }
+      assert.deepEqual(body.sku_ids, [originalSku, 'sku-2']);
+      return Response.json({
+        available: {
+          [originalSku]: { ...detail(1), packages: [{ id: '2' }, { id: '1' }] },
+          'sku-2': {
+            ...detail(2),
+            locations: undefined,
+            packages: [],
+            archived_status: 'ARCHIVED',
+          },
+        },
+      });
+    },
+  });
+  const result = await client.listListings(token, 'tile');
+  assert.deepEqual(cursors, [null, 'next']);
+  assert.deepEqual(
+    result.map((row) => [row.sku, row.status, row.packageCount, row.sellerId]),
+    [
+      [originalSku, 'ACTIVE', 2, null],
+      ['sku-2', 'ARCHIVED', null, null],
+    ],
+  );
+  assert.deepEqual(result[1].locations, []);
+});
+
+test('a repeated standard-search cursor rejects the import before any details are applied', async () => {
+  let page = 0;
+  const client = new FlipkartListingsClient({
+    request: async (url) => {
+      if (String(url).endsWith('/product/search')) return new Response(null, { status: 404 });
+      page++;
+      return Response.json({
+        listings: [{ listing_id: `lid-${page}`, sku_id: `sku-${page}`, product_id: `p-${page}` }],
+        has_more: true,
+        next_page_id: 'same',
+      });
+    },
+  });
+  await assert.rejects(client.listListings(token, 'tile'), safeError(false));
+  assert.equal(page, 2);
 });
 
 test('an empty account is complete only after every state is checked', async () => {
@@ -270,6 +337,34 @@ test('fresh details preserve display identity and version while replacing prices
   assert.equal(result.locations[0].quantity, 6);
   assert.equal(result.observedAt, new Date(now).toISOString());
   assert.equal(listing.locations[0].quantity, 10);
+});
+
+test('Inventory publication requires a fresh recognized listing status even when its cached status is active', async () => {
+  const options = { requireCurrentStatus: true };
+  for (const fields of [
+    { listing_status: undefined },
+    { listing_status: 'UNKNOWN' },
+    { listing_status: ['ACTIVE'] },
+    { archived_status: 'UNKNOWN' },
+  ]) {
+    const client = clientForDetails({ ...detail(), ...fields });
+    await assert.rejects(client.getListing(token, listing, options), /current listing status/);
+    assert.equal((await client.getListing(token, listing)).mrp, 2200);
+  }
+  for (const status of ['ACTIVE', 'INACTIVE']) {
+    const client = clientForDetails({
+      ...detail(),
+      listing_status: status,
+      archived_status: 'NONE',
+    });
+    assert.equal((await client.getListing(token, listing, options)).status, status);
+  }
+  const archived = clientForDetails({
+    ...detail(),
+    listing_status: undefined,
+    archived_status: 'ARCHIVED',
+  });
+  assert.equal((await archived.getListing(token, listing, options)).status, 'ARCHIVED');
 });
 
 test('details use the documented alternative selling-price name and authoritative title and status', async () => {

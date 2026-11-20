@@ -33,6 +33,8 @@ export interface FlipkartConnectionStatus {
   message: string;
 }
 export interface Listing {
+  /** A Tally balance change still awaiting dispatch for this destination. */
+  syncPendingItemVersion?: number | null;
   id: string;
   accountId: string;
   sku: string;
@@ -41,6 +43,13 @@ export interface Listing {
   itemId: string | null;
   packSize: number | null;
   packEvidence: string;
+  packSource?: 'packages' | 'manual' | null;
+  packageCount?: number | null;
+  packageObservedAt?: string | null;
+  packageAvailable?: boolean;
+  packConfirmedAt?: string | null;
+  sourceScope?: 'company' | null;
+  tyreFloor?: boolean;
   verified: boolean;
   observed: number | null;
   observedAt: string | null;
@@ -84,7 +93,7 @@ export interface ConnectionStatus {
 }
 export interface Snapshot {
   mode: 'live' | 'demo';
-  publishingEnabled: false;
+  publishingEnabled: boolean;
   companies: Company[];
   items: StockItem[];
   accounts: SellerAccount[];
@@ -95,6 +104,8 @@ export interface Snapshot {
   connection: ConnectionStatus;
 }
 export interface ReviewRow {
+  /** Present for positive manual edits, including null when Update once is eligible. */
+  oneTimeProblem?: string | null;
   listingId: string;
   sku: string;
   account: string;
@@ -110,10 +121,25 @@ export interface Review {
   companyId: string;
   createdAt: string;
   rows: ReviewRow[];
-  publishingEnabled: false;
+  publishingEnabled: boolean;
+}
+export interface InventoryPublishRow {
+  listingId: string;
+  sku: string;
+  status: 'confirmed' | 'unchanged' | 'blocked' | 'failed' | 'uncertain';
+  message: string;
+}
+export interface InventoryPublishResult {
+  rows: InventoryPublishRow[];
 }
 export interface MappingInput {
   listingId: string;
   itemId: string;
+  expectedUnit?: string;
   confirmPackEvidence: boolean;
+  packSource?: 'packages' | 'manual';
+  packSize?: number;
+  listingVersion?: number;
+  sourceScope?: 'company';
+  tyreFloor?: boolean;
 }

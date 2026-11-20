@@ -11,7 +11,7 @@ export interface FlipkartAccessToken {
 export class FlipkartAuthenticationError extends Error {}
 
 const tokenUrl =
-  'https://api.flipkart.net/oauth-service/oauth/token?grant_type=client_credentials&scope=Seller_Api,Default';
+  'https://api.flipkart.net/oauth-service/oauth/token?grant_type=client_credentials&scope=Seller_Api';
 const maximumResponseBytes = 64 * 1024;
 
 export function validateFlipkartCredentials(input: unknown): FlipkartCredentials {

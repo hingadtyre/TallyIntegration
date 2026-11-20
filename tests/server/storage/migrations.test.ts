@@ -69,7 +69,7 @@ test('legacy migration preserves policies, drafts, identities and history with a
   const original = legacyState(f.directory);
   createLegacy(f.file, original);
   const store = f.open();
-  assert.equal(store.schemaVersion, 3);
+  assert.equal(store.schemaVersion, 4);
   assert.deepEqual(store.read(), original);
   assert.ok(store.migrationBackupPath);
   assert.ok(existsSync(store.migrationBackupPath));
@@ -81,7 +81,7 @@ test('legacy migration preserves policies, drafts, identities and history with a
     assert.deepEqual(JSON.parse(value as string), original);
   });
   queryFile(f.file, (database) => {
-    assert.equal(database.prepare('PRAGMA user_version').get()?.user_version, 3);
+    assert.equal(database.prepare('PRAGMA user_version').get()?.user_version, 4);
     assert.equal(
       database.prepare("SELECT name FROM sqlite_master WHERE name = 'app_state'").get(),
       undefined,
@@ -108,19 +108,39 @@ function createVersionTwo(file: string, state: Snapshot): void {
     createSchema(database);
     writeSnapshot(database, state);
     database.exec(
-      'DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
+      'DROP TABLE listing_pack_settings; DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
     );
   } finally {
     database.close();
   }
 }
 
+test('version three mapping records migrate without opting live records into calculated publication', (t) => {
+  const f = fixture(t);
+  const original = legacyState(f.directory);
+  queryFile(f.file, (db) => {
+    createSchema(db);
+    writeSnapshot(db, original);
+    db.exec('DROP TABLE listing_pack_settings; PRAGMA user_version = 3');
+  });
+  const store = f.open();
+  assert.deepEqual(store.read(), original);
+  assert.ok(store.migrationBackupPath);
+  queryFile(store.migrationBackupPath, (db) => {
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version, 3);
+    assert.equal(
+      db.prepare("SELECT name FROM sqlite_master WHERE name='listing_pack_settings'").get(),
+      undefined,
+    );
+  });
+});
+
 test('version two upgrades preserve all records and a verified version-two safety copy without adopting placeholders', (t) => {
   const f = fixture(t);
   const original = legacyState(f.directory);
   createVersionTwo(f.file, original);
   const store = f.open();
-  assert.equal(store.schemaVersion, 3);
+  assert.equal(store.schemaVersion, 4);
   assert.deepEqual(store.read(), original);
   assert.deepEqual(store.readMarketplace(), { accounts: [], listings: [], changes: [] });
   assert.ok(store.migrationBackupPath);

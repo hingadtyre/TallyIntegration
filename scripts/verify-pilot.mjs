@@ -23,7 +23,6 @@ import { promisify } from 'node:util';
 const execute = promisify(execFile);
 const { fetch, AbortSignal } = globalThis;
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const dashboard = 'http://127.0.0.1:4310';
 const secrets = new Set();
 
 function sha256(file) {
@@ -61,21 +60,17 @@ function readRuntimeRecord(file) {
   };
 }
 
-async function portAvailable() {
+async function availablePort(port) {
   const probe = createPortProbe();
   await new Promise((accept, reject) => {
-    probe.once('error', () =>
-      reject(
-        new Error(
-          'Port 4310 is occupied. Stop the intended app yourself before verification; no existing process was touched.',
-        ),
-      ),
-    );
-    probe.listen(4310, '127.0.0.1', accept);
+    probe.once('error', reject);
+    probe.listen(port, '127.0.0.1', accept);
   });
+  const selected = probe.address().port;
   await new Promise((accept, reject) =>
     probe.close((failure) => (failure ? reject(failure) : accept())),
   );
+  return selected;
 }
 
 async function command(program, args, options = {}, allowFailure = false) {
@@ -194,7 +189,7 @@ async function tallyFixture() {
   };
 }
 
-async function api(path, body, expectedStatus = 200, timeoutMs = 5000) {
+async function requestApi(dashboard, path, body, expectedStatus = 200, timeoutMs = 5000) {
   const response = await fetch(dashboard + path, {
     signal: AbortSignal.timeout(timeoutMs),
     redirect: 'error',
@@ -239,6 +234,7 @@ async function verifyPilot(zip) {
     try {
       const details = await run();
       evidence.checks.push({ name, passed: true, durationMs: Date.now() - started, ...details });
+      return details;
     } catch (failure) {
       evidence.checks.push({
         name,
@@ -250,9 +246,6 @@ async function verifyPilot(zip) {
     }
   }
   try {
-    await check('dashboard_port_is_free', async () => {
-      await portAvailable();
-    });
     await check('zip_sha256', async () => {
       const sidecar = readFileSync(`${zip}.sha256`, 'utf8')
         .trim()
@@ -384,7 +377,15 @@ async function verifyPilot(zip) {
     const dataDirectory = join(verification, 'isolated data');
     mkdirSync(workingDirectory);
     mkdirSync(dataDirectory);
+    // Earlier packages only accept the default live dashboard port.
+    const configurablePort = existsSync(join(packageRoot, 'dist/src/shared/dashboard-port.js'));
+    const { port } = await check('dashboard_port_is_free', async () => ({
+      port: await availablePort(configurablePort ? 0 : 4310),
+    }));
+    const dashboard = `http://127.0.0.1:${port}`;
+    const api = requestApi.bind(null, dashboard);
     options = { cwd: workingDirectory, env: runtimeEnvironment(system32, dataDirectory) };
+    options.env.STOCKBRIDGE_DASHBOARD_PORT = String(port);
     runtimeFile = join(dataDirectory, 'live.runtime.json');
     const launch = (action) => command(node, [launcher, action, '--no-browser'], options);
     await check('bundled_node_without_development_toolchain', async () => {
@@ -437,13 +438,14 @@ async function verifyPilot(zip) {
       assert.equal(health.application, 'stockbridge');
       assert.equal(health.version, manifest.version);
       assert.equal(health.mode, 'live');
-      assert.equal(health.publishingEnabled, false);
+      assert.equal(health.publishingEnabled, true);
       assert.ok(!Object.hasOwn(health, 'token'), 'Health must not expose the runtime token.');
       const record = readRuntimeRecord(runtimeFile);
       assert.equal(record.instanceId, health.instanceId);
+      assert.equal(record.url, dashboard);
       const state = await api('/api/state');
       assert.equal(state.mode, 'live');
-      assert.equal(state.publishingEnabled, false);
+      assert.equal(state.publishingEnabled, true);
       assert.deepEqual(state.companies, []);
       assert.deepEqual(state.items, []);
       assert.deepEqual(state.listings, []);
@@ -467,8 +469,8 @@ async function verifyPilot(zip) {
       const checked = await api('/api/flipkart/check', {}, 409);
       assert.match(checked.error, /Connect a seller-owned Flipkart application first/);
       assert.ok(!existsSync(join(dataDirectory, 'flipkart-self-access.credentials')));
-      assert.equal((await api('/api/state')).publishingEnabled, false);
-      return { credentialsPresent: false, publishingEnabled: false };
+      assert.equal((await api('/api/state')).publishingEnabled, true);
+      return { credentialsPresent: false, publishingEnabled: true };
     });
     let marketplaceAccounts;
     await check('marketplace_accounts_are_explicit_and_credentials_are_separate', async () => {
@@ -517,7 +519,7 @@ async function verifyPilot(zip) {
       assert.equal(directory.length, 2);
       assert.equal(directory[0].connection.applicationIdHint, null);
       assert.equal(directory[1].connection.applicationIdHint, '***0002');
-      assert.equal((await api('/api/state')).publishingEnabled, false);
+      assert.equal((await api('/api/state')).publishingEnabled, true);
       return { accounts: 2, separateProtectedFiles: true, verifyRequested: false };
     });
     await check('dashboard_and_compiled_assets', async () => {
@@ -567,7 +569,7 @@ async function verifyPilot(zip) {
       assert.equal(state.items[0].id, fixture.itemId);
       assert.equal(state.items[0].physical, 4);
       assert.equal(state.items[0].unit, 'nos');
-      assert.equal(state.publishingEnabled, false);
+      assert.equal(state.publishingEnabled, true);
       assert.ok(fixture.evidence().requests >= 3);
       assert.deepEqual(fixture.evidence().failures, []);
       return { companyId: fixture.companyId, itemId: fixture.itemId, physical: 4 };
@@ -596,7 +598,7 @@ async function verifyPilot(zip) {
       assert.match(rejected.error, /authorization/);
       assert.equal((await api('/api/health')).instanceId, firstInstance.instanceId);
       const publish = await api('/api/publish', {}, 409);
-      assert.match(publish.error, /unavailable/);
+      assert.match(publish.error, /fresh Inventory review/);
       return { stopWithoutToken: 403, publishing: 409 };
     });
     const restoreArguments = [
@@ -628,7 +630,7 @@ async function verifyPilot(zip) {
         !existsSync(runtimeFile),
         'Stop must remove its runtime record before reporting completion.',
       );
-      await portAvailable();
+      await availablePort(port);
       return { runtimeRecordRemoved: true, physicalBeforeRestore: 9 };
     });
     await check('inspect_and_digest_confirmed_offline_restore', async () => {
@@ -681,7 +683,7 @@ async function verifyPilot(zip) {
       assert.equal(restored.items[0].observedAt, null);
       assert.equal(restored.companies[0].automation, false);
       assert.equal(restored.connection.tally, 'not-checked');
-      assert.equal(restored.publishingEnabled, false);
+      assert.equal(restored.publishingEnabled, true);
       assert.ok(restored.activity.some((entry) => entry.operation === 'pilot-restore'));
       assert.ok(!existsSync(join(packageRoot, '.data')));
       const accounts = (await api('/api/marketplaces', undefined, 200, 30_000)).accounts;
@@ -696,7 +698,7 @@ async function verifyPilot(zip) {
         instanceId: health.instanceId,
         tallySeconds: 45,
         restoredPhysical: 4,
-        publishingEnabled: false,
+        publishingEnabled: true,
       };
     });
     await check('final_stop_and_status', async () => {
@@ -704,7 +706,7 @@ async function verifyPilot(zip) {
       assert.ok(!existsSync(runtimeFile));
       const status = await launch('status');
       assert.match(status.stdout, /Stockbridge is not running\./);
-      await portAvailable();
+      await availablePort(port);
       assert.deepEqual(fixture.evidence().failures, []);
       return { runtimeRecordRemoved: true, fixture: fixture.evidence() };
     });

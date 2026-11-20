@@ -9,6 +9,7 @@ import { createApp, type RuntimeHealth } from './http.js';
 import { InventoryService } from './service.js';
 import { Store } from './store.js';
 import { MarketplaceService } from './marketplace-service.js';
+import { liveDashboardPort } from '../shared/dashboard-port.js';
 
 type WorkspaceMode = 'live' | 'demo';
 
@@ -129,6 +130,7 @@ export async function startRuntime(
   } = {},
 ): Promise<{ record: RuntimeRecord; stop(): Promise<void> }> {
   const mode = options.mode ?? 'live';
+  const port = options.port ?? (mode === 'demo' ? 4311 : liveDashboardPort());
   const paths = resolveRuntimePaths(options.dataDirectory ?? process.env.STOCKBRIDGE_DATA_DIR);
   const packageInfo = JSON.parse(readFileSync(join(paths.appRoot, 'package.json'), 'utf8')) as {
     version?: unknown;
@@ -146,7 +148,7 @@ export async function startRuntime(
     version: packageInfo.version,
     mode,
     instanceId,
-    publishingEnabled: false,
+    publishingEnabled: true,
   };
   let store: Store | undefined;
   let service: InventoryService | undefined;
@@ -202,12 +204,12 @@ export async function startRuntime(
 
   try {
     store = new Store(join(owner.dataDirectory, `${mode}.sqlite`), mode);
-    service = new InventoryService(store, { diagnostics });
     flipkart = new FlipkartConnection(owner.dataDirectory, mode);
     marketplaces = new MarketplaceService(store, owner.dataDirectory, {
       legacyConnection: flipkart,
     });
     await marketplaces.initialize();
+    service = new InventoryService(store, { diagnostics, marketplaces });
     app = createApp(
       service,
       paths.webRoot,
@@ -230,7 +232,7 @@ export async function startRuntime(
     const server = app;
     await new Promise<void>((accept, reject) => {
       server.once('error', reject);
-      server.listen(options.port ?? (mode === 'demo' ? 4311 : 4310), '127.0.0.1', () => {
+      server.listen(port, '127.0.0.1', () => {
         server.off('error', reject);
         accept();
       });
@@ -254,7 +256,7 @@ export async function startRuntime(
     service.start();
     service.log(
       'startup',
-      `${mode} dashboard started; automatic Inventory publishing disabled; explicit Marketplace Apply available.`,
+      `${mode} dashboard started; Inventory sync follows the saved company and listing settings.`,
     );
     server.on('error', (error) => {
       diagnostics.error('http-server', error);
@@ -266,7 +268,7 @@ export async function startRuntime(
     await stop();
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
       throw new Error(
-        `Dashboard port ${options.port ?? (mode === 'demo' ? 4311 : 4310)} is already in use. Stop the existing application or choose the correct workspace.`,
+        `Dashboard port ${port} is already in use. Stop the existing application or choose the correct workspace.`,
         { cause: error },
       );
     }

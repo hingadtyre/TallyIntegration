@@ -85,7 +85,7 @@ export function MarketplaceAccountForm({
           <p>
             {demo
               ? 'Create a sample account. No credentials or external connection are used.'
-              : 'Use the API credentials from this seller’s own Flipkart Self Access application.'}
+              : 'Use this seller’s own Flipkart Self Access credentials. Verify and save also imports its listings.'}
           </p>
           <fieldset disabled={pending}>
             {!account && (
@@ -138,8 +138,8 @@ export function MarketplaceAccountForm({
           </fieldset>
           {!demo && (
             <p className="marketplace-help">
-              Save without verification does not contact Flipkart. Credential verification alone
-              does not confirm seller identity or listing access.
+              Save without verification stores these credentials locally. Use Check connection on
+              the account later to verify access and import listings.
             </p>
           )}
         </form>

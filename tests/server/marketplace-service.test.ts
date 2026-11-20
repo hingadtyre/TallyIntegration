@@ -8,13 +8,16 @@ import {
   type AccountConnection,
 } from '../../src/server/marketplace-service.js';
 import type { ListingTransport } from '../../src/server/marketplace-publication.js';
+import { InventoryService } from '../../src/server/service.js';
 import { serverFixture } from '../support/server-fixture.js';
+import { marketplaceData } from '../support/marketplace-fixture.js';
 
 function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
   const base = serverFixture(t, mode);
   const credentials = new Map<string, string>();
   const statusChecks: string[] = [];
   const transportCalls: string[] = [];
+  const listingReadStatusChecks: boolean[] = [];
   const remote = new Map<string, MarketplaceListing[]>();
   const writes: Array<{
     token: string;
@@ -26,6 +29,7 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
   let failWrite: 'no' | 'before' | 'after' = 'no';
   let failRead = false;
   let failImport = false;
+  let afterRead: (() => void) | undefined;
   function createConnection(id: string): AccountConnection {
     const status = async (): Promise<FlipkartConnectionStatus> => {
       statusChecks.push(id);
@@ -65,11 +69,15 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
       if (failImport) throw new FlipkartListingError('Import failed.');
       return structuredClone(remote.get(token) ?? []).map((row) => ({ ...row, accountId }));
     },
-    async getListing(token, listing) {
+    async getListing(token, listing, options) {
       transportCalls.push('getListing');
+      listingReadStatusChecks.push(options?.requireCurrentStatus === true);
       if (failRead) throw new FlipkartListingError('Read failed.');
       const result = remote.get(token)?.find((row) => row.id === listing.id);
       if (!result) throw new FlipkartListingError('Listing unavailable.');
+      const observed = afterRead;
+      afterRead = undefined;
+      observed?.();
       return {
         ...structuredClone(result),
         accountId: listing.accountId,
@@ -154,6 +162,7 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
     credentials,
     statusChecks,
     transportCalls,
+    listingReadStatusChecks,
     remote,
     writes,
     add,
@@ -165,6 +174,9 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
     setFailRead(value: boolean) {
       failRead = value;
     },
+    onNextRead(callback: () => void) {
+      afterRead = callback;
+    },
     setFailImport(value: boolean) {
       failImport = value;
     },
@@ -175,6 +187,479 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
     },
   };
 }
+
+test('verified connections import immediately, while saved-only credentials require an explicit verification', async (t) => {
+  const f = fixture(t);
+  const connect = (seller: string, verify: boolean) =>
+    f.service.add({
+      marketplace: 'flipkart',
+      name: seller,
+      applicationId: seller,
+      applicationSecret: 'test-only',
+      verify,
+    });
+  function products(seller: string) {
+    return marketplaceData('unused', seller).listings.map((row) => ({
+      ...row,
+      id: seller + '-listing',
+      packageCount: 3,
+    }));
+  }
+  f.remote.set('first', products('first'));
+  const first = await connect('first', true);
+  assert.equal(first.catalogOwnershipVerified, true);
+  assert.equal(f.listing(first.id).packageCount, 3);
+  const second = await connect('second', false);
+  const calls = f.transportCalls.length;
+  await f.service.refreshInventoryAccounts();
+  assert.equal(f.transportCalls.length, calls + 1); // Only the first account.
+  assert.equal(f.listing(second.id), undefined);
+
+  const empty = await f.service.changeConnection({ accountId: second.id, action: 'check' });
+  assert.ok(empty.lastRefreshedAt);
+  assert.equal(empty.catalogOwnershipVerified, false);
+  f.remote.set('second', products('second'));
+  await f.service.refreshInventoryAccounts();
+  assert.equal(f.listing(second.id).id, 'second-listing');
+
+  f.setFailImport(true);
+  const third = await connect('third', true);
+  assert.equal(third.connection.state, 'verified');
+  assert.match(third.catalogImportError!, /Import failed/);
+  assert.equal(third.lastRefreshedAt, null);
+  assert.equal(f.credentials.get(third.id), 'third');
+  f.setFailImport(false);
+  f.remote.set('third', products('third'));
+  await f.service.refreshInventoryAccounts();
+  assert.equal(f.listing(third.id).id, 'third-listing');
+  assert.equal(
+    (await f.service.accounts()).accounts.find((row) => row.id === third.id)?.catalogImportError,
+    undefined,
+  );
+
+  f.setFailImport(true);
+  await f.service.changeConnection({ accountId: third.id, action: 'check' });
+  await f.service.changeConnection({
+    accountId: third.id,
+    action: 'save',
+    applicationId: 'unverified',
+    applicationSecret: 'test-only',
+  });
+  f.setFailImport(false);
+  const prior = f.transportCalls.length;
+  await f.service.refreshInventoryAccounts();
+  assert.equal(f.transportCalls.length, prior + 2); // Skip saved-only replacement credentials.
+});
+
+test('authenticated catalogue ownership survives restarts, rejects duplicate accounts and requires listing overlap', async (t) => {
+  const f = fixture(t);
+  await f.add();
+  const addTile = (name: string) =>
+    f.service.add({
+      name,
+      marketplace: 'flipkart',
+      applicationId: 'standard-access',
+      applicationSecret: 'test-only',
+      verify: false,
+    });
+  const primary = await addTile('Catalogue seller');
+  const duplicate = await addTile('Duplicate seller');
+  const listing: MarketplaceListing = {
+    ...f.remote.get('seller-a')![0],
+    id: 'authenticated-listing',
+    sellerId: null,
+    packageCount: 2,
+  };
+  f.remote.set('standard-access', [listing]);
+  const first = (await f.service.refresh(primary.id)).account;
+  assert.equal(first.catalogOwnershipVerified, true);
+  assert.equal(first.sellerId, null);
+  assert.equal(f.listing(primary.id).sellerId, null);
+  await assert.rejects(f.service.refresh(duplicate.id), /already added/);
+  const inventory = () => f.store.read().listings.find((row) => row.accountId === primary.id)!;
+  assert.equal(inventory().packageAvailable, true);
+  await f.restart();
+  assert.equal(inventory().packageCount, 2);
+  assert.equal(inventory().packageAvailable, false);
+  assert.equal((await f.service.refresh(primary.id)).account.catalogOwnershipVerified, true);
+  f.setFailImport(true);
+  await assert.rejects(f.service.refresh(primary.id));
+  assert.equal(inventory().packageAvailable, false);
+  assert.equal(inventory().packageCount, 2);
+  f.setFailImport(false);
+  f.remote.set('standard-access', [{ ...listing, id: 'different-listing' }]);
+  await assert.rejects(f.service.refresh(primary.id), /no listing identities in common/);
+  assert.equal(f.listing(primary.id).id, listing.id);
+});
+
+async function mappedInventory(t: TestContext, packSource: 'manual' | 'packages' = 'manual') {
+  const f = fixture(t);
+  const account = await f.add();
+  const remote = f.remote.get('seller-a')![0];
+  remote.packageCount = 2;
+  await f.service.refresh(account.id);
+  let physical = 14;
+  const inventory = () =>
+    new InventoryService(f.store, {
+      marketplaces: f.service,
+      createTallyReader: () => ({
+        async listCompanies() {
+          return [{ externalId: 'a', name: 'Tally company' }];
+        },
+        async readStock() {
+          return [{ externalId: 'item', name: 'Tyres', unit: 'pieces', physical }];
+        },
+      }),
+    });
+  const service = inventory();
+  const first = await service.refresh();
+  const listing = first.listings.find((entry) => entry.location === 'warehouse-a')!;
+  const item = first.items[0];
+  service.mapping({
+    itemId: item.id,
+    listingId: listing.id,
+    listingVersion: listing.version,
+    confirmPackEvidence: true,
+    packSize: 2,
+    packSource,
+    sourceScope: 'company',
+    tyreFloor: true,
+  });
+  function prepare() {
+    service.calculate(item.companyId, [listing.id]);
+    return service.review(item.companyId, [listing.id]);
+  }
+  return {
+    f,
+    account,
+    remote,
+    service,
+    inventory,
+    item,
+    listing,
+    prepare,
+    setPhysical(value: number) {
+      physical = value;
+    },
+  };
+}
+
+test('reviewed Inventory publication sends only the captured destination, confirms it, and rejects replay or stale proposals', async (t) => {
+  const s = await mappedInventory(t);
+  const review = s.prepare();
+  assert.equal(review.publishingEnabled, true);
+  assert.equal(review.rows[0].quantity, 7);
+  const sent = await s.service.publish(review.id);
+  assert.equal(sent.rows[0].status, 'confirmed');
+  assert.deepEqual(
+    s.f.listingReadStatusChecks,
+    [true, false],
+    'the Inventory preflight requires current listing status',
+  );
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [7],
+  );
+  assert.equal(s.remote.locations[1].quantity, 3);
+  await assert.rejects(s.service.publish(review.id), /fresh Inventory review/);
+  const unchanged = await s.service.publish(s.prepare().id);
+  assert.equal(unchanged.rows[0].status, 'unchanged');
+  const earlier = s.prepare();
+  s.setPhysical(1);
+  await s.service.refresh();
+  assert.equal((await s.service.publish(earlier.id)).rows[0].status, 'blocked');
+  assert.equal(s.f.writes.length, 1);
+});
+
+test('automatic Inventory follows Tally and saved mappings across restart; it does not replenish a marketplace-only reduction', async (t) => {
+  const s = await mappedInventory(t);
+  s.service.automation(s.item.companyId, true);
+  await s.service.refresh();
+  s.setPhysical(12);
+  await s.service.refresh();
+  s.remote.locations[0].quantity = 3;
+  await s.f.service.refresh(s.account.id);
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [7, 6],
+  );
+  await s.f.restart();
+  const restarted = s.inventory();
+  s.setPhysical(1);
+  await restarted.refresh();
+  assert.equal(s.f.writes.length, 2, 'account requires a new complete import');
+  await s.f.service.refreshInventoryAccounts();
+  await restarted.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [7, 6, 0],
+  );
+  restarted.pause(s.item.companyId, [s.listing.id], true);
+  s.setPhysical(16);
+  await restarted.refresh();
+  assert.equal(s.f.writes.length, 3);
+  restarted.pause(s.item.companyId, [s.listing.id], false);
+  await restarted.refresh();
+  assert.equal(s.f.writes.at(-1)?.quantity, 8);
+});
+
+test('a remote package change blocks a package-based write at final preflight and leaves a custom multiplier intact', async (t) => {
+  for (const source of ['packages', 'manual'] as const) {
+    const s = await mappedInventory(t, source);
+    const reviewed = s.prepare();
+    s.remote.packageCount = 1;
+    const result = await s.service.publish(reviewed.id);
+    assert.equal(result.rows[0].status, source === 'packages' ? 'blocked' : 'confirmed');
+    assert.equal(s.f.writes.length, source === 'packages' ? 0 : 1);
+    const current = s.service.snapshot().listings.find((row) => row.id === s.listing.id)!;
+    assert.equal(current.packSize, 2);
+    assert.equal(current.verified, source === 'manual');
+  }
+});
+
+test('a rejected automatic zero stays pending through restart and retries with bounded backoff', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const s = await mappedInventory(t);
+  s.service.automation(s.item.companyId, true);
+  s.setPhysical(1);
+  s.f.setFailWrite('before');
+  await s.service.refresh();
+  assert.equal(s.f.writes.length, 1);
+  assert.equal(s.remote.locations[0].quantity, 5);
+  await s.f.restart();
+  await s.f.service.refreshInventoryAccounts();
+  const restarted = s.inventory();
+  for (const [index, delay] of [30, 60, 120, 240, 480, 600, 600].entries()) {
+    t.mock.timers.tick(delay * 1000 - 1);
+    await restarted.refresh();
+    assert.equal(s.f.writes.length, index + 1);
+    t.mock.timers.tick(1);
+    if (index === 6) s.f.setFailWrite('no');
+    await restarted.refresh();
+    assert.equal(s.f.writes.length, index + 2);
+  }
+  assert.equal(s.remote.locations[0].quantity, 0);
+  assert.equal(s.f.store.readMarketplace().changes[0].state, 'confirmed');
+  await restarted.refresh();
+  assert.equal(s.f.writes.length, 8);
+});
+
+test('new automatic quantities supersede rejected writes and uncertain attempts cannot be retried blindly', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const s = await mappedInventory(t);
+  s.service.automation(s.item.companyId, true);
+  s.f.setFailWrite('before');
+  await s.service.refresh();
+  s.setPhysical(1);
+  s.f.setFailWrite('after');
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((entry) => entry.quantity),
+    [7, 0],
+  );
+  const uncertain = s.f.store.readMarketplace().changes[0];
+  assert.equal(uncertain.state, 'uncertain');
+  await s.f.restart();
+  s.f.setFailWrite('no');
+  s.f.setFailRead(false);
+  await s.f.service.refreshInventoryAccounts();
+  s.setPhysical(16);
+  const restarted = s.inventory();
+  t.mock.timers.tick(600_000);
+  await restarted.refresh();
+  assert.equal(s.f.writes.length, 2);
+  const checked = await s.f.service.reconcile({ accountId: s.account.id, changeId: uncertain.id });
+  assert.equal(checked.change.state, 'confirmed');
+  await restarted.refresh();
+  assert.deepEqual(
+    s.f.writes.map((entry) => entry.quantity),
+    [7, 0, 8],
+  );
+});
+
+test('a rejected direct Update once preserves an automatic zero for the next unchanged Tally fetch', async (t) => {
+  const s = await mappedInventory(t);
+  s.setPhysical(1);
+  await s.service.refresh();
+  s.service.automation(s.item.companyId, true);
+  s.f.setFailWrite('before');
+  assert.equal((await s.f.stock(s.account.id, 2)).change.state, 'failed');
+  s.f.setFailWrite('no');
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [2, 0],
+  );
+  assert.equal(s.remote.locations[0].quantity, 0);
+});
+
+test('a rejected reviewed Update once preserves the pending calculated quantity', async (t) => {
+  const s = await mappedInventory(t);
+  s.service.automation(s.item.companyId, true);
+  s.service.edit(s.item.companyId, s.listing.id, 2);
+  s.f.setFailWrite('before');
+  const review = s.service.review(s.item.companyId, [s.listing.id]);
+  assert.equal((await s.service.publish(review.id, 'once')).rows[0].status, 'failed');
+  s.f.setFailWrite('no');
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [2, 7],
+  );
+});
+
+test('a rejected reviewed zero activates the hold and queues its correction', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const s = await mappedInventory(t);
+  s.service.automation(s.item.companyId, true);
+  await s.service.refresh();
+  s.service.edit(s.item.companyId, s.listing.id, 0);
+  s.f.setFailWrite('before');
+  const review = s.service.review(s.item.companyId, [s.listing.id]);
+  assert.equal((await s.service.publish(review.id)).rows[0].status, 'failed');
+  s.f.setFailWrite('no');
+  t.mock.timers.tick(30_000);
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [7, 0, 0],
+  );
+  assert.equal(s.remote.locations[0].quantity, 0);
+});
+
+test('an uncertain Update once supersedes earlier pending stock only after the outcome is checked', async (t) => {
+  const s = await mappedInventory(t);
+  s.service.automation(s.item.companyId, true);
+  s.f.setFailWrite('after');
+  const result = await s.f.stock(s.account.id, 2);
+  assert.equal(result.change.state, 'uncertain');
+  s.f.setFailRead(false);
+  s.f.setFailWrite('no');
+  await s.service.refresh();
+  const checked = await s.f.service.reconcile({
+    accountId: s.account.id,
+    changeId: result.change.id,
+  });
+  assert.equal(checked.change.state, 'confirmed');
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [2],
+  );
+});
+
+test('an Inventory operation rechecks a changed mapping after its asynchronous preflight', async (t) => {
+  const s = await mappedInventory(t);
+  const review = s.prepare();
+  s.f.onNextRead(() => {
+    const row = s.service.snapshot().listings.find((entry) => entry.id === s.listing.id)!;
+    s.service.mapping({
+      listingId: row.id,
+      itemId: s.item.id,
+      listingVersion: row.version,
+      confirmPackEvidence: true,
+      packSize: 4,
+      packSource: 'manual',
+      sourceScope: 'company',
+      tyreFloor: true,
+    });
+  });
+  assert.equal((await s.service.publish(review.id)).rows[0].status, 'blocked');
+  assert.equal(s.f.writes.length, 0);
+  assert.equal(s.f.store.readMarketplace().changes.length, 0);
+});
+
+test('Update once publishes an edited quantity, preserves Auto and lets the next Tally sale recalculate', async (t) => {
+  const s = await mappedInventory(t);
+  s.service.automation(s.item.companyId, true);
+  await s.service.refresh();
+  s.service.edit(s.item.companyId, s.listing.id, 2);
+  const manual = s.service.review(s.item.companyId, [s.listing.id]);
+  assert.equal(manual.rows[0].oneTimeProblem, null);
+  assert.match(manual.rows[0].problem!, /order reconciliation/);
+  assert.equal((await s.service.publish(manual.id, 'once')).rows[0].status, 'confirmed');
+  assert.equal(
+    s.service.snapshot().listings.find((row) => row.id === s.listing.id)?.policy,
+    'auto',
+  );
+  await s.service.refresh();
+  s.setPhysical(10);
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [7, 2, 5],
+  );
+  s.service.pause(s.item.companyId, [s.listing.id], true);
+  s.service.edit(s.item.companyId, s.listing.id, 1);
+  assert.equal(
+    (await s.service.publish(s.service.review(s.item.companyId, [s.listing.id]).id, 'once')).rows[0]
+      .status,
+    'confirmed',
+  );
+  assert.equal(s.service.snapshot().listings.find((row) => row.id === s.listing.id)?.paused, true);
+});
+
+test('a reviewed zero activates a hold; positive live allowances require eligible order accounting', async (t) => {
+  const s = await mappedInventory(t);
+  s.service.edit(s.item.companyId, s.listing.id, 2);
+  const limited = s.service.review(s.item.companyId, [s.listing.id]);
+  assert.match(limited.rows[0].problem!, /order reconciliation/);
+  assert.equal((await s.service.publish(limited.id)).rows[0].status, 'blocked');
+  s.service.edit(s.item.companyId, s.listing.id, 0);
+  const zero = s.service.review(s.item.companyId, [s.listing.id]);
+  assert.equal((await s.service.publish(zero.id)).rows[0].status, 'confirmed');
+  s.service.automation(s.item.companyId, true);
+  s.setPhysical(20);
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [0],
+  );
+  assert.equal(
+    s.service.snapshot().listings.find((row) => row.id === s.listing.id)?.policy,
+    'hold',
+  );
+  s.service.edit(s.item.companyId, s.listing.id, 2);
+  const kept = s.service.review(s.item.companyId, [s.listing.id]);
+  assert.match(kept.rows[0].oneTimeProblem!, /existing hold/);
+  assert.equal((await s.service.publish(kept.id, 'once')).rows[0].status, 'blocked');
+  assert.equal(s.f.writes.length, 1);
+});
+
+test('returning to Auto cancels the pending zero correction and waits for a new Tally change', async (t) => {
+  const s = await mappedInventory(t);
+  s.service.edit(s.item.companyId, s.listing.id, 0);
+  await s.service.publish(s.service.review(s.item.companyId, [s.listing.id]).id);
+  s.service.automation(s.item.companyId, true);
+  await s.service.refresh();
+  s.remote.locations[0].quantity = 2;
+  await s.f.service.refresh(s.account.id);
+  const row = () => s.service.snapshot().listings.find((entry) => entry.id === s.listing.id)!;
+  assert.equal(row().syncPendingItemVersion, s.item.version);
+  const market = s.f.listing(s.account.id);
+  await s.f.service.changePolicy({
+    accountId: s.account.id,
+    listingId: market.id,
+    version: market.version,
+    locationId: s.listing.location,
+    policy: 'auto',
+    confirmed: true,
+  });
+  await s.service.refresh();
+  assert.equal(row().syncPendingItemVersion, null);
+  assert.equal(s.remote.locations[0].quantity, 2);
+  assert.deepEqual(
+    s.f.writes.map((entry) => entry.quantity),
+    [0],
+  );
+  s.setPhysical(16);
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((entry) => entry.quantity),
+    [0, 8],
+  );
+});
 
 test('live account tiles are empty until added; multiple credentials and same-SKU catalogs stay isolated', async (t) => {
   const f = fixture(t);

@@ -182,6 +182,8 @@ test('aged stock blocks proposals and review even while the Tally connection rem
       location: 'Test location',
       itemId: state.items[0].id,
       packSize: 2,
+      sourceScope: 'company',
+      tyreFloor: true,
       packEvidence: 'Fixture metadata',
       verified: true,
       observed: 5,

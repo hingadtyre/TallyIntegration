@@ -52,13 +52,30 @@ function mergeObservations(
       seenIds.add(itemId);
       const existing = state.items.find((row) => row.id === itemId);
       if (existing) {
-        if (
-          existing.name !== incoming.name ||
-          existing.unit !== incoming.unit ||
-          existing.physical !== incoming.physical
-        )
-          existing.version++;
+        const balanceChanged = existing.physical !== incoming.physical;
+        const unitChanged = existing.unit !== incoming.unit;
+        const metadataChanged = unitChanged || existing.name !== incoming.name;
+        const availableAgain = existing.observedAt === null;
+        if (balanceChanged || metadataChanged) existing.version++;
         Object.assign(existing, incoming, { observedAt: at });
+        if (balanceChanged || metadataChanged || availableAgain) {
+          for (const listing of state.listings.filter((row) => row.itemId === itemId)) {
+            if (unitChanged) {
+              listing.verified = false;
+              listing.syncPendingItemVersion = null;
+              listing.version++;
+              listing.packEvidence = 'Tally base unit changed. Review the mapping and Set of.';
+            } else if (
+              incoming.physical !== null &&
+              (balanceChanged || listing.syncPendingItemVersion != null) &&
+              company?.automation &&
+              !listing.paused &&
+              listing.verified
+            ) {
+              listing.syncPendingItemVersion = existing.version;
+            }
+          }
+        }
       } else {
         state.items.push({
           ...incoming,
@@ -129,7 +146,7 @@ export class StockRefresh {
         mergeObservations(state, discovered, observations, at);
         state.connection = {
           tally: 'online',
-          message: `${observations.length} company snapshots refreshed. Marketplace API setup is still pending.`,
+          message: `${observations.length} Tally company snapshots refreshed.`,
           lastChecked: at,
           nextPoll: null,
         };
@@ -147,6 +164,11 @@ export class StockRefresh {
       return true;
     } catch (error) {
       this.store.update((state) => {
+        // A later successful read of another company cannot verify these retained balances.
+        for (const company of state.companies) {
+          if (company.source === 'tally' && (!companyId || company.id === companyId))
+            company.lastSuccess = null;
+        }
         state.connection = {
           tally: 'offline',
           message:

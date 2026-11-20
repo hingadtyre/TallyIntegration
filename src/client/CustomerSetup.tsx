@@ -5,8 +5,7 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
       <p>
         Use Stockbridge on the same Windows computer as Tally. This version reads your stock and
         saves verified backups. In Marketplaces, add your seller-owned Flipkart accounts and refresh
-        their listings. Apply in a listing editor changes that value on Flipkart. Automatic Tally
-        publishing and Inventory proposal publishing remain unavailable.
+        their listings. Apply in a listing editor changes that value on Flipkart.
       </p>
       <ol>
         <li>
@@ -73,16 +72,30 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
         Register an application for your own seller use, then enter its Application ID and
         Application Secret under Marketplaces → Add account → Flipkart. Give each account a name. If
         Flipkart approval is pending, save credentials for later without verifying. After approval,
-        check the saved access, open its account tile and choose Refresh listings. Verify and save
-        checks access before saving. No hosted Stockbridge authentication service is used. Sample
-        mode does not accept credentials or contact Flipkart.
+        use Check connection on its account tile. Verify and save and Check connection both attempt
+        a listing import after access is verified. Open listings shows the imported catalogue. No
+        hosted Stockbridge authentication service is used. Sample mode does not accept credentials
+        or contact Flipkart.
       </p>
       <p>
         Flipkart restricts Self Access to the seller's own use. Confirm this arrangement is
         appropriate for your installation. A verified API credential is not proof of the seller's
-        identity or approval for a third-party product. Refresh listings verifies the seller binding
-        before editing. Tally pack/location mapping and automatic synchronization require further
-        validation and implementation.
+        identity or approval for a third-party product. Refresh listings checks which listings the
+        authenticated account owns.
+      </p>
+      <p>
+        In Inventory, select the company and seller account, then choose Map listing on the Tally
+        item. For Set of, choose the shipping package count when it matches the Tally units used per
+        sale, or enter your own number. Confirm that the company-wide balance supplies the selected
+        Flipkart location. Enable the tyre minimum only for eligible tyre listings. Stockbridge
+        saves these choices in this workspace and reloads them on restart.
+      </p>
+      <p>
+        Use Calculate, Review changes and Publish to send reviewed stock. For a positive manual edit
+        on an Auto listing, choose Update once to publish that quantity until the next Tally stock
+        change. Enable automatic updates for the company to publish eligible quantities after a
+        successful Tally check. Review any package-count changes in the listing’s Set of cell. Each
+        publication reports its result.
       </p>
       <p>
         Use the pencil beside stock, MRP or selling price, then Apply for that value only. For a

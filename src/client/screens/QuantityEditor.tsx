@@ -53,9 +53,7 @@ export function QuantityEditor({
     descriptionClass = 'text-danger';
   } else if (proposal?.edited) {
     description =
-      proposal.quantity === 0
-        ? 'Draft: keep out of stock'
-        : `Draft: allow ${proposal.quantity} more`;
+      proposal.quantity === 0 ? 'Draft: keep out of stock' : 'Choose how to publish at review';
     descriptionClass = 'text-teal';
   } else if (proposal) {
     description = 'Calculated draft';

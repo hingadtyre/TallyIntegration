@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { FlipkartListingsClient } from '../adapters/flipkart-listings.js';
-import type { FlipkartConnectionStatus } from '../shared/contracts.js';
+import { FlipkartListingError, FlipkartListingsClient } from '../adapters/flipkart-listings.js';
+import type { FlipkartConnectionStatus, InventoryPublishRow } from '../shared/contracts.js';
+import { inventoryTarget, type InventoryIntent } from './inventory-publication.js';
 import type {
   MarketplaceAccount,
   MarketplaceAccountRecord,
@@ -12,8 +13,10 @@ import type {
 import { recordActivity } from './activity.js';
 import { FlipkartConnection } from './flipkart-connection.js';
 import {
+  cataloguesOverlap,
   findMarketplaceListing,
   listingView,
+  markPackageCountsUnavailable,
   seedSampleMarketplace,
   updateInventoryObservations,
 } from './marketplace-catalog.js';
@@ -44,6 +47,7 @@ export class MarketplaceService {
   private readonly connections = new Map<string, AccountConnection>();
   private readonly pending = new Map<string, Promise<unknown>>();
   private readonly verifiedAccounts = new Set<string>();
+  private readonly verifiedImportErrors = new Map<string, string>();
   private readonly client: ListingTransport;
   private readonly publisher: MarketplacePublication;
   private stopped = false;
@@ -61,6 +65,7 @@ export class MarketplaceService {
       this.connections.set('flipkart-primary', dependencies.legacyConnection);
     store.updateMarketplace((data, state) => {
       seedSampleMarketplace(data, state);
+      if (this.mode === 'live') markPackageCountsUnavailable(state);
       for (const change of data.changes) {
         if (['pending', 'sending', 'checking'].includes(change.state)) {
           change.state = 'uncertain';
@@ -113,12 +118,18 @@ export class MarketplaceService {
   private async publicAccount(account: MarketplaceAccountRecord): Promise<MarketplaceAccount> {
     const connection =
       this.mode === 'demo' ? { ...sampleStatus } : await this.connection(account.id).status();
-    if (connection.state === 'verified' && this.verifiedAccounts.has(account.id))
-      connection.message =
-        'API access and seller identity verified. Listings are available in this account.';
+    const catalogOwnershipVerified = this.verifiedAccounts.has(account.id);
+    if (connection.state === 'verified' && catalogOwnershipVerified)
+      connection.message = account.sellerId
+        ? 'API access and seller identity verified. Listings are available in this account.'
+        : 'API access and listing ownership verified. Flipkart did not supply a seller ID.';
     return {
       ...account,
       marketplace: 'flipkart',
+      catalogOwnershipVerified,
+      ...(this.verifiedImportErrors.has(account.id) && {
+        catalogImportError: this.verifiedImportErrors.get(account.id)!,
+      }),
       connection,
     };
   }
@@ -167,7 +178,7 @@ export class MarketplaceService {
   }
 
   async add(input: Record<string, unknown>): Promise<MarketplaceAccount> {
-    return this.serial('account-directory', async () => {
+    const added = await this.serial('account-directory', async () => {
       if (input.marketplace !== 'flipkart')
         throw new InputError('Flipkart is the supported marketplace.');
       const name = requireText(input.name, 'Account name').trim();
@@ -228,23 +239,38 @@ export class MarketplaceService {
       }
       return this.publicAccount(account);
     });
+    if (this.mode === 'live' && input.verify === true && added.connection.state === 'verified')
+      return this.serial(added.id, () => this.importVerifiedAccount(added.id));
+    return added;
   }
 
   invalidate(accountId: string): void {
     this.verifiedAccounts.delete(accountId);
   }
 
-  runLegacyCommand(operation: () => Promise<unknown>): Promise<unknown> {
+  runLegacyCommand(
+    operation: () => Promise<FlipkartConnectionStatus>,
+    verifyAndImport = false,
+  ): Promise<FlipkartConnectionStatus> {
     return this.serial('flipkart-primary', async () => {
       this.invalidate('flipkart-primary');
+      this.verifiedImportErrors.delete('flipkart-primary');
+      this.store.update((state) => markPackageCountsUnavailable(state, 'flipkart-primary'));
+      let result: FlipkartConnectionStatus;
       try {
-        return await operation();
+        result = await operation();
       } finally {
         this.store.updateMarketplace((data) => {
           const account = data.accounts.find((row) => row.id === 'flipkart-primary');
           if (account) account.lastRefreshedAt = null;
         });
       }
+      if (verifyAndImport && result.state === 'verified') {
+        await this.adoptLegacyAccount();
+        const account = await this.importVerifiedAccount('flipkart-primary');
+        return { ...result, message: account.catalogImportError ?? account.connection.message };
+      }
+      return result;
     });
   }
 
@@ -255,6 +281,8 @@ export class MarketplaceService {
         throw new InputError('Sample accounts do not use seller credentials.', 409);
       const connection = this.connection(account.id);
       this.invalidate(account.id);
+      this.verifiedImportErrors.delete(account.id);
+      this.store.update((state) => markPackageCountsUnavailable(state, account.id));
       switch (input.action) {
         case 'check':
           await connection.check();
@@ -285,23 +313,50 @@ export class MarketplaceService {
           `${account.name}: ${String(input.action)} completed. Refresh listings before editing.`,
         );
       });
+      if (input.action === 'check' || input.action === 'connect')
+        return this.importVerifiedAccount(account.id);
       return this.publicAccount(this.account(account.id));
     });
   }
 
+  /** Caller holds this account's queue. Token verification may succeed even when
+   * the catalogue import fails. Keep the saved connection and make it retryable. */
+  private async importVerifiedAccount(id: string): Promise<MarketplaceAccount> {
+    const account = this.account(id);
+    if ((await this.connection(id).status()).state !== 'verified')
+      return this.publicAccount(account);
+    try {
+      return (await this.refreshAccount(account)).account;
+    } catch (error) {
+      const reason =
+        error instanceof InputError || error instanceof FlipkartListingError
+          ? error.message
+          : 'The listing import did not complete.';
+      this.verifiedImportErrors.set(id, 'API access verified. ' + reason);
+      return this.publicAccount(this.account(id));
+    }
+  }
+
   async refresh(accountId: unknown): Promise<{ account: MarketplaceAccount }> {
     const id = this.account(accountId).id;
-    return this.serial(id, async () => {
-      const account = this.account(id);
-      if (this.mode === 'demo') {
-        this.store.updateMarketplace((data) => {
-          data.accounts.find((row) => row.id === account.id)!.lastRefreshedAt =
-            new Date().toISOString();
-          for (const listing of data.listings.filter((row) => row.accountId === account.id))
-            listing.observedAt = new Date().toISOString();
-        });
-      } else {
-        this.invalidate(account.id);
+    return this.serial(id, () => this.refreshAccount(this.account(id)));
+  }
+
+  private async refreshAccount(
+    account: MarketplaceAccountRecord,
+  ): Promise<{ account: MarketplaceAccount }> {
+    if (this.mode === 'demo') {
+      this.store.updateMarketplace((data, state) => {
+        const observedAt = new Date().toISOString();
+        data.accounts.find((row) => row.id === account.id)!.lastRefreshedAt = observedAt;
+        for (const listing of data.listings.filter((row) => row.accountId === account.id)) {
+          listing.observedAt = observedAt;
+          updateInventoryObservations(state, listing);
+        }
+      });
+    } else {
+      this.invalidate(account.id);
+      try {
         const token = await this.connection(account.id).getAccessToken();
         const listings = await this.client.listListings(token, account.id);
         const sellers = new Set(listings.map((row) => row.sellerId));
@@ -310,14 +365,48 @@ export class MarketplaceService {
             'Flipkart returned inconsistent seller identity. No listings were imported.',
             409,
           );
-        const sellerId = listings[0]?.sellerId ?? account.sellerId;
-        if (account.sellerId && sellerId !== account.sellerId)
+        const reportedSeller = listings[0]?.sellerId ?? null;
+        const sellerId = reportedSeller ?? account.sellerId;
+        if (account.sellerId && reportedSeller && reportedSeller !== account.sellerId)
           throw new InputError(
             'These credentials belong to a different seller. Reconnect the original seller or add a separate account.',
             409,
           );
         this.store.updateMarketplace((data, state) => {
           const bound = data.accounts.find((row) => row.id === account.id)!;
+          // The standard API authenticates ownership of exact listing IDs but omits
+          // seller ID. Across refreshes require at least one previously owned identity.
+          // Disjoint catalogues require a new tile; shared product IDs or SKUs alone
+          // are common across sellers and cannot prove continuity.
+          const owned = data.listings.filter((row) => row.accountId === account.id);
+          const needsOverlap = !reportedSeller || !bound.sellerId;
+          if (
+            needsOverlap &&
+            (owned.length || bound.sellerId) &&
+            listings.length &&
+            !cataloguesOverlap(owned, listings)
+          ) {
+            throw new InputError(
+              'This catalogue has no listing identities in common with this account. Check the credentials or add a separate seller account.',
+              409,
+            );
+          }
+          const incoming = new Map(listings.map((row) => [row.id, row]));
+          if (
+            data.listings.some((other) => {
+              const row = incoming.get(other.id);
+              return (
+                row &&
+                other.accountId !== account.id &&
+                (!other.sellerId || !row.sellerId || other.sellerId === row.sellerId)
+              );
+            })
+          ) {
+            throw new InputError(
+              'This seller is already added. Use its existing account tile.',
+              409,
+            );
+          }
           if (bound.sellerId && sellerId !== bound.sellerId)
             throw new InputError(
               'These credentials belong to a different seller. Reconnect the original seller or add a separate account.',
@@ -332,6 +421,9 @@ export class MarketplaceService {
               409,
             );
           for (const listing of listings) {
+            // Preserve a previously authenticated seller binding when the current API
+            // proves catalogue continuity without repeating the provider's seller ID.
+            listing.sellerId = sellerId;
             const previous = data.listings.find(
               (row) => row.accountId === account.id && row.id === listing.id,
             );
@@ -403,6 +495,7 @@ export class MarketplaceService {
               row.observed = null;
               row.observedAt = null;
               row.verified = false;
+              row.packageAvailable = false;
               row.version++;
             }
           }
@@ -424,6 +517,12 @@ export class MarketplaceService {
             ...listings,
             ...missing,
           ];
+          if (reportedSeller) {
+            for (const row of data.listings.filter(
+              (row) => row.accountId === account.id && !row.sellerId,
+            ))
+              row.sellerId = reportedSeller;
+          }
           const current = data.accounts.find((row) => row.id === account.id)!;
           current.sellerId = sellerId;
           current.lastRefreshedAt = new Date().toISOString();
@@ -433,10 +532,14 @@ export class MarketplaceService {
             `${account.name}: ${listings.length} listings refreshed from Flipkart.`,
           );
         });
-        if (listings.length && sellerId) this.verifiedAccounts.add(account.id);
+        if (listings.length) this.verifiedAccounts.add(account.id);
+      } catch (error) {
+        this.store.update((state) => markPackageCountsUnavailable(state, account.id));
+        throw error;
       }
-      return { account: await this.publicAccount(this.account(account.id)) };
-    });
+    }
+    this.verifiedImportErrors.delete(account.id);
+    return { account: await this.publicAccount(this.account(account.id)) };
   }
 
   page(parameters: URLSearchParams): MarketplacePage {
@@ -471,7 +574,7 @@ export class MarketplaceService {
   private async verifiedToken(accountId: string): Promise<string | null> {
     if (this.mode === 'demo') return null;
     const account = this.account(accountId);
-    if (!this.verifiedAccounts.has(accountId) || !account.sellerId || !account.lastRefreshedAt)
+    if (!this.verifiedAccounts.has(accountId) || !account.lastRefreshedAt)
       throw new InputError(
         'Refresh listings to verify this seller account before applying or checking updates.',
         409,
@@ -484,6 +587,84 @@ export class MarketplaceService {
     return this.serial(account.id, async () =>
       this.publisher.apply(account.id, input, await this.verifiedToken(account.id)),
     );
+  }
+
+  async publishInventory(intent: InventoryIntent): Promise<InventoryPublishRow> {
+    const row = this.store.read().listings.find((entry) => entry.id === intent.listingId);
+    const identity = { listingId: intent.listingId, sku: row?.sku ?? '' };
+    try {
+      if (!row) throw new InputError('The listing is no longer mapped.', 409);
+      return await this.serial(row.accountId, async () => {
+        const token = await this.verifiedToken(row.accountId);
+        const marketplace = this.store
+          .readMarketplace()
+          .listings.find((entry) => entry.accountId === row.accountId && entry.sku === row.sku);
+        if (!marketplace)
+          throw new InputError('Refresh the seller account to locate this listing.', 409);
+        const { listing, quantity } = inventoryTarget(this.store.read(), intent, marketplace);
+        const result = await this.publisher.apply(
+          row.accountId,
+          {
+            listingId: marketplace.id,
+            version: marketplace.version,
+            edit: { kind: 'stock', locationId: listing.location, quantity, automation: 'once' },
+          },
+          token,
+          intent,
+        );
+        if (!result)
+          return {
+            ...identity,
+            status: 'unchanged',
+            message: 'The current marketplace quantity already matches.',
+          };
+        const status =
+          result.change.state === 'confirmed' || result.change.state === 'failed'
+            ? result.change.state
+            : 'uncertain';
+        return { ...identity, status, message: result.change.message };
+      });
+    } catch (error) {
+      return {
+        ...identity,
+        status: 'blocked',
+        message:
+          error instanceof InputError
+            ? error.message
+            : 'Could not verify the seller account or listing. Refresh and retry.',
+      };
+    }
+  }
+
+  /** Revisit imported accounts and retry a verified connection's failed first import. */
+  async refreshInventoryAccounts(): Promise<boolean> {
+    const data = this.store.readMarketplace();
+    const accounts = data.accounts.filter(
+      (account) => account.lastRefreshedAt || this.verifiedImportErrors.has(account.id),
+    );
+    let succeeded = true;
+    for (const account of accounts) {
+      if (this.stopped) break;
+      try {
+        await this.serial(account.id, async () => {
+          // A Save for later or Disconnect may have queued since the schedule was read.
+          const current = this.account(account.id);
+          if (current.lastRefreshedAt || this.verifiedImportErrors.has(account.id))
+            await this.refreshAccount(current);
+        });
+      } catch {
+        succeeded = false;
+        this.store.update((state) =>
+          recordActivity(
+            state,
+            'catalog-refresh',
+            `${account.name}: could not refresh Flipkart listings. Check the account connection.`,
+            { level: 'warning' },
+          ),
+        );
+      }
+    }
+    return succeeded;
   }
 
   reconcile(input: Record<string, unknown>) {
@@ -518,6 +699,9 @@ export class MarketplaceService {
         );
         if (!rows.length) throw new InputError('Choose a valid inventory destination.');
         for (const row of rows) {
+          // A pending correction belongs to the old restriction. Returning to
+          // Auto must wait for its own Tally change or an explicit publication.
+          if (row.policy !== 'auto') row.syncPendingItemVersion = null;
           row.policy = 'auto';
           row.remaining = null;
           row.version++;

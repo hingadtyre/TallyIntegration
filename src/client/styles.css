@@ -1011,6 +1011,54 @@ small {
   color: var(--amber);
 }
 
+.pack-tag .icon {
+  width: 12px;
+  height: 12px;
+  vertical-align: middle;
+}
+.pack-tag:hover {
+  border-color: var(--text-muted);
+}
+.pack-fields {
+  margin: 16px 0 0;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.pack-fields legend,
+.company-sync strong {
+  font-weight: 600;
+}
+.pack-fields p {
+  margin: 0;
+}
+.pack-fields .checkbox-label {
+  align-items: flex-start;
+}
+.pack-fields .checkbox-label input {
+  flex: none;
+}
+.pack-fields .mapping-confirmation {
+  margin-top: 0;
+}
+.company-sync {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
+}
+.company-sync small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+}
+
 .listing-row td > small {
   display: block;
   font-size: var(--font-caption);
@@ -2020,16 +2068,6 @@ small {
   color: #799e4b;
   font-size: 16px;
   font-weight: 600;
-}
-
-.mapping-evidence {
-  border: 1px solid #e7eedb;
-  border-radius: 6px;
-  padding: 5px 14px;
-}
-
-.mapping-evidence > div:last-child {
-  border-bottom: 0;
 }
 
 .mapping-confirmation {

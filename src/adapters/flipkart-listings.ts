@@ -26,6 +26,8 @@ export class FlipkartListingError extends Error {
   }
 }
 
+class ProductSearchUnavailable extends FlipkartListingError {}
+
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -75,7 +77,7 @@ function validateListing(listing: MarketplaceListing): void {
   if (
     !identity(listing.accountId) ||
     !identity(listing.id) ||
-    !identity(listing.sellerId) ||
+    (listing.sellerId !== null && !identity(listing.sellerId)) ||
     !identity(listing.sku) ||
     !identity(listing.productId)
   ) {
@@ -127,6 +129,7 @@ export class FlipkartListingsClient {
   private readonly request: typeof fetch;
   private readonly now: () => number;
   private readonly timeoutMs: number;
+  private readonly standardSearchAccounts = new Set<string>();
 
   constructor(options: { request?: typeof fetch; now?: () => number; timeoutMs?: number } = {}) {
     this.request = options.request ?? fetch;
@@ -139,6 +142,85 @@ export class FlipkartListingsClient {
 
   async listListings(token: string, accountId: string): Promise<MarketplaceListing[]> {
     if (!identity(accountId)) throw new FlipkartListingError('Select a valid marketplace account.');
+    if (!this.standardSearchAccounts.has(accountId)) {
+      try {
+        return await this.productListings(token, accountId);
+      } catch (error) {
+        if (!(error instanceof ProductSearchUnavailable)) throw error;
+      }
+    }
+    const result = await this.standardListings(token, accountId);
+    this.standardSearchAccounts.add(accountId);
+    return result;
+  }
+
+  /** Some seller-owned applications only expose the standard paginated listing
+   * search. It returns listing identities, with titles, stock and parcels in details. */
+  private async standardListings(token: string, accountId: string): Promise<MarketplaceListing[]> {
+    const listings: MarketplaceListing[] = [];
+    const skus = new Set<string>();
+    const ids = new Set<string>();
+    const cursors = new Set<string>();
+    let cursor: string | null = null;
+    for (;;) {
+      const result = await this.post(token, '/search', { filters: {}, page_id: cursor });
+      if (
+        !Array.isArray(result.listings) ||
+        result.listings.length > 500 ||
+        typeof result.has_more !== 'boolean'
+      )
+        throw invalidResponse();
+      for (const value of result.listings) {
+        const row = object(value);
+        if (
+          !row ||
+          !identity(row.listing_id) ||
+          !identity(row.product_id) ||
+          !identity(row.sku_id) ||
+          ids.has(row.listing_id) ||
+          skus.has(row.sku_id)
+        )
+          throw invalidResponse();
+        ids.add(row.listing_id);
+        skus.add(row.sku_id);
+        listings.push({
+          accountId,
+          id: row.listing_id,
+          productId: row.product_id,
+          sku: row.sku_id,
+          title: row.sku_id,
+          sellerId: null,
+          imageUrl: null,
+          status: 'INACTIVE',
+          mrp: null,
+          sellingPrice: null,
+          locations: [],
+          observedAt: null,
+          version: 0,
+        });
+      }
+      if (!result.has_more) break;
+      const next = result.next_page_id;
+      if (
+        !result.listings.length ||
+        typeof next !== 'string' ||
+        !next.trim() ||
+        next.length > 4096 ||
+        cursors.has(next) ||
+        cursors.size >= maximumBatchesPerState
+      )
+        throw invalidResponse();
+      cursors.add(next);
+      cursor = next;
+    }
+    const detailed: MarketplaceListing[] = [];
+    for (let start = 0; start < listings.length; start += 10) {
+      detailed.push(...(await this.details(token, listings.slice(start, start + 10), false, true)));
+    }
+    return detailed;
+  }
+
+  private async productListings(token: string, accountId: string): Promise<MarketplaceListing[]> {
     const listings: MarketplaceListing[] = [];
     const skus = new Set<string>();
     const ids = new Set<string>();
@@ -216,9 +298,13 @@ export class FlipkartListingsClient {
     return detailed;
   }
 
-  async getListing(token: string, listing: MarketplaceListing): Promise<MarketplaceListing> {
+  async getListing(
+    token: string,
+    listing: MarketplaceListing,
+    options: { requireCurrentStatus?: boolean } = {},
+  ): Promise<MarketplaceListing> {
     validateListing(listing);
-    return (await this.details(token, [listing], false))[0];
+    return (await this.details(token, [listing], false, options.requireCurrentStatus))[0];
   }
 
   async updateStock(
@@ -288,6 +374,7 @@ export class FlipkartListingsClient {
     token: string,
     listings: MarketplaceListing[],
     allowSearchPrices: boolean,
+    requireCurrentStatus = false,
   ): Promise<MarketplaceListing[]> {
     const response = await this.post(token, '/details', {
       sku_ids: listings.map((row) => row.sku),
@@ -312,12 +399,28 @@ export class FlipkartListingsClient {
         !detail ||
         detail.listing_id !== listing.id ||
         detail.product_id !== listing.productId ||
-        (detail.seller_id !== undefined && detail.seller_id !== listing.sellerId) ||
-        (detail.sellerId !== undefined && detail.sellerId !== listing.sellerId) ||
+        (detail.seller_id !== undefined &&
+          (!identity(detail.seller_id) ||
+            (listing.sellerId !== null && detail.seller_id !== listing.sellerId))) ||
+        (detail.sellerId !== undefined &&
+          (!identity(detail.sellerId) ||
+            (listing.sellerId !== null && detail.sellerId !== listing.sellerId))) ||
+        (detail.seller_id !== undefined &&
+          detail.sellerId !== undefined &&
+          detail.seller_id !== detail.sellerId) ||
         (detail.sku !== undefined && detail.sku !== listing.sku)
       ) {
         throw invalidResponse();
       }
+      if (
+        requireCurrentStatus &&
+        detail.archived_status !== 'ARCHIVED' &&
+        ((detail.archived_status !== undefined && detail.archived_status !== 'NONE') ||
+          (detail.listing_status !== 'ACTIVE' && detail.listing_status !== 'INACTIVE'))
+      )
+        throw new FlipkartListingError(
+          'Flipkart did not confirm the current listing status. Refresh listings before updating stock.',
+        );
       const locations: MarketplaceLocation[] = [];
       const locationIds = new Set<string>();
       if (detail.locations !== undefined && !Array.isArray(detail.locations)) {
@@ -357,12 +460,23 @@ export class FlipkartListingsClient {
             : listing.status;
       return {
         ...listing,
+        sellerId: identity(detail.seller_id)
+          ? detail.seller_id
+          : identity(detail.sellerId)
+            ? detail.sellerId
+            : listing.sellerId,
         title:
           typeof detail.product_title === 'string' && detail.product_title.trim()
             ? detail.product_title
             : listing.title,
         imageUrl: imageUrl(detail.product_image_url) ?? listing.imageUrl,
         status,
+        packageCount:
+          Array.isArray(detail.packages) &&
+          detail.packages.length > 0 &&
+          detail.packages.every((entry) => object(entry) !== null)
+            ? detail.packages.length
+            : null,
         mrp:
           allowSearchPrices && !hasMrp
             ? listing.mrp
@@ -449,6 +563,10 @@ export class FlipkartListingsClient {
         });
         if (!response.ok) {
           void response.body?.cancel().catch(() => undefined);
+          if (path === '/product/search' && response.status === 404)
+            throw new ProductSearchUnavailable(
+              'Flipkart product search is unavailable for this account.',
+            );
           if (response.status === 401 || response.status === 403) {
             throw new FlipkartListingError(
               'Flipkart rejected this account access. Check the account connection.',

@@ -87,7 +87,7 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
                 <span>seconds</span>
               </div>
               <small>
-                Saved preference only. Marketplace stock checks do not run in this version.
+                Reserved for separate stock checks. Catalogue refresh also reads listing stock.
               </small>
             </label>
             <label className="field">
@@ -105,7 +105,7 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
                 />
                 <span>seconds</span>
               </div>
-              <small>Saved preference only. Listing imports do not run in this version.</small>
+              <small>Refreshes listings and package counts for accounts already imported.</small>
             </label>
           </div>
         </section>
@@ -146,7 +146,7 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
           </div>
         </section>
         <div className="settings-save">
-          <p>Marketplace publishing remains unavailable regardless of these settings.</p>
+          <p>Enable automatic stock updates for each company in Inventory.</p>
           <button className="button primary" type="submit" disabled={!!busy}>
             <Icon name="check" />
             {busy === 'Saving settings' ? 'Saving…' : 'Save settings'}

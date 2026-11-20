@@ -11,6 +11,8 @@ export interface MarketplaceAccountRecord {
 }
 
 export interface MarketplaceAccount extends MarketplaceAccountRecord {
+  catalogOwnershipVerified?: boolean;
+  catalogImportError?: string;
   marketplace: 'flipkart';
   connection: FlipkartConnectionStatus;
 }
@@ -25,7 +27,7 @@ export interface MarketplaceLocation {
 export interface MarketplaceListing {
   id: string;
   accountId: string;
-  sellerId: string;
+  sellerId: string | null;
   productId: string;
   sku: string;
   title: string;
@@ -33,6 +35,7 @@ export interface MarketplaceListing {
   status: MarketplaceListingStatus;
   mrp: number | null;
   sellingPrice: number | null;
+  packageCount?: number | null;
   locations: MarketplaceLocation[];
   observedAt: string | null;
   version: number;

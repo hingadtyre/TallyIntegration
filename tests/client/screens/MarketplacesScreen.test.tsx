@@ -152,6 +152,20 @@ for (const verify of [false, true])
     assert.ok(screen.getByRole('button', { name: 'Add account' }));
   });
 
+test('a listing without a stock location still shows its shipping package count', async (t) => {
+  const item = { ...listing(), locations: [], packageCount: 2 };
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) =>
+    baseResponse(input, item),
+  );
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  assert.ok(screen.getByRole('columnheader', { name: 'Shipping packages' }));
+  const row = screen.getByRole('row', { name: /Marketplace tyre/ });
+  assert.ok(within(row).getByRole('cell', { name: '2' }));
+  assert.ok(within(row).getByText('Flipkart supplied no stock location.'));
+  assert.equal(within(row).queryByRole('button', { name: /Edit stock/ }), null);
+});
+
 test('sample account creation accepts no credentials and remains a backend simulation', async (t) => {
   let submitted: Record<string, unknown> | undefined;
   t.mock.method(
@@ -215,6 +229,23 @@ test('connection errors and disconnect remain scoped to their account tile', asy
     { accountId: 'seller-a', action: 'check' },
     { accountId: 'seller-b', action: 'disconnect' },
   ]);
+});
+
+test('an account keeps its verified access when the first catalog import needs a retry', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () =>
+    response({
+      accounts: [
+        { ...account(), sellerId: null, catalogImportError: 'Catalog refresh timed out.' },
+      ],
+    }),
+  );
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  const main = await screen.findByRole('article', { name: 'Main store' });
+  assert.match(
+    within(main).getByRole('alert').textContent ?? '',
+    /Catalog refresh timed out.*Open listings.*Refresh listings/,
+  );
+  assert.ok(within(main).getByRole('button', { name: 'Open listings' }));
 });
 
 test('price Apply sends only that field, keeps stock untouched and shows verified result', async (t) => {

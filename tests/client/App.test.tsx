@@ -321,7 +321,9 @@ test('returning to Inventory immediately loads an added account and its imported
   const parent = screen.getByRole('row', { name: /Bridgestone Sturdo/ });
   fireEvent.click(within(parent).getByRole('button', { name: 'Map listing' }));
   const dialog = screen.getByRole('dialog', { name: 'Map an existing listing' });
-  assert.ok(within(dialog).getByRole('option', { name: `${listing.sku} - ${listing.title}` }));
+  assert.ok(
+    within(dialog).getByRole('option', { name: `${listing.sku} · ${listing.title} · warehouse-1` }),
+  );
 });
 
 test('a search with no matches disables bulk actions and can reset to all company listings', async (t) => {
@@ -360,6 +362,12 @@ test('successful mapping closes the dialog and shows the listing under the chose
         listingId: 'listing-9',
         itemId: 'item-d',
         confirmPackEvidence: true,
+        expectedUnit: 'tyres',
+        packSource: 'manual',
+        packSize: 1,
+        listingVersion: 1,
+        sourceScope: 'company',
+        tyreFloor: false,
       });
       state = {
         ...state,
@@ -381,18 +389,16 @@ test('successful mapping closes the dialog and shows the listing under the chose
     (within(dialog).getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled,
     true,
   );
-  fireEvent.click(within(dialog).getByRole('checkbox'));
+  fireEvent.click(within(dialog).getByRole('checkbox', { name: /I confirm/ }));
   fireEvent.click(within(dialog).getByRole('button', { name: 'Save mapping' }));
 
   await waitFor(() => assert.ok(!screen.queryByRole('dialog')));
   assert.ok(screen.getByText('SAMPLE-UNMAPPED-1'));
   assert.ok(screen.getByText('8 filtered listings'));
-  assert.ok(
-    screen.getByText('Mapping saved locally. No Tally product or marketplace listing was created.'),
-  );
+  assert.ok(screen.getByText('Mapping and Set of saved.'));
 });
 
-test('selected listings keep priority over filters when preparing zero drafts and review', async (t) => {
+test('selected listings keep priority through zero draft, review, publication and readback', async (t) => {
   let state = initialState('demo', 'unused');
   const commands: string[] = [];
   t.mock.method(
@@ -402,6 +408,19 @@ test('selected listings keep priority over filters when preparing zero drafts an
       const path = String(input);
       if (path === '/api/state') return response(state);
       commands.push(path);
+      if (path === '/api/publish') {
+        assert.deepEqual(JSON.parse(String(options?.body)), { reviewId: 'review-selected' });
+        return response({
+          rows: [
+            {
+              listingId: 'listing-2',
+              sku: 'SAMPLE-CEAT-2-2',
+              status: 'confirmed',
+              message: 'Readback confirmed zero.',
+            },
+          ],
+        });
+      }
       assert.deepEqual(JSON.parse(String(options?.body)), {
         companyId: 'demo-a',
         listingIds: ['listing-2'],
@@ -430,7 +449,7 @@ test('selected listings keep priority over filters when preparing zero drafts an
         id: 'review-selected',
         companyId: 'demo-a',
         createdAt: '2026-11-08T00:00:00.000Z',
-        publishingEnabled: false,
+        publishingEnabled: true,
         rows: [
           {
             listingId: 'listing-2',
@@ -459,19 +478,37 @@ test('selected listings keep priority over filters when preparing zero drafts an
   );
   fireEvent.click(screen.getByRole('button', { name: /Review changes/ }));
   const dialog = await screen.findByRole('dialog', { name: 'Review proposed stock' });
-  assert.ok(within(dialog).getByText('1 listing destinations'));
+  assert.ok(within(dialog).getByText('1 listing destination'));
   assert.ok(within(dialog).getByText('SAMPLE-CEAT-2-2'));
   assert.equal(within(dialog).queryByText('SAMPLE-MRF-2'), null);
-  assert.equal(
-    (within(dialog).getByRole('button', { name: 'Publish unavailable' }) as HTMLButtonElement)
-      .disabled,
-    true,
-  );
   assert.deepEqual(commands, ['/api/zero', '/api/review']);
   assert.equal(state.listings[1].observed, 5);
   assert.equal(state.listings[1].policy, 'auto');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Publish 1 eligible listing' }));
+  await within(dialog).findByText('Readback confirmed zero.');
+  assert.ok(within(dialog).getByText('confirmed'));
+  assert.equal(within(dialog).queryByRole('button', { name: /Publish 1/ }), null);
+  assert.deepEqual(commands, ['/api/zero', '/api/review', '/api/publish']);
   fireEvent.click(within(dialog).getByRole('button', { name: 'Back to inventory' }));
   assert.equal(screen.queryByRole('dialog'), null);
+});
+
+test('company automatic updates target the selected company and survive a refreshed snapshot', async (t) => {
+  const state = initialState('demo', 'unused');
+  const company = state.companies[0];
+  company.automation = false;
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === '/api/state') return response(state);
+    assert.equal(String(input), '/api/automation');
+    const expected = !company.automation;
+    assert.deepEqual(JSON.parse(String(init?.body)), { companyId: company.id, enabled: expected });
+    company.automation = expected;
+    return response(state);
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Enable automatic updates' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Turn off automatic updates' }));
+  await screen.findByRole('button', { name: 'Enable automatic updates' });
 });
 
 test('pause and resume target one listing while preserving its limited-sales policy', async (t) => {
@@ -619,6 +656,12 @@ test('failed mapping keeps the dialog, selected listing and confirmation availab
           listingId: 'listing-9',
           itemId: 'item-d',
           confirmPackEvidence: true,
+          expectedUnit: 'tyres',
+          packSource: 'manual',
+          packSize: 1,
+          listingVersion: 1,
+          sourceScope: 'company',
+          tyreFloor: false,
         });
         return response({ error: 'Pack evidence changed. Check the listing again.' }, 409);
       }
@@ -632,7 +675,7 @@ test('failed mapping keeps the dialog, selected listing and confirmation availab
   const dialog = screen.getByRole('dialog', { name: 'Map an existing listing' });
   const select = within(dialog).getByLabelText('Existing marketplace listing') as HTMLSelectElement;
   fireEvent.change(select, { target: { value: 'listing-9' } });
-  const confirmation = within(dialog).getByRole('checkbox');
+  const confirmation = within(dialog).getByRole('checkbox', { name: /I confirm/ });
   fireEvent.click(confirmation);
   fireEvent.click(within(dialog).getByRole('button', { name: 'Save mapping' }));
 
@@ -726,7 +769,7 @@ test('a filtered quantity edit blocks review until saved and stays separate from
     true,
   );
   fireEvent.click(screen.getByRole('button', { name: 'Save draft quantity for SAMPLE-CEAT-2-2' }));
-  await screen.findByText('Draft: allow 1 more');
+  await screen.findByText('Choose how to publish at review');
   await waitFor(() =>
     assert.equal(
       (screen.getByRole('button', { name: /Review changes/ }) as HTMLButtonElement).disabled,

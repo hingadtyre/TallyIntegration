@@ -18,6 +18,7 @@ export function ItemRows({
   onToggleCollapse,
   onSelect,
   onMap,
+  onEditPack,
   onSave,
   onPause,
   onReview,
@@ -35,6 +36,7 @@ export function ItemRows({
   onToggleCollapse: () => void;
   onSelect: (id: string) => void;
   onMap: () => void;
+  onEditPack: (listing: Listing) => void;
   onSave: (listing: Listing, quantity: number) => Promise<ActionResult<Snapshot>>;
   onPause: (listing: Listing) => void;
   onReview: (listing: Listing) => void;
@@ -118,13 +120,35 @@ export function ItemRows({
               ↳ shared
             </td>
             <td>
-              <span
+              <button
                 className={`pack-tag ${listing.verified ? '' : 'unverified'}`}
                 title={listing.packEvidence}
+                aria-label={`Edit Set of for ${listing.sku} at ${listing.location}`}
+                disabled={busy}
+                onClick={() => onEditPack(listing)}
               >
-                {listing.packSize === null ? 'Unknown' : `Set of ${listing.packSize}`}
-              </span>
-              {!listing.verified && <small className="text-amber">Needs verification</small>}
+                {listing.packSize === null ? 'Unknown' : `Set of ${listing.packSize}`}{' '}
+                <Icon name="edit" />
+              </button>
+              {listing.packSource && (
+                <small>{listing.packSource === 'packages' ? 'Package count' : 'Custom'}</small>
+              )}
+              {!listing.verified && <small className="text-amber">Review needed</small>}
+              {listing.packSource === 'packages' &&
+                listing.packageAvailable &&
+                listing.packSize !== listing.packageCount && (
+                  <small className="text-amber">
+                    Packages changed from {listing.packSize} to {listing.packageCount}
+                  </small>
+                )}
+              {listing.packSource === 'manual' && listing.packageAvailable && (
+                <small>Flipkart packages: {listing.packageCount}</small>
+              )}
+              {listing.packageAvailable === false && (
+                <small title={`Last successful check: ${time(listing.packageObservedAt)}`}>
+                  Package count unavailable
+                </small>
+              )}
             </td>
             <td className="observed-cell">
               <strong>{quantity(listing.observed)}</strong>
