@@ -8,12 +8,7 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
   const { busy, mutate, backUpNow } = workspace;
   async function saveSettings(event: FormEvent) {
     event.preventDefault();
-    const result = await mutate(
-      '/settings',
-      { settings },
-      'Saving settings',
-      'Settings saved. The next Tally check uses the new interval.',
-    );
+    const result = await mutate('/settings', { settings }, 'Saving settings', 'Settings saved.');
     if (result.ok) setSettings(result.value.settings);
   }
   return (
@@ -142,7 +137,7 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
             <small>
               Uses the saved folder: {state.settings.backupFolder}
               <br />
-              Automatic backups and restore are not available in this version.
+              Create backups manually. Contact support to restore a backup offline.
             </small>
           </div>
         </section>

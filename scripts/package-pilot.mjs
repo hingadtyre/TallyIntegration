@@ -21,7 +21,7 @@ import { Marked, Renderer } from 'marked';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const forbiddenNames = new Set(['.data', '.git', '.cache', '.tools']);
-const rootDocuments = ['README.md', 'CONTRIBUTING.md', 'GLOSSARY.md'];
+const guideSource = 'docs/customer-setup.md';
 
 function requireInput(path, kind = 'file') {
   if (!existsSync(path)) throw new Error(`Required ${kind} is missing: ${path}`);
@@ -79,152 +79,59 @@ function escapeHtml(value) {
   );
 }
 
-function relativeUrl(fromFile, toFile) {
-  return posix
-    .relative(posix.dirname(fromFile), toFile)
-    .split('/')
-    .map(encodeURIComponent)
-    .join('/');
-}
-
-function page(title, body, outputPath, build) {
+function guidePage(body, sections, build) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
-<title>${escapeHtml(title)} | Stockbridge pilot</title>
+<title>Stockbridge setup and daily use</title>
 <style>
 body{font:17px/1.65 system-ui,Segoe UI,sans-serif;color:#24312c;background:#f6f8f5;margin:0;padding:28px}
 main{max-width:980px;margin:auto;background:white;padding:32px;border:1px solid #dce4da;border-radius:12px}
 h1,h2,h3{line-height:1.25;color:#17382b}h2{margin-top:2em}a{color:#075f42;text-underline-offset:3px}
-nav{display:flex;gap:20px;margin-bottom:20px}pre{overflow:auto;padding:18px;background:#f2f5f1;border-radius:6px}
+nav{margin:20px 0}nav summary{cursor:pointer;font-weight:600}pre{overflow:auto;padding:18px;background:#f2f5f1;border-radius:6px}
 code{font-size:.9em;overflow-wrap:anywhere}table{border-collapse:collapse;display:block;overflow:auto;margin:20px 0}
 th,td{border:1px solid #dce4da;text-align:left;vertical-align:top;padding:10px}th{background:#eef3ec}
 img{max-width:100%}blockquote,.pilot{padding:12px 18px;border-left:4px solid #b18c31;background:#fff9e8}
 .build{color:#5c665e;font-size:14px}li{margin:8px 0}@media(max-width:600px){body{padding:10px}main{padding:18px}}
 </style></head><body><main>
-<nav><a href="${relativeUrl(outputPath, 'Read Me.html')}">Setup guide</a><a href="${relativeUrl(outputPath, 'documentation/index.html')}">All documentation</a></nav>
-<p class="pilot"><strong>Live workspace.</strong> Stockbridge reads Tally stock. Reviewed changes and enabled automatic updates can publish stock to Flipkart.</p>
+<p class="pilot"><strong>Live workspace.</strong> Stockbridge reads Tally. On Flipkart, approved actions can change stock or prices. Enabling company sync allows automatic stock updates.</p>
 <p class="build">Version ${escapeHtml(build.version)} · ${escapeHtml(build.commit.slice(0, 12))}${build.dirty ? ' · includes uncommitted changes' : ''} · built ${escapeHtml(build.createdAt)}</p>
+<nav aria-label="Guide sections"><details><summary>Jump to a section</summary><ul>${sections.join('')}</ul></details></nav>
 ${body}
 </main></body></html>\n`;
 }
 
-function createDocumentation(folder, build) {
-  const committedFiles = new Set(git('ls-tree', '-r', '--name-only', build.commit).split('\n'));
-  const documents = [
-    ...rootDocuments,
-    ...readdirSync(join(root, 'docs'), { recursive: true })
-      .filter(
-        (file) =>
-          file.endsWith('.md') &&
-          !file.split(/[\\/]/).some((part) => forbiddenNames.has(part) || part.startsWith('.env')),
-      )
-      .map((file) => `docs/${file.replaceAll('\\', '/')}`),
-  ].sort();
-  const documentSet = new Set(documents);
-  const htmlPath = (document) => `documentation/${document.replace(/\.md$/, '.html')}`;
-
-  function render(document, outputPath) {
-    const usedIds = new Set();
-    const renderer = new Renderer();
-    function rewriteLink(href) {
-      if (href.startsWith('#')) return href;
-      if (/^(https?:|mailto:)/i.test(href)) return href;
-      if (/^[a-z][a-z\d+.-]*:/i.test(href) || href.startsWith('//')) return null;
-      const [, pathPart, suffix = ''] = href.match(/^([^?#]*)([?#].*)?$/);
-      const decoded = decodeURIComponent(pathPart).replaceAll('\\', '/');
-      const target = posix.normalize(
-        decoded.startsWith('/') ? decoded.slice(1) : posix.join(posix.dirname(document), decoded),
-      );
-      if (target === '..' || target.startsWith('../'))
-        throw new Error(`Documentation link leaves the repository: ${document}: ${href}`);
-      if (documentSet.has(target)) return relativeUrl(outputPath, htmlPath(target)) + suffix;
-      if (
-        existsSync(join(root, target)) &&
-        statSync(join(root, target)).isDirectory() &&
-        (target === 'docs' || target.startsWith('docs/'))
-      ) {
-        return relativeUrl(outputPath, `documentation/${target}/index.html`) + suffix;
-      }
-      if (existsSync(join(folder, target))) return relativeUrl(outputPath, target) + suffix;
-      // Developer source files are not bundled; keep those references explicit and commit-scoped.
-      if (!build.dirty && build.repository && committedFiles.has(target)) {
-        return `${build.repository}/blob/${build.commit}/${target.split('/').map(encodeURIComponent).join('/')}${suffix}`;
-      }
-      // A new, uncommitted source file has no published commit URL. Keep its label as plain text.
-      if (existsSync(join(root, target))) return null;
-      throw new Error(`Unresolved documentation link: ${document}: ${href}`);
-    }
-    renderer.heading = function ({ tokens, depth }) {
-      const plain = this.parser.parseInline(tokens, this.parser.textRenderer);
-      const base =
-        plain
-          .toLowerCase()
-          .replace(/<[^>]*>/g, '')
-          .replace(/[^\p{L}\p{N}\p{M}\s_-]/gu, '')
-          .replace(/\s/g, '-') || 'section';
-      let id = base;
-      let duplicate = 0;
-      while (usedIds.has(id)) id = `${base}-${++duplicate}`;
-      usedIds.add(id);
-      return `<h${depth} id="${escapeHtml(id)}">${this.parser.parseInline(tokens)}</h${depth}>\n`;
-    };
-    renderer.link = function ({ href, title, tokens }) {
-      const target = rewriteLink(href);
-      const label = this.parser.parseInline(tokens);
-      return target
-        ? `<a href="${escapeHtml(target)}"${title ? ` title="${escapeHtml(title)}"` : ''} rel="noreferrer">${label}</a>`
-        : label;
-    };
-    renderer.image = function ({ href, title, tokens }) {
-      const target = rewriteLink(href);
-      const label = this.parser.parseInline(tokens, this.parser.textRenderer);
-      return target
-        ? `<img src="${escapeHtml(target)}" alt="${escapeHtml(label)}"${title ? ` title="${escapeHtml(title)}"` : ''}>`
-        : escapeHtml(label);
-    };
-    renderer.html = ({ text }) => escapeHtml(text);
-    const html = new Marked({ renderer, gfm: true }).parse(
-      readFileSync(join(root, document), 'utf8'),
-    );
-    writeNew(join(folder, outputPath), page(document, html, outputPath, build));
-  }
-
-  for (const document of documents) render(document, htmlPath(document));
-  render('docs/customer-setup.md', 'Read Me.html');
-  const directories = new Set(['']);
-  for (const document of documents) {
-    let directory = posix.dirname(document);
-    while (directory !== '.') {
-      directories.add(directory);
-      directory = posix.dirname(directory);
-    }
-  }
-  for (const directory of directories) {
-    const outputPath = posix.join('documentation', directory, 'index.html');
-    const entries = documents
-      .filter((document) => posix.dirname(document) === (directory || '.'))
-      .map(
-        (document) =>
-          `<li><a href="${relativeUrl(outputPath, htmlPath(document))}">${escapeHtml(posix.basename(document, '.md'))}</a></li>`,
-      );
-    for (const child of directories) {
-      if (child && posix.dirname(child) === (directory || '.')) {
-        entries.push(
-          `<li><a href="${relativeUrl(outputPath, `documentation/${child}/index.html`)}">${escapeHtml(posix.basename(child))}/</a></li>`,
-        );
-      }
-    }
-    writeNew(
-      join(folder, outputPath),
-      page(
-        'Documentation',
-        `<h1>Documentation${directory ? `: ${escapeHtml(directory)}` : ''}</h1><ul>${entries.join('\n')}</ul>`,
-        outputPath,
-        build,
-      ),
-    );
-  }
+function createCustomerGuide(folder, build) {
+  const ids = new Set();
+  const sections = [];
+  const renderer = new Renderer();
+  renderer.heading = function ({ tokens, depth }) {
+    const plain = this.parser.parseInline(tokens, this.parser.textRenderer);
+    const base =
+      plain
+        .toLowerCase()
+        .replace(/<[^>]*>/g, '')
+        .replace(/[^\p{L}\p{N}\p{M}\s_-]/gu, '')
+        .replace(/\s/g, '-') || 'section';
+    let id = base;
+    let duplicate = 0;
+    while (ids.has(id)) id = `${base}-${++duplicate}`;
+    ids.add(id);
+    if (depth === 2)
+      sections.push(`<li><a href="#${escapeHtml(id)}">${escapeHtml(plain)}</a></li>`);
+    return `<h${depth} id="${escapeHtml(id)}">${this.parser.parseInline(tokens)}</h${depth}>\n`;
+  };
+  renderer.html = ({ text }) => escapeHtml(text);
+  renderer.link = function ({ href, title, tokens }) {
+    if (!href.startsWith('#') && !/^https?:\/\//i.test(href))
+      throw new Error(`The offline setup guide references a file outside the guide: ${href}`);
+    const label = this.parser.parseInline(tokens);
+    return `<a href="${escapeHtml(href)}"${title ? ` title="${escapeHtml(title)}"` : ''} rel="noreferrer">${label}</a>`;
+  };
+  const body = new Marked({ renderer, gfm: true }).parse(
+    readFileSync(join(root, guideSource), 'utf8'),
+  );
+  writeNew(join(folder, 'Read Me.html'), guidePage(body, sections, build));
 }
 
 function createLaunchers(folder) {
@@ -294,11 +201,9 @@ function packagePilot() {
     'dist/web/index.html',
     'scripts/windows-launcher.mjs',
     'scripts/restore-pilot.mjs',
-    'docs/customer-setup.md',
-    ...rootDocuments,
+    guideSource,
   ];
   for (const input of inputs) requireInput(join(root, input));
-  requireInput(join(root, 'docs'), 'directory');
   requireInput(join(root, 'node_modules'), 'directory');
   const dependencies = Object.entries(lock.packages)
     .filter(([path, value]) => path && !value.dev)
@@ -329,16 +234,11 @@ function packagePilot() {
       throw new Error(`Runtime dependency is absent from the lockfile: ${name}`);
   }
   const commit = git('rev-parse', 'HEAD');
-  const remote = git('remote', 'get-url', 'origin');
-  const github = remote.match(
-    /^(?:https:\/\/github\.com\/|git@github\.com:)([\w.-]+)\/([\w.-]+?)(?:\.git)?$/,
-  );
   const build = {
     version: packageInfo.version,
     createdAt: new Date().toISOString(),
     commit,
     dirty: !!git('status', '--porcelain'),
-    repository: github ? `https://github.com/${github[1]}/${github[2]}` : null,
   };
   const ignoreCheck = spawnSync('git', ['check-ignore', '--', 'releases/'], {
     cwd: root,
@@ -365,11 +265,9 @@ function packagePilot() {
     copyFileSync(join(root, compiled), join(folder, compiled), constants.COPYFILE_EXCL);
   }
   copyInput(join(root, 'dist/web'), join(folder, 'dist/web'));
-  copyInput(join(root, 'docs'), join(folder, 'docs'));
   for (const file of [
     'package.json',
     'package-lock.json',
-    ...rootDocuments,
     'scripts/windows-launcher.mjs',
     'scripts/restore-pilot.mjs',
   ]) {
@@ -386,7 +284,7 @@ function packagePilot() {
   for (const dependency of dependencies)
     copyInput(join(root, dependency.path), join(folder, dependency.path), true);
   createLaunchers(folder);
-  createDocumentation(folder, build);
+  createCustomerGuide(folder, build);
   const files = readdirSync(folder, { recursive: true })
     .filter((file) => statSync(join(folder, file)).isFile())
     .sort()
@@ -400,7 +298,8 @@ function packagePilot() {
     JSON.stringify(
       {
         formatVersion: 1,
-        purpose: 'Read-only Tally inventory pilot. Marketplace publication is unavailable.',
+        purpose:
+          'Windows pilot for reading Tally stock and managing Flipkart listings. Reviewed actions can change live stock or prices. Company sync can update live stock automatically.',
         ...build,
         runtime,
         dependencies,

@@ -137,13 +137,16 @@ function mergeOrders(
   for (const order of observed) {
     const key = JSON.stringify([accountId, order.orderItemId]);
     const prior = journal.get(key)?.order;
+    const scopedReturnConflict = prior?.stockReturnConflict || order.stockReturnConflict;
     // A changed identity or quantity cannot safely be reinterpreted using an
     // older bill. Retain the original identity and the need for reconciliation.
     if (
       prior &&
       (prior.stockIdentityConflict ||
-        (prior.stockDispatchObserved && order.stockDisposition === 'cancelled') ||
-        (prior.stockDisposition === 'cancelled' && order.stockDispatchObserved) ||
+        (scopedReturnConflict
+          ? !prior.stockShipmentId || prior.stockShipmentId !== order.stockShipmentId
+          : (prior.stockDispatchObserved && order.stockDisposition === 'cancelled') ||
+            (prior.stockDisposition === 'cancelled' && order.stockDispatchObserved)) ||
         orderGeometry(prior) !== orderGeometry(order) ||
         (prior.invoiceNumber && order.invoiceNumber && prior.invoiceNumber !== order.invoiceNumber))
     ) {
@@ -164,6 +167,7 @@ function mergeOrders(
         accountId,
         order: {
           ...order,
+          ...(scopedReturnConflict && { stockReturnConflict: true }),
           ...(prior?.stockSyncQueued && { stockSyncQueued: true }),
           ...(prior?.stockDispatchObserved && { stockDispatchObserved: true }),
           ...(needsReview && {
@@ -196,6 +200,8 @@ function journalVersion(c: StockSyncCoverage | null) {
             o.stockIdentityConflict ?? false,
             o.stockDispatchObserved ?? false,
             o.stockReconciliationRequired ?? false,
+            o.stockShipmentId ?? null,
+            o.stockReturnConflict ?? false,
           ]),
         )
         .sort(),

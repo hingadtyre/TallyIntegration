@@ -10,6 +10,8 @@ Stock export sets `SVCURRENTCOMPANY` and `SVTODATE`. The default closing balance
 
 The tests exercise real local HTTP requests against constructed XML fixtures: successful scoped reads, changed company identity, missing GUIDs, empty versus missing data, unknown compound quantities, malformed responses, Tally errors, timeouts, redirects, UTF-16 and response-size limits. They establish adapter behaviour under those fixtures. No test currently proves the projection or closing-balance period semantics against a running Tally installation.
 
+On 20 November 2026, discovery from a fresh live Windows workspace could not connect to the local Tally listener on port 9000. Connections reported the failure and the company selector stayed empty. No real company balance, ledger or sales voucher was available to compare on this machine.
+
 On the customer installation, compare quantities with the same company and date in Tally and verify the effects of sales, purchases, receipt notes and stock adjustments. The current reader reports the whole company balance. Map it only to a Flipkart location supplied by that entire balance and confirm the Tally base unit when choosing Set of. Sellers who need an individual godown balance must wait for an explicitly scoped godown reader.
 
 Blank, unsupported or mismatched units produce an unknown quantity (`null`), not zero. Missing or invalid envelopes reject the complete read so the application can preserve its last valid observation. Negative numeric stock is preserved as source data; the separate stock policy decides its advertised effect.

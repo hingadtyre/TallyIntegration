@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { Icon } from './components.js';
 import { useWorkspace } from './useWorkspace.js';
 import { InventoryScreen } from './screens/InventoryScreen.js';
@@ -30,6 +30,9 @@ export function App() {
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
+  useLayoutEffect(() => {
+    document.documentElement.scrollTop = 0;
+  }, [screen]);
   if (!state)
     return (
       <main className="startup">

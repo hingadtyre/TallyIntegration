@@ -173,7 +173,9 @@ test('an empty live workspace guides the user to connections and disables listin
   assert.ok(screen.getByRole('heading', { name: 'Connections', level: 1 }));
   assert.ok(screen.getByRole('button', { name: 'Check & discover companies' }));
   assert.ok(screen.getByRole('button', { name: 'Open Marketplaces' }));
+  document.documentElement.scrollTop = 565;
   fireEvent.click(screen.getByRole('button', { name: 'Open Tally settings' }));
+  assert.equal(document.documentElement.scrollTop, 0);
   assert.ok(screen.getByRole('heading', { name: 'Settings', level: 1 }));
   assert.ok(screen.getByRole('textbox', { name: /Connection address/ }));
 });
@@ -315,7 +317,7 @@ test('returning to Inventory immediately loads an added account and its imported
   assert.equal(stateReads, 1);
 
   fireEvent.click(screen.getByRole('button', { name: /^Inventory/ }));
-  await screen.findByRole('option', { name: `Flipkart · ${account.name}` });
+  await screen.findByRole('option', { name: account.name });
   assert.equal(stateReads, 2);
   assert.equal((screen.getByLabelText('Seller account') as HTMLSelectElement).value, account.id);
   const parent = screen.getByRole('row', { name: /Bridgestone Sturdo/ });
@@ -894,7 +896,7 @@ test('a mixed calculation links to the affected Set of and reviews only the read
         assert.deepEqual(JSON.parse(String(options?.body)).listingIds, [blocked.id]);
         return response({
           ...state,
-          proposals: [draft, { ...draft, listingId: blocked.id }],
+          proposals: [{ ...draft, listingId: blocked.id }],
           calculation: [{ listingId: blocked.id, status: 'ready' }],
         });
       }
@@ -913,13 +915,36 @@ test('a mixed calculation links to the affected Set of and reviews only the read
           ],
         });
       if (path === '/api/review') {
-        reviews.push(JSON.parse(String(options?.body)).listingIds);
+        const ids: string[] = JSON.parse(String(options?.body)).listingIds;
+        reviews.push(ids);
         return response({
           id: 'ready-review',
           companyId: 'demo-a',
           createdAt: draft.createdAt,
-          rows: [],
-          publishingEnabled: false,
+          rows: ids.map((listingId) => ({
+            listingId,
+            sku: listingId,
+            account: 'Sample seller',
+            location: 'Sample warehouse',
+            quantity: 5,
+            observed: 5,
+            policy: 'Auto',
+            stale: false,
+            problem: null,
+          })),
+          publishingEnabled: true,
+        });
+      }
+      if (path === '/api/publish') {
+        return response({
+          rows: [
+            {
+              listingId: ready.id,
+              sku: ready.sku,
+              status: 'unchanged',
+              message: 'Stock already matches.',
+            },
+          ],
         });
       }
       return response({ error: 'Unexpected request' }, 404);
@@ -935,13 +960,19 @@ test('a mixed calculation links to the affected Set of and reviews only the read
   fireEvent.click(screen.getByRole('button', { name: /Review ready drafts/ }));
   await screen.findByRole('dialog', { name: 'Review proposed stock' });
   assert.deepEqual(reviews, [[ready.id]]);
+  fireEvent.click(screen.getByRole('button', { name: 'Publish 1 eligible listing' }));
+  await screen.findByRole('dialog', { name: 'Stock publication results' });
   fireEvent.click(screen.getByRole('button', { name: 'Back to inventory' }));
+  await screen.findByText('0 drafts ready · 1 listing needs Set of confirmation');
   fireEvent.click(screen.getByRole('button', { name: /Fix Set of for/ }));
   const repair = await screen.findByRole('dialog', { name: 'Edit Set of' });
   fireEvent.click(within(repair).getByRole('checkbox', { name: /I confirm the item/ }));
   fireEvent.click(within(repair).getByRole('button', { name: 'Save Set of' }));
-  await screen.findByText('2 drafts ready');
+  await screen.findByText('1 draft ready');
   assert.equal(screen.queryByRole('button', { name: /Fix Set of for/ }), null);
+  fireEvent.click(screen.getByRole('button', { name: /Review changes/ }));
+  await screen.findByRole('dialog', { name: 'Review proposed stock' });
+  assert.deepEqual(reviews, [[ready.id], [blocked.id]]);
 });
 
 test('a filtered quantity edit blocks review until saved and stays separate from observed stock', async (t) => {

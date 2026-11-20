@@ -20,6 +20,15 @@ function checkedOrder(value: unknown): StockCoverageOrder {
     (order.stockIdentityConflict !== undefined && order.stockIdentityConflict !== true) ||
     ('stockDispatchObserved' in order && order.stockDispatchObserved !== true) ||
     ('stockReconciliationRequired' in order && order.stockReconciliationRequired !== true) ||
+    ('stockShipmentId' in order &&
+      (typeof order.stockShipmentId !== 'string' || !order.stockShipmentId.trim())) ||
+    ('stockReturnConflict' in order &&
+      (order.stockReturnConflict !== true ||
+        !order.stockShipmentId ||
+        !order.stockDispatchObserved ||
+        !order.stockReconciliationRequired ||
+        !order.eligibilityUnverified ||
+        order.stockDisposition !== 'uncertain')) ||
     (order.stockDisposition !== undefined &&
       order.stockDisposition !== 'cancelled' &&
       order.stockDisposition !== 'uncertain')

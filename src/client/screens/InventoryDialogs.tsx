@@ -126,15 +126,15 @@ export function ReviewDialog({
           </label>
         </fieldset>
       )}
-      <div className="review-table-wrap">
+      <div className="review-table-wrap stock-review">
         <table className="review-table">
           <thead>
             <tr>
-              <th>Listing / destination</th>
-              <th>Observed</th>
-              <th>Proposed</th>
-              <th>Resulting policy</th>
-              {result && <th>Publication result</th>}
+              <th scope="col">Listing / destination</th>
+              <th scope="col">Observed</th>
+              <th scope="col">Proposed</th>
+              <th scope="col">Resulting policy</th>
+              {result && <th scope="col">Publication result</th>}
             </tr>
           </thead>
           <tbody>
@@ -151,11 +151,29 @@ export function ReviewDialog({
                     </small>
                   )}
                 </td>
-                <td>{formatQuantity(row.observed)}</td>
-                <td className="review-quantity">{formatQuantity(row.quantity)}</td>
-                <td>{row.policy}</td>
+                <td>
+                  <span className="review-cell-label" aria-hidden="true">
+                    Observed
+                  </span>
+                  {formatQuantity(row.observed)}
+                </td>
+                <td className="review-quantity">
+                  <span className="review-cell-label" aria-hidden="true">
+                    Proposed
+                  </span>
+                  {formatQuantity(row.quantity)}
+                </td>
+                <td>
+                  <span className="review-cell-label" aria-hidden="true">
+                    Resulting policy
+                  </span>
+                  {row.policy}
+                </td>
                 {result && (
                   <td>
+                    <span className="review-cell-label" aria-hidden="true">
+                      Publication result
+                    </span>
                     <strong>{outcomes.get(row.listingId)?.status ?? 'Unknown'}</strong>
                     <small>{outcomes.get(row.listingId)?.message}</small>
                   </td>

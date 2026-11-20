@@ -69,11 +69,7 @@ export function saveSettings(store: Store, input: unknown): boolean {
       });
     }
     state.settings = settings;
-    recordActivity(
-      state,
-      'settings-saved',
-      'Settings saved. The next Tally poll uses the new interval; no restart needed. Marketplace polling is pending API setup.',
-    );
+    recordActivity(state, 'settings-saved', 'Local connection, refresh and backup settings saved.');
     return sourceChanged;
   });
 }

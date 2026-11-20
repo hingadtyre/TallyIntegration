@@ -121,14 +121,14 @@ export function AutomationDialog({
           Array.from(sellers, ([id, rows]) => (
             <section key={id} aria-label={rows[0].account}>
               <h3>{rows[0].account}</h3>
-              <div className="review-table-wrap">
+              <div className="review-table-wrap stock-review">
                 <table className="review-table">
                   <thead>
                     <tr>
-                      <th>SKU / location</th>
-                      <th>Observed</th>
-                      <th>Calculated</th>
-                      <th>{choosing ? 'Trial' : 'First check'}</th>
+                      <th scope="col">SKU / location</th>
+                      <th scope="col">Observed</th>
+                      <th scope="col">Calculated</th>
+                      <th scope="col">{choosing ? 'Trial' : 'First check'}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -140,9 +140,22 @@ export function AutomationDialog({
                             {row.location} · {row.itemName}
                           </small>
                         </td>
-                        <td>{row.observed ?? 'Unknown'}</td>
-                        <td>{row.proposed ?? 'Unavailable'}</td>
                         <td>
+                          <span className="review-cell-label" aria-hidden="true">
+                            Observed
+                          </span>
+                          {row.observed ?? 'Unknown'}
+                        </td>
+                        <td>
+                          <span className="review-cell-label" aria-hidden="true">
+                            Calculated
+                          </span>
+                          {row.proposed ?? 'Unavailable'}
+                        </td>
+                        <td>
+                          <span className="review-cell-label" aria-hidden="true">
+                            {choosing ? 'Trial' : 'First check'}
+                          </span>
                           {choosing && row.status === 'ready' ? (
                             <button
                               className="button secondary compact"

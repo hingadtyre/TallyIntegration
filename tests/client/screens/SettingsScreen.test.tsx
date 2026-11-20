@@ -36,7 +36,7 @@ test('settings retain edits after rejection and show confirmed values after a su
   assert.equal(folder.value, 'new-backups');
   assert.ok(screen.getByText(/Uses the saved folder: saved-backups/));
   fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
-  await screen.findByText('Settings saved. The next Tally check uses the new interval.');
+  await screen.findByText('Settings saved.');
   assert.equal(screen.queryByRole('alert'), null);
   assert.equal(submitted.length, 2);
   assert.deepEqual(submitted[1], {

@@ -23,7 +23,7 @@ The optional Windows launcher, [scripts/app.ps1](scripts/app.ps1), selects the p
 
 ## Build and reload behavior
 
-`npm run build` compiles TypeScript and builds the browser dashboard. `npm start` and `npm run demo` execute the compiled server in `dist` and serve the built dashboard in `dist/web`. Neither run command rebuilds or watches source files, so starting without rebuilding uses the previous build.
+`npm run build` compiles TypeScript and replaces the generated dashboard in `dist/web`, clearing assets from previous builds. `npm start` and `npm run demo` execute the compiled server in `dist/src` and serve the built dashboard in `dist/web`. Neither run command rebuilds or watches source files, so starting without rebuilding uses the previous build.
 
 For backend changes, stop the running backend with Ctrl+C, run `npm run build`, and restart it with `npm run demo` after the build succeeds. Use `npm start` instead only for the intended real workspace. Keep one backend per database running. The database survives a normal stop/restart.
 
@@ -160,7 +160,7 @@ npm run package:pilot
 
 This runs the full verification and build before producing a new timestamped folder and ZIP under ignored `releases/`. It bundles the runtime, compiled application and exactly the installed production dependencies recorded in the lockfile. Source tests, npm, development tools, credentials, `.data` and repository metadata are excluded. A manifest records the commit, uncommitted-change indicator, dependency/runtime versions and file hashes; a separate `.sha256` file covers the ZIP. Existing releases are retained. Package a reviewed clean commit for a traceable distribution; a dirty package is explicitly labelled.
 
-`Read Me.html` is generated from [customer-setup.md](docs/customer-setup.md), with the repository documents rendered to a linked offline HTML tree. `marked` is a build-only dependency for this conversion; it is not shipped as a runtime dependency. Edit the Markdown sources, then rebuild the package. The renderer escapes raw HTML and the generated pages prohibit scripts.
+`Read Me.html` is generated from [customer-setup.md](docs/customer-setup.md) as a standalone offline guide. Its section links work after extraction, and its external references open the public help pages. Internal documentation and seller research stay in the repository. Edit the customer guide, then rebuild the package. The build uses `marked`, escapes raw HTML and prohibits scripts in the generated page.
 
 Run the extracted-package verification in PowerShell, replacing the example with the absolute ZIP path printed by the builder:
 

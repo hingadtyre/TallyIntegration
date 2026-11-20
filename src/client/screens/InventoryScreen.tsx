@@ -69,7 +69,13 @@ export function InventoryScreen({
   const groups = inventoryGroups(state, filters);
   const scope = actionScope(state, filters, selected);
   const scopeKey = JSON.stringify([companyId, accountId, [...scope].sort()]);
-  const calculation = lastCalculation?.scope === scopeKey ? lastCalculation.rows : null;
+  const proposals = new Map(state.proposals.map((proposal) => [proposal.listingId, proposal]));
+  const calculation =
+    lastCalculation?.scope === scopeKey
+      ? lastCalculation.rows.filter(
+          (row) => row.status === 'blocked' || proposals.has(row.listingId),
+        )
+      : null;
   const blockedIds = new Set(
     calculation?.filter((row) => row.status === 'blocked').map((row) => row.listingId),
   );
@@ -88,8 +94,9 @@ export function InventoryScreen({
   ).length;
   const visibleIds = groups.flatMap((group) => group.listings.map((listing) => listing.id));
   const hiddenSelected = selected.filter((id) => !visibleIds.includes(id)).length;
-  const proposals = new Map(state.proposals.map((proposal) => [proposal.listingId, proposal]));
-  const reviewIds = scope.filter((id) => !blockedIds.has(id));
+  const reviewIds = calculation
+    ? calculation.filter((row) => row.status !== 'blocked').map((row) => row.listingId)
+    : scope;
   const scopedProposalCount = reviewIds.filter((id) => proposals.has(id)).length;
   const draftCount = companyListings.filter((listing) => proposals.has(listing.id)).length;
   const brandOptions = [...new Set(companyItems.map((item) => item.brand).filter(Boolean))].sort();
@@ -138,12 +145,8 @@ export function InventoryScreen({
   }
   return (
     <>
-      <div className="page-heading">
-        <div>
-          <div className="eyebrow">YOUR STOCK, CONNECTED</div>
-          <h1>Inventory</h1>
-          <p>One view of Tally stock and the listings it supplies.</p>
-        </div>
+      <div className="page-heading inventory-heading">
+        <h1>Inventory</h1>
         <button
           className="button secondary"
           disabled={!!busy}
@@ -153,7 +156,7 @@ export function InventoryScreen({
           {busy === 'Refreshing Tally' ? 'Refreshing…' : 'Refresh Tally'}
         </button>
       </div>
-      <div className="stat-grid">
+      <div className="stat-grid inventory-summary">
         <Stat label="Tally stock items" value={companyItems.length} detail="In this company" />
         <Stat
           label="Mapped listings"
@@ -181,7 +184,7 @@ export function InventoryScreen({
             <span className="count-badge">{groups.length} items</span>
           </div>
           <label className="account-select">
-            <span>Destination</span>
+            <span>Flipkart seller</span>
             <select
               aria-label="Seller account"
               value={accountId}
@@ -190,7 +193,7 @@ export function InventoryScreen({
               {!state.accounts.length && <option value="">No seller account</option>}
               {state.accounts.map((value) => (
                 <option key={value.id} value={value.id}>
-                  Flipkart · {value.name}
+                  {value.name}
                 </option>
               ))}
             </select>
@@ -345,7 +348,7 @@ export function InventoryScreen({
             </button>
           </div>
         </div>
-        {calculation && (
+        {!!calculation?.length && (
           <CalculationFeedback
             rows={calculation}
             state={state}

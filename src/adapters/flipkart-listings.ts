@@ -331,7 +331,7 @@ export class FlipkartListingsClient {
       {
         [listing.sku]: {
           product_id: listing.productId,
-          locations: [{ id: locationId, status: locations[0].status, inventory: quantity }],
+          locations: [{ id: locationId, inventory: quantity }],
         },
       },
       true,
@@ -574,6 +574,11 @@ export class FlipkartListingsClient {
           }
           if (response.status === 429) {
             throw new FlipkartListingError('Flipkart is limiting requests. Try again later.');
+          }
+          if (path === '/update/inventory' && response.status === 400) {
+            throw new FlipkartListingError(
+              'Flipkart rejected the stock request (HTTP 400). Check the SKU and location in Seller Hub. If the rejection repeats, contact Stockbridge support.',
+            );
           }
           const uncertain =
             write && (response.status >= 500 || response.status === 408 || response.status < 400);

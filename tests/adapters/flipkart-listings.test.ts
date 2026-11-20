@@ -467,14 +467,14 @@ test('import retains documented search SSP/MRP if details omit prices and ignore
   assert.deepEqual(result.locations, []);
 });
 
-test('stock writes address exactly one SKU and location, preserve disabled status, and send absolute zero', async () => {
+test('stock writes send only the location ID and absolute inventory without changing its status', async () => {
   const client = new FlipkartListingsClient({
     request: async (url, options) => {
       assert.equal(url, 'https://api.flipkart.net/sellers/listings/v3/update/inventory');
       assert.deepEqual(JSON.parse(String(options?.body)), {
         'sku-1': {
           product_id: 'product-1',
-          locations: [{ id: 'warehouse-2', status: 'DISABLED', inventory: 0 }],
+          locations: [{ id: 'warehouse-2', inventory: 0 }],
         },
       });
       return Response.json({ 'sku-1': { status: 'SUCCESS', errors: [], attribute_errors: [] } });
@@ -586,6 +586,17 @@ test('per-SKU failures are definitive; warnings and malformed or inconsistent su
 });
 
 test('HTTP and network errors are sanitized and distinguish uncertain writes from definite rejection', async () => {
+  const rejected = new FlipkartListingsClient({
+    request: async () =>
+      Response.json({ code: 'Bad Request', message: 'private-upstream' }, { status: 400 }),
+  });
+  await assert.rejects(rejected.updateStock(token, listing, 'warehouse-1', 3), (error) => {
+    assert.ok(error instanceof FlipkartListingError);
+    assert.equal(error.uncertain, false);
+    assert.match(error.message, /stock request \(HTTP 400\)/);
+    assert.doesNotMatch(error.message, /private-upstream/);
+    return true;
+  });
   const accepted = new FlipkartListingsClient({
     request: async () => Response.json({ 'sku-1': { status: 'SUCCESS' } }, { status: 202 }),
   });

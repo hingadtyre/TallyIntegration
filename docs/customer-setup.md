@@ -4,9 +4,9 @@
 
 Stockbridge reads a Tally company's stock and shows it in **Inventory**. Map a Flipkart listing to a Tally item and confirm how many physical units make one sale. You can then publish a reviewed quantity or enable automatic updates for that company. In the live workspace, both actions can change stock on Flipkart. Sample mode uses local sample data.
 
-HingadTyre is the first customer. Sign in to the intended Flipkart account and use its own application credentials in Stockbridge. On a fresh workspace, choose **Marketplaces > Add account**. **Verify and save** checks access and attempts a listing import. A successful nonempty import verifies listing ownership. Flipkart can return listings without a separate seller ID.
+Sign in to the intended Flipkart account and use its own application credentials in Stockbridge. On a fresh workspace, choose **Marketplaces > Add account**. **Verify and save** checks access and attempts a listing import. A successful nonempty import verifies listing ownership. Flipkart can return listings without a separate seller ID.
 
-On a fresh live setup, the selectors show **No company connected** and, once Inventory is available, **No seller account** until you connect your own data. Tally discovery supplies company names. Adding a marketplace account supplies its seller label. Older unused placeholder labels are hidden; genuine saved company/account names and existing listings are retained. **Sample workspace** is a separate demonstration mode with generic example names.
+On a fresh live setup, the selectors show **No company connected** and, once Inventory is available, **No seller account** until you connect your own data. Tally discovery supplies company names. Adding a marketplace account supplies its seller label. Older unused placeholder labels are hidden; genuine saved company/account names and existing listings are retained. The packaged **Start Stockbridge.cmd** opens the live workspace. A separately supplied **Sample workspace** uses generic examples and simulates publication.
 
 ## Before you start
 
@@ -97,12 +97,11 @@ Brands are not extracted by the current live Tally reader. Brand filters become 
 
 ## Optional: verify seller-owned Flipkart API access
 
-Use the seller's own **Self Access** application. This route needs no Stockbridge-hosted authentication service. HingadTyre confirmed internal own-account use; permission to distribute to independent sellers is a separate question. See [Flipkart's access rules](https://seller.flipkart.com/api-docs/FMSAPI.html#application-registration).
+Use an approved **Self Access** application registered by your business for its own seller account. Confirm with your provider that this access arrangement applies to your installation. See [Flipkart's access rules](https://seller.flipkart.com/api-docs/FMSAPI.html#application-registration).
 
 1. Sign into the intended seller in Flipkart and open **Profile > Developer Access > Self Access**. Check for an existing application before creating another.
-2. Historical record: HingadTyre submitted **Stockbridge Local** on 2026-11-08 and it displayed **Pending** then. Current approval has not been checked. The confirmation mentioned contact within seven working days; this was guidance, not a guaranteed approval date.
-3. For an account without its own application, supply accurate application and website information. The submitted HingadTyre application uses [the project URL](https://github.com/hingadtyre/TallyIntegration). The local dashboard address is not a public website.
-4. Obtain usable **Application ID** and **Application Secret** from Flipkart when access is approved. These are separate from the seller password. Enter them directly into Stockbridge; do not send them to support.
+2. If you need to register, supply the application details for your business and the public website requested in Seller Hub. Check the status there. If it shows **Pending**, wait for Flipkart approval.
+3. Obtain usable **Application ID** and **Application Secret** from Flipkart when access is approved. These are separate from the seller password. Enter them directly into Stockbridge; do not send them to support.
 
 ## Manage marketplace accounts and listings
 
@@ -213,7 +212,7 @@ Changing the backup folder affects future backups immediately. It does not move 
 
 Flipkart application credentials are not included in these database backups. Restoring the stock database in the same workspace keeps its existing protected credential file. Access tokens are held only while Stockbridge is running. After restarting, check the intended account and wait for a successful listing refresh, or choose **Refresh listings** yourself. A moved/new workspace, another computer or another Windows login needs credential setup again. Do not send protected credential files as a support attachment or try to copy them to another Windows login. After recovery, seller bindings remain but listing freshness is cleared; refresh each account before Apply or Check result. Unfinished attempts remain uncertain and are not resent automatically.
 
-If you need to recover a backup, stop normal work and contact the provider. The pilot has no customer-facing import/restore button. Support can inspect a verified pilot backup and, with your approval, restore it while the app is stopped. This keeps a safety copy and your current connection settings, then requires fresh stock reads. Do not overwrite the active database yourself or assume that an old backup can safely resume marketplace policies. The [provider recovery procedure](../CONTRIBUTING.md#restore-a-pilot-backup-support-only) is for supervised support; it does not restore Tally accounting data or change Flipkart.
+If you need to recover a backup, stop normal work and contact the provider. The pilot has no customer-facing import/restore button. Support can inspect a verified pilot backup and, with your approval, restore it while the app is stopped. This keeps a safety copy and your current connection settings, then requires fresh stock reads. Do not overwrite the active database yourself or assume that an old backup can safely resume marketplace policies. Your provider can guide you through recovery. A Stockbridge recovery restores the local inventory workspace. Your Tally accounting records and the quantities on Flipkart remain separate.
 
 Restore also keeps seller identities and unresolved marketplace updates recorded after the chosen backup. It refuses a backup that conflicts with a known seller, weakens a current hold or sales allowance, or loses a paused destination. Support must reconcile that conflict before replacement; the existing workspace stays intact.
 
@@ -258,7 +257,7 @@ Application files and customer data are separate. Extracting a new application v
 
 A developer running a source checkout normally uses that checkout's **.data** folder instead. That is a different workspace. Installing this pilot does not automatically copy an earlier developer/pilot database into the new location; have the provider plan any transfer.
 
-The package contains no HingadTyre data, credentials or preconfigured mappings. Cloning the source repository or downloading another ZIP does not restore customer records. A remote/cloud database is not needed for this local persistence. Moving inventory processing to a server would require a separate, planned migration.
+A fresh installation starts with an empty live inventory workspace. Your company records, credentials and mappings are stored under your Windows login. Keep your verified backups when moving to a new computer.
 
 ## 10. Updates, recovery and removing the pilot
 
@@ -290,7 +289,7 @@ An application backup is not a rollback of Tally bills or marketplace orders. Pr
 | New Tally item is missing                         | Confirm it belongs to the selected company and use Refresh Tally after saving it in Tally.                                                                                                                                                              |
 | No Flipkart listings or a stock update is blocked | Open the intended account and choose **Refresh listings**. Check Tally freshness and the listing's **Set of** cell. Open **Review changes** for the reason on each blocked row.                                                                         |
 | API credentials are rejected or need attention    | Check the application belongs to the intended seller, its access is active, and the ID/secret were copied correctly. Use Check connection or Update credentials on the intended account tile, then Refresh listings. Do not send the secret to support. |
-| Self Access registration asks for a website       | Supply accurate seller/application website information. The submitted HingadTyre application uses the Stockbridge project URL; Pending was observed on 2026-11-08, not checked currently. The local dashboard address is not a public website.          |
+| Self Access registration asks for a website       | Enter the public website for your own business or application. Ask your provider if you need help identifying the correct address.                                                                                                                      |
 | Backup cannot be saved                            | Check that the saved folder/drive exists, is writable and has free space. Keep the live database and any previous verified backups.                                                                                                                     |
 | A new Windows login shows no data                 | Stop and check the original Windows account and data folder with support before creating a second workspace.                                                                                                                                            |
 
@@ -302,6 +301,4 @@ Live stock publication requires the seller's permission to test a real SKU and l
 
 The pilot uses company-wide balances. Per-godown stock allocation, live order tracking for finite sales allowances and production recovery still need further work. An existing hold or sales allowance needs an explicit policy change before a conflicting direct edit can be applied.
 
-Each seller using Self Access registers its own application and supplies its credentials locally. HingadTyre's own-account arrangement does not establish distribution eligibility for independent sellers. The public registration guide does not establish a registration fee. A provider-managed route would require its own registration and hosted seller consent. See [the access decision](adr/0004-seller-owned-flipkart-self-access.md) and [Flipkart's registration instructions](https://seller.flipkart.com/api-docs/FMSAPI.html#application-registration).
-
-All remaining application, provider and customer acceptance checks are tracked in [First-customer release readiness](release-readiness.md). The provider's technical workflow is in [CONTRIBUTING](../CONTRIBUTING.md); it is not required reading or a command checklist for the customer.
+Each seller using Self Access registers its own application and supplies its credentials locally. Ask your provider to confirm the access arrangement for your account before starting the pilot. See [Flipkart's registration instructions](https://seller.flipkart.com/api-docs/FMSAPI.html#application-registration).

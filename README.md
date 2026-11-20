@@ -6,7 +6,7 @@ This is the development project, not the customer's Tally machine. Use sample da
 
 A fresh live workspace has no company or seller account in its selectors. Tally company names come from discovery; seller names appear after adding an account. Unused placeholder seller records from older versions are hidden without deleting saved names or history. Existing accounts with listings remain visible. Demo mode uses generic, clearly marked sample data.
 
-**The complete first-customer synchronization release is not ready.** The [release-readiness audit](docs/release-readiness.md) separates missing application workflows, provider prerequisites and customer-machine verification.
+**Use this build for a supervised seller pilot.** Stockbridge verified and reversed a direct stock update on one live Flipkart location. Enabling routine automatic sync still requires checking the seller's own Tally balances, ledger entries and unbilled orders. The [release-readiness audit](docs/release-readiness.md) records the remaining product and distribution requirements.
 
 ## Current milestone
 
@@ -89,7 +89,7 @@ Tests exercise real loopback HTTP transport with Tally-shaped fixtures, stock-po
 - `src/desktop`: packaged Windows start/status/stop orchestration; verifies the responding instance before sending a private stop token.
 - `src/shared`: API contracts.
 
-SQLite schema version 8 keeps each company�s stock-check status and the time of its last successful read. It also retains pending order-triggered stock checks and evidence of whether a stock request finished or was never sent. Upgrades preserve existing order history, billing rules, manual matches and inventory settings. After an offline restore, reconcile earlier sales and confirm a starting date again before increasing calculated stock.
+SQLite schema version 8 keeps each company's stock-check status and the time of its last successful read. It also retains pending order-triggered stock checks and evidence of whether a stock request finished or was never sent. Upgrades preserve existing order history, billing rules, manual matches and inventory settings. After an offline restore, reconcile earlier sales and confirm a starting date again before increasing calculated stock.
 
 For an uncertain stock update, **Check result** reads current stock. When Stockbridge has proof that the previous request finished or was never sent, the seller can review fresh Flipkart stock and calculated availability, then approve recovery. Equal quantities close the review without a write. A lost submission reply with no proof of completion keeps the listing blocked. [Customer setup](docs/customer-setup.md)
 
@@ -107,4 +107,4 @@ Self Access supports separate credential sets per added account. Demo mode uses 
 
 Activity history is retained for 90 days. Diagnostics include request references and sanitized internal error causes/call sites, and rotate at 10 MB with one previous file. Configurable time-based retention and background-run correlation are pending. Logs omit source XML, credentials and customer order payloads. `.data`, `.tools`, `.cache`, `releases`, dependencies and build outputs are ignored by Git. The private runtime-control file is separate from SQLite backups and must not be shared in support bundles.
 
-Customer acceptance still requires comparing real Tally balances and validating a specifically authorized write and readback for the intended seller, SKU and location. Selected godown balances, positive order-tracked allowances, verified zero-before-unlink, scheduled backups and full production recovery remain open. See the [release gates](docs/release-readiness.md).
+Customer acceptance still requires comparing real Tally balances and matched bills, then verifying a Tally-calculated update on an approved seller listing. A direct marketplace stock update and restoration were verified on 20 November 2026. Selected godown balances, positive order-tracked allowances, verified zero-before-unlink, scheduled backups and full production recovery remain open. See the [release gates](docs/release-readiness.md).

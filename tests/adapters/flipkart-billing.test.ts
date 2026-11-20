@@ -113,6 +113,8 @@ test('reads the review window across four dispatch partitions and pages, retaini
       assert.equal(options?.method, 'POST');
       const body = JSON.parse(String(options.body));
       assert.deepEqual(body.filter.serviceProfiles, ['NON_FBF']);
+      if (body.filter.type === 'postDispatch')
+        assert.deepEqual(body.filter.states, ['PICKUP_COMPLETE', 'SHIPPED', 'DELIVERED']);
       assert.deepEqual(body.filter.orderDate, { from, to });
       assert.equal(body.pagination.pageSize, 20);
       partitions.push(body.filter.type + '-' + body.filter.shipmentTypes[0]);
@@ -253,6 +255,7 @@ test('stock history includes hold, forward, return and cancellation searches for
   const rows = [
     { ...baseItem, orderItemId: 'sold' },
     { ...baseItem, orderItemId: 'shipped', status: 'SHIPPED' },
+    { ...baseItem, orderItemId: 'completed', status: 'COMPLETED' },
     { ...baseItem, orderItemId: 'pending-return', status: 'RETURN_REQUESTED' },
     { ...baseItem, orderItemId: 'returned', status: 'RETURNED' },
     { ...baseItem, orderItemId: 'rto', courierReturn: true },
@@ -280,7 +283,7 @@ test('stock history includes hold, forward, return and cancellation searches for
       if (filter.type === 'preDispatch' && filter.hold)
         return found([{ ...baseItem, orderItemId: 'held' }], true);
       if (filter.type === 'postDispatch') {
-        assert.ok(filter.states.includes('RETURN_REQUESTED') && filter.states.includes('RETURNED'));
+        assert.deepEqual(filter.states, ['PICKUP_COMPLETE', 'SHIPPED', 'DELIVERED']);
         return Response.json({
           hasMore: true,
           nextPageUrl: '?next_token=stock-page-2',
@@ -331,7 +334,15 @@ test('stock history includes hold, forward, return and cancellation searches for
     'rto-addon',
   ])
     assert.equal(byId.get(id)?.stockReconciliationRequired, true, id);
-  for (const id of ['line-a', 'shipped', 'pending-return', 'returned', 'rto', 'rto-addon'])
+  for (const id of [
+    'line-a',
+    'shipped',
+    'completed',
+    'pending-return',
+    'returned',
+    'rto',
+    'rto-addon',
+  ])
     assert.equal(byId.get(id)?.stockDispatchObserved, true, id);
   assert.equal(byId.get('buyerCancellation')?.stockDisposition, 'cancelled');
   assert.equal(byId.get('marketplaceCancellation')?.stockDisposition, 'cancelled');
@@ -352,6 +363,125 @@ test('stock history includes hold, forward, return and cancellation searches for
     assert.equal(byId.get(id)?.stockDisposition, 'uncertain', id);
     assert.equal(byId.get(id)?.eligibilityUnverified, true, id);
   }
+});
+
+test('recovers a missing location only from order details for the exact shipment and its search lines', async () => {
+  const cancelledItem = { ...baseItem, status: 'CANCELLED', cancellationDate: to };
+  // The observed details response omitted the cancellation date and courier-return flag.
+  const detailItem = { ...baseItem, status: 'CANCELLED', courierReturn: undefined };
+  const details: Record<string, unknown> = { ...shipment, orderItems: [detailItem] };
+  let lookups = 0;
+  const client = new FlipkartBillingClient({
+    request: async (input, options) => {
+      if (options?.method === 'GET') {
+        assert.equal(
+          String(input),
+          'https://api.flipkart.net/sellers/v3/shipments?shipmentIds=shipment-a',
+        );
+        lookups++;
+        return Response.json({ shipments: [details] });
+      }
+      const filter = JSON.parse(String(options?.body)).filter;
+      if (
+        filter.cancellationType !== 'marketplaceCancellation' ||
+        filter.shipmentTypes[0] !== 'NORMAL'
+      )
+        return empty();
+      return Response.json({
+        hasMore: false,
+        shipments: [
+          {
+            ...shipment,
+            locationId: undefined,
+            orderItems: [cancelledItem],
+          },
+        ],
+      });
+    },
+  });
+  const [order] = await client.readStockOrders(token, from, to);
+  assert.equal(lookups, 1);
+  assert.equal(order.locationId, 'location-a');
+  assert.equal(order.stockDisposition, 'cancelled');
+  details.orderItems = [{ orderItemId: baseItem.orderItemId }];
+  assert.equal((await client.readStockOrders(token, from, to))[0].stockDisposition, 'cancelled');
+  for (const status of ['RETURN_REQUESTED', 'RETURNED']) {
+    details.orderItems = [{ ...detailItem, status }];
+    const [held] = await client.readStockOrders(token, from, to);
+    assert.equal(held.stockDisposition, 'uncertain');
+    assert.equal(held.stockReconciliationRequired, true);
+    assert.equal(held.stockDispatchObserved, true);
+    assert.equal(held.eligibilityUnverified, true);
+    assert.equal(held.stockReturnConflict, true);
+    assert.equal(held.stockShipmentId, shipment.shipmentId);
+  }
+  for (const conflict of [
+    { sku: 'other' },
+    { listingId: 'other' },
+    { orderId: 'other' },
+    { quantity: 4 },
+    { orderDate: to },
+    { sku: undefined },
+    { quantity: undefined },
+    { orderDate: undefined },
+    { listingId: undefined },
+    { orderId: undefined },
+    { serviceProfile: undefined },
+    { is_replacement: undefined },
+  ]) {
+    details.orderItems = [{ ...detailItem, status: 'RETURN_REQUESTED', ...conflict }];
+    await assert.rejects(client.readStockOrders(token, from, to), /incomplete or inconsistent/);
+  }
+  details.orderItems = [{ ...detailItem, status: 'RETURN_REQUESTED' }];
+  for (const field of ['shipmentType', 'hold', 'locationId']) {
+    const saved = details[field];
+    delete details[field];
+    await assert.rejects(client.readStockOrders(token, from, to), /incomplete or inconsistent/);
+    details[field] = saved;
+  }
+  details.orderItems = [
+    {
+      ...detailItem,
+      serviceProfile: 'NON_FBF',
+      orderDate: '2026-11-03T17:30:00+05:30',
+    },
+  ];
+  assert.equal((await client.readStockOrders(token, from, to))[0].stockDisposition, 'cancelled');
+  for (const conflict of [
+    { status: 'SHIPPED' },
+    { courierReturn: true },
+    { add_ons: [{ is_rto: true }] },
+    { isReplacement: true },
+    { orderId: 'different-order' },
+    { listingId: 'different-listing' },
+    { sku: 'different-sku' },
+    { quantity: 3 },
+    { orderDate: to },
+    { cancellationDate: from },
+    { serviceProfile: 'FBF' },
+  ]) {
+    details.orderItems = [{ ...detailItem, ...conflict }];
+    await assert.rejects(
+      client.readStockOrders(token, from, to),
+      /incomplete or inconsistent/,
+      JSON.stringify(conflict),
+    );
+  }
+  details.orderItems = [detailItem];
+  details.hold = true;
+  await assert.rejects(client.readStockOrders(token, from, to), /incomplete or inconsistent/);
+  details.hold = false;
+  details.shipmentType = 'SELF';
+  await assert.rejects(client.readStockOrders(token, from, to), /incomplete or inconsistent/);
+  details.shipmentType = shipment.shipmentType;
+  details.orderItems = [detailItem, detailItem];
+  await assert.rejects(client.readStockOrders(token, from, to), /incomplete or inconsistent/);
+  details.orderItems = [detailItem];
+  details.shipmentId = 'other-shipment';
+  await assert.rejects(client.readStockOrders(token, from, to), /incomplete or inconsistent/);
+  details.shipmentId = shipment.shipmentId;
+  details.orderItems = [{ ...baseItem, orderItemId: 'other-line' }];
+  await assert.rejects(client.readStockOrders(token, from, to), /incomplete or inconsistent/);
 });
 
 test('stock history spans the fixed start in overlapping bounded windows and counts a boundary line once', async () => {

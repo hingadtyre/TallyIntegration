@@ -20,12 +20,10 @@ export function ConnectionsScreen({
     <>
       <div className="page-heading">
         <div>
-          <div className="eyebrow">YOUR DATA SOURCES</div>
           <h1>Connections</h1>
-          <p>Keep the company and seller account behind every quantity explicit.</p>
+          <p>Check Tally on this computer or open a Flipkart seller account.</p>
         </div>
       </div>
-      <CustomerSetup onOpenSettings={onOpenSettings} />
       <div className="connection-grid">
         <section className="panel connection-card">
           <div className="connection-card-top">
@@ -44,6 +42,19 @@ export function ConnectionsScreen({
           </div>
           <h2>Tally</h2>
           <p>Read stock items from the companies loaded on this computer.</p>
+          <div className="connection-actions">
+            <button
+              className="button primary"
+              disabled={!!busy}
+              onClick={() => void refreshTally()}
+            >
+              <Icon name="refresh" />
+              Check & discover companies
+            </button>
+            <button className="text-button" onClick={onOpenSettings}>
+              Open Tally settings
+            </button>
+          </div>
           <dl className="connection-details">
             <div>
               <dt>Address</dt>
@@ -78,14 +89,6 @@ export function ConnectionsScreen({
               ))}
             </dl>
           )}
-          <button
-            className="button secondary"
-            disabled={!!busy}
-            onClick={() => void refreshTally()}
-          >
-            <Icon name="refresh" />
-            Check & discover companies
-          </button>
         </section>
         <section className="panel connection-card">
           <div className="service-logo flipkart-logo">F</div>
@@ -99,6 +102,7 @@ export function ConnectionsScreen({
           </button>
         </section>
       </div>
+      <CustomerSetup onOpenSettings={onOpenSettings} />
       <section className="panel setup-panel">
         <h2>If Tally does not connect</h2>
         <ol>

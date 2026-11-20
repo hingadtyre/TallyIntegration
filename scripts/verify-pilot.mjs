@@ -19,6 +19,7 @@ import { basename, dirname, isAbsolute, join, posix, resolve, sep } from 'node:p
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { JSDOM } from 'jsdom';
 
 const execute = promisify(execFile);
 const { fetch, AbortSignal } = globalThis;
@@ -369,6 +370,72 @@ async function verifyPilot(zip) {
       }
       assert.ok(!existsSync(join(packageRoot, 'runtime/node_modules')));
       return { files: files.length, productionDependencies: dependencyPaths.size };
+    });
+    await check('customer_guide_and_live_publication_notice', async () => {
+      assert.match(manifest.purpose, /live stock or prices/i);
+      assert.match(manifest.purpose, /live stock automatically/i);
+      const expectedRoot = [
+        'dist',
+        'node_modules',
+        'runtime',
+        'scripts',
+        'package.json',
+        'package-lock.json',
+        'manifest.json',
+        'Read Me.html',
+        'Start Stockbridge.cmd',
+        'Stop Stockbridge.cmd',
+        'Stockbridge Status.cmd',
+        'Open Data Folder.cmd',
+      ];
+      assert.deepEqual(
+        readdirSync(packageRoot).sort(),
+        expectedRoot.sort(),
+        'Only runtime files and the customer guide belong in the ZIP.',
+      );
+      for (const { path } of manifest.files) {
+        assert.doesNotMatch(
+          path,
+          /(?:^|\/)(?:marketplace-credentials|backups)(?:\/|$)|\.(?:sqlite|db|ndjson|xlsx|csv|pem|pfx)$/i,
+        );
+      }
+      const guide = new JSDOM(readFileSync(join(packageRoot, 'Read Me.html'), 'utf8')).window
+        .document;
+      assert.match(guide.querySelector('h1')?.textContent ?? '', /Stockbridge/i);
+      assert.match(guide.body.textContent, /approved actions can change stock or prices/i);
+      assert.doesNotMatch(
+        guide.body.textContent,
+        /HingadTyre|marketplace publication is unavailable/i,
+      );
+      assert.doesNotMatch(
+        guide.body.textContent,
+        /\uFFFD/u,
+        'The customer guide has an invalid character.',
+      );
+      const links = [...guide.querySelectorAll('a[href]')];
+      assert.ok(links.length > 0, 'The guide should link to its sections and public help.');
+      for (const link of links) {
+        const href = link.getAttribute('href');
+        if (href.startsWith('#')) {
+          assert.ok(
+            guide.getElementById(decodeURIComponent(href.slice(1))),
+            `Missing guide section: ${href}`,
+          );
+        } else {
+          const url = new globalThis.URL(href);
+          assert.ok(
+            (url.protocol === 'http:' && url.hostname === '127.0.0.1') ||
+              (url.protocol === 'https:' &&
+                ['help.tallysolutions.com', 'seller.flipkart.com'].includes(url.hostname)),
+            `Unexpected customer guide link: ${href}`,
+          );
+        }
+      }
+      for (const image of guide.querySelectorAll('img[src]')) {
+        const source = decodeURIComponent(image.getAttribute('src'));
+        assert.ok(existsSync(containedPath(packageRoot, source)), `Missing guide image: ${source}`);
+      }
+      return { guideLinks: links.length };
     });
     node = join(packageRoot, 'runtime/node.exe');
     launcher = join(packageRoot, 'scripts/windows-launcher.mjs');

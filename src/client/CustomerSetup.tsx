@@ -26,9 +26,6 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
             then choose Check & discover companies. If the check fails, follow the message and try
             again. Previously read stock stays visible.
           </span>
-          <button className="text-button" onClick={onOpenSettings}>
-            Open Tally settings
-          </button>
         </li>
         <li>
           <strong>Compare your stock with Tally.</strong>

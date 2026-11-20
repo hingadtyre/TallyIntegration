@@ -131,7 +131,7 @@ export class StockRefresh {
         state.connection = {
           tally: 'offline',
           message:
-            'Could not discover Tally companies. Previous stock is shown until Tally can be checked again.',
+            'Could not discover Tally companies. Open Tally, load your company and check the connection address. Any previously saved stock is retained.',
           lastChecked: new Date().toISOString(),
           nextPoll: null,
         };

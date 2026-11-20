@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
 import type { FlipkartBillingOrder } from '../../src/adapters/flipkart-billing.js';
-import type { TallySalesBill } from '../../src/adapters/tally.js';
+import type { TallySalesBill, TallyStockItem } from '../../src/adapters/tally.js';
 import { saleDay } from '../../src/server/billing-matcher.js';
 import { StockAvailabilityService } from '../../src/server/stock-availability.js';
 import { marketplaceData } from '../support/marketplace-fixture.js';
@@ -18,6 +18,7 @@ function setup(t: TestContext, sellerPacks = [1]) {
   let physical = 6;
   const dates: (string | undefined)[] = [];
   const source = { unavailable: '', revoked: '', dates, stockRead: () => physical };
+  const otherStock: TallyStockItem[] = [];
   f.store.updateMarketplace((market, state) => {
     state.companies.push({
       id: companyId,
@@ -110,7 +111,10 @@ function setup(t: TestContext, sellerPacks = [1]) {
           },
           async readStock(_company, asOf) {
             dates.push(asOf);
-            return [{ externalId: 'tyre', name: 'Tyre', unit: 'ea', physical: source.stockRead() }];
+            return [
+              { externalId: 'tyre', name: 'Tyre', unit: 'ea', physical: source.stockRead() },
+              ...otherStock,
+            ];
           },
           async readSalesBills(_company, ledger) {
             return structuredClone(bills.get(ledger) ?? []);
@@ -137,10 +141,11 @@ function setup(t: TestContext, sellerPacks = [1]) {
     orders,
     bills,
     source,
+    otherStock,
     companyId,
     itemId,
     confirm,
-    available: (batch?: object) => service.forItem(companyId, itemId, batch),
+    available: (batch?: object, target = itemId) => service.forItem(companyId, target, batch),
     scan: () => service.checkOrders(companyId, {}),
     restoreService() {
       f.reopen();
@@ -248,6 +253,63 @@ test('a later normal forward status cannot activate stock for a previously obser
   assert.ok(s.f.store.read().listings.every((l) => !l.orderSyncPending));
   await assert.rejects(s.available(), /unresolved sale, return/);
 });
+
+for (const cleanFirst of [false, true]) {
+  test(`an identified cancellation/return conflict stays with its item when a clean cancellation is seen ${cleanFirst ? 'first' : 'later'}`, async (t) => {
+    const s = setup(t);
+    const wheelId = 'local-wheel';
+    s.f.store.updateMarketplace((market, state) => {
+      state.items.push({
+        ...state.items[0],
+        id: wheelId,
+        externalId: 'wheel',
+        name: 'Wheel',
+        physical: 8,
+      });
+      market.listings.push({
+        ...market.listings[0],
+        id: 'wheel-listing',
+        productId: 'wheel-product',
+        sku: 'WHEEL',
+      });
+      state.listings.push({ ...state.listings[0], id: 'map-wheel', itemId: wheelId, sku: 'WHEEL' });
+    });
+    s.otherStock.push({ externalId: 'wheel', name: 'Wheel', unit: 'ea', physical: 8 });
+    s.confirm();
+    const sale = { ...s.orders.get('seller-0')![0], stockShipmentId: 'shipment-a' };
+    const cancelled = { ...sale, stockDisposition: 'cancelled' as const };
+    const conflict: FlipkartBillingOrder = {
+      ...sale,
+      stockReturnConflict: true,
+      stockReconciliationRequired: true,
+      stockDispatchObserved: true,
+      stockDisposition: 'uncertain',
+      eligibilityUnverified: true,
+    };
+    if (cleanFirst) {
+      s.orders.set('seller-0', [cancelled]);
+      assert.equal((await s.available()).available, 6);
+    }
+    for (const observations of [[conflict], [cancelled], []]) {
+      s.orders.set('seller-0', observations);
+      if (!observations.length) s.restoreService();
+      const batch = {};
+      await assert.rejects(s.available(batch), /unresolved sale, return/);
+      const other = await s.available(batch, wheelId);
+      assert.equal(other.available, 8);
+      other.verify();
+    }
+    if (cleanFirst) {
+      s.f.store.update((state) => {
+        state.listings[0].itemId = wheelId;
+      });
+      await assert.rejects(s.available({}, wheelId), /coverage/);
+    } else {
+      s.orders.set('seller-0', [{ ...cancelled, quantity: 2 }]);
+      await assert.rejects(s.available({}, wheelId), /recorded order changed/);
+    }
+  });
+}
 
 test('uncertain returns, ambiguous billing and unmapped orders stop a calculated increase', async (t) => {
   const s = setup(t);
