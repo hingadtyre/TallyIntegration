@@ -63,6 +63,7 @@ function mergeObservations(
             if (unitChanged) {
               listing.verified = false;
               listing.syncPendingItemVersion = null;
+              listing.orderSyncPending = null;
               listing.version++;
               listing.packEvidence = 'Tally base unit changed. Review the mapping and Set of.';
             } else if (

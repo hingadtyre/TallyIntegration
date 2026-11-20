@@ -134,7 +134,9 @@ With **Set of 2** and the tyre minimum switched off, 13 physical units give six 
 
 ### Use automatic stock updates
 
-Choose **Enable automatic updates** in Inventory for the company. The next successful Tally check processes eligible mappings across **all seller accounts for that company**. Subsequent sales and purchases that change the item's balance trigger a new calculation at the next successful check. **Refresh Tally** requests a check now. A fresh installation starts with automatic updates off. The same workspace restores the previous setting on restart.
+Choose **Enable automatic updates** in Inventory for the company. A Tally stock change recalculates eligible listings across all its participating seller accounts. With order coverage set up, Stockbridge also checks for new Flipkart sales on the **Marketplace stock** schedule. If two tyres supply both singles and pairs, selling one single can set the pair listing to zero as soon as Stockbridge verifies the sale. An order-triggered check only lowers stock. Repeated checks and billing the same sale count it once. **Refresh Tally** requests a check now.
+
+Before Stockbridge can publish a calculated quantity above zero to Flipkart, [set the starting stock for automatic updates](#set-the-starting-stock-for-automatic-updates). For a reviewed calculation, a changed available quantity blocks the old proposal. Automatic updates can publish the recalculated quantity. A one-time stock edit publishes the quantity you enter under the listing’s existing policy.
 
 To stop automatic updates for a company, choose **Turn off automatic updates**. To pause one destination, choose **Pause automation** on its row. **Paused · resume** resumes it under its current policy.
 
@@ -147,10 +149,34 @@ On each successful catalog refresh, Stockbridge compares the latest shipping pac
 3. For Tally-managed stock, choose **Update once** to preserve its automation setting, or **Pause Tally sync and update** to save Pause while applying. A paused listing stays paused under Update once. Pause preserves its hold or allowance; it stops future automatic stock writes, including zero corrections, until resumed.
 4. A **Kept out of stock** hold blocks positive stock. Live **Limited sales** also blocks positive stock because order reconciliation is not yet implemented. To remove the constraint deliberately, select **Change stock policy**, read the effect and choose **Confirm automatic policy**. This removes that destination's hold/allowance but retains Pause and does not send stock. Review the quantity and use Apply separately. Keeping the policy permits only edits that satisfy it.
 5. Choose **Apply** for this editor when ready to make the real change. Typing or cancelling before Apply sends nothing. Price edits preserve the companion price from a fresh read and leave stock automation unchanged. If Flipkart changed since the editor opened, refresh and review the current value.
-6. Wait for **Updated**, which means a fresh read matched the edited value. **Failed** preserves the entered value for correction. **Result uncertain** means the update may have reached Flipkart; use **Check result** rather than resending it. Other edits for that listing are blocked while an earlier result is unresolved. A different observed value cannot prove that the earlier request failed, so repeated checks may remain uncertain. Contact support in that case; this pilot has no force-clear or automatic replay action. Closing an editor after Apply does not cancel a submitted request.
-7. Use **Open in Flipkart** for settlement. Stockbridge does not calculate or edit settlement, and does not present effective selling price as settlement.
+6. Wait for **Updated**. If a stock update shows **Result uncertain**, use **Check result** to read Flipkart again. When Stockbridge knows that the previous request completed or was never sent, choose **Review current stock**. Recovery needs a verified Inventory mapping and confirmed order coverage for that Tally company. Compare the current Flipkart quantity with the quantity calculated from Tally and covered orders. **Approve and keep** closes the review without a write. **Approve and send** requests the new quantity. An expired review or changed figures require a fresh review. The earlier attempt stays in history.
+7. If the submission reply was lost and Stockbridge has no evidence that the request finished, the listing remains blocked. For example, seeing four tyres after requesting five can mean that another tyre sold. Contact support if the uncertainty persists. Elapsed time and the listing quantity alone cannot establish that an old request has finished.
+8. Use **Open in Flipkart** for settlement. Stockbridge does not calculate or edit settlement, and does not present effective selling price as settlement.
 
 Before first live publication, arrange a controlled, seller-authorized stock update with the provider and confirm its readback. After a restart, unfinished attempts remain visible as uncertain and require a check before retrying.
+
+### Match recent Flipkart orders to Tally sales bills
+
+An order exists when Flipkart reports it. A matching sales bill shows that you recorded that order in Tally. Set up matching separately for each Tally company and Flipkart seller account.
+
+1. Open **Order matching**, select your Tally company at the top and choose the **Flipkart seller account**. Load the company in Tally and verify the account and its listings before the first live preview.
+2. Select the dedicated Flipkart ledger used for the party on the sales bill or for sales on the bill’s stock lines. Choose the bill field where you enter the Flipkart reference and the type of reference you enter. Choose **I match bills manually** if you keep the reference elsewhere or omit it.
+3. Choose **Today in India**, **Last 7 days** or **Last 30 days**, then **Preview matches**. The dates use the Indian calendar. Check a known Flipkart order item against its Tally bill, mapped item and units. **Confirm billing setup** saves your choices. An empty preview can still be saved for future use.
+4. In later sessions choose **Refresh preview** to check the period again. **Show unresolved only** lists order items needing attention. When several bills are possible, verify the order, item, bill number and date before choosing **Confirm bill match**. **Release manual match** removes your confirmation if you chose the wrong bill.
+
+**Available stock preview** shows the selected seller and period. Automatic stock updates use the company’s confirmed start date and check all covered sellers.
+
+### Set the starting stock for automatic updates
+
+1. In **Order matching**, confirm bill matching for each Flipkart seller account that uses this company’s stock. Map every shared-stock listing and location to its Tally item in **Inventory**.
+2. Under **Order coverage for automatic stock updates**, choose **Set starting stock**. Select an Indian calendar date within the last 30 days. Stockbridge starts counting orders at midnight on that date. Every earlier Flipkart sale must already be recorded in Tally. For example, if you still have an unbilled sale from Monday, choose Monday or an earlier day.
+3. Confirm that only seller-fulfilled standard and self-ship orders draw on this stock and that every listing’s **Set of** has matched the Tally units consumed by a sale since the chosen date. If Smart, Express or Fulfilment by Flipkart orders use the same stock, leave the setup unconfirmed. Choose **Confirm starting stock** once you have checked the statements.
+
+For a single-tyre listing with the tyre minimum switched off, 4 in Tally and one unbilled order leave 3 available. Receiving two more tyres brings Tally to 6 and available stock to 5. When you bill that same sale, Tally falls to 5 and Stockbridge releases the one reserved tyre. Available stock stays at 5. Pack sizes and any selected tyre minimum apply after the deduction.
+
+Automatic increases wait when the setup or order evidence is incomplete. A restart preserves the company’s start date and observed orders. After a database restore, reconcile the company’s earlier sales and set its starting stock again. If your stock mappings or seller setup change, check the affected orders before using **Review starting stock**. Only move the date forward once every earlier sale has been accounted for in Tally.
+
+For a large order history, a full check may repeatedly take longer than the two-minute freshness limit. Reconcile the older sales against Tally, then choose **Review starting stock** and confirm a more recent start date. Keep any unbilled sale within the tracked period.
 
 ## 6. Understand refresh and background checks
 
@@ -159,7 +185,7 @@ Before first live publication, arrange a controlled, seller-authorized stock upd
 - **Refresh Tally** requests a check now for the selected company. **Connections > Check & discover companies** discovers and reads the loaded companies.
 - Newly created stock items appear after a successful read. Their records are then saved in the local database; the list is not permanently fixed at installation.
 - The dashboard periodically reads the saved state too. Allow a little time for an automatic background result to appear, or use the refresh action.
-- **Settings > Listing metadata** sets the interval for refreshing previously imported accounts, including shipping package counts and observed listing stock. Stockbridge also checks those accounts on startup. **Marketplaces > Refresh listings** requests a fresh catalog now. The separate **Marketplace stock** interval is reserved for a future independent stock check.
+- **Settings > Marketplace stock** controls how often Stockbridge checks participating sellers for new Flipkart orders. **Listing metadata** controls the separate refresh of package counts and listing details. **Marketplaces > Refresh listings** requests a catalogue refresh now.
 
 Tally must be open with the relevant company loaded for fresh stock. Turning off the PC, sleeping it, signing out, closing Tally or stopping Stockbridge interrupts some or all of these checks. A restart of Windows does not automatically start this pilot; follow the daily startup steps below.
 

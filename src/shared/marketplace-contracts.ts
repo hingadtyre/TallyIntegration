@@ -78,7 +78,9 @@ export interface MarketplaceChange {
   listingId: string;
   sku: string;
   edit: MarketplaceEdit;
-  state: 'pending' | 'sending' | 'checking' | 'confirmed' | 'failed' | 'uncertain';
+  state: 'pending' | 'sending' | 'checking' | 'confirmed' | 'failed' | 'uncertain' | 'reconciled';
+  /** Durable proof about this particular stock request, independent of observed quantity. */
+  stockRequestFinality?: 'not-sent' | 'completed';
   message: string;
   createdAt: string;
   updatedAt: string;

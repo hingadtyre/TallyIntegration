@@ -118,7 +118,7 @@ async function runCommand(
     case '/api/refresh':
       return service.refresh(input.companyId);
     case '/api/calculate':
-      return service.calculate(input.companyId, input.listingIds);
+      return service.calculateAvailable(input.companyId, input.listingIds);
     case '/api/zero':
       return service.calculate(input.companyId, input.listingIds, true);
     case '/api/proposals':
@@ -222,6 +222,11 @@ export function createApp(
           return sendJson(response, 200, { stopping: true, instanceId: runtime.health.instanceId });
         }
         const input = await readJsonObject(request);
+        if (path.startsWith('/api/billing/')) {
+          if (!marketplaces)
+            throw new InputError('Order matching is unavailable in this runtime.', 503);
+          return sendJson(response, 200, await marketplaces.billingCommand(path, input));
+        }
         const result = path.startsWith('/api/marketplaces/')
           ? await runMarketplaceCommand(marketplaces!, path, input)
           : path.startsWith('/api/flipkart/')

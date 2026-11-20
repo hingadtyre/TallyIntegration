@@ -6,8 +6,17 @@ import { ActivityScreen } from './screens/ActivityScreen.js';
 import { ConnectionsScreen } from './screens/ConnectionsScreen.js';
 import { SettingsScreen } from './screens/SettingsScreen.js';
 import { MarketplacesScreen } from './screens/MarketplacesScreen.js';
+import { BillingScreen } from './screens/BillingScreen.js';
 
-type Screen = 'inventory' | 'marketplaces' | 'activity' | 'connections' | 'settings';
+const screens = {
+  inventory: 'Inventory',
+  marketplaces: 'Marketplaces',
+  billing: 'Order matching',
+  activity: 'Activity',
+  connections: 'Connections',
+  settings: 'Settings',
+};
+type Screen = keyof typeof screens;
 
 function isNarrowViewport() {
   return window.innerWidth <= 960;
@@ -53,7 +62,8 @@ export function App() {
     setScreen(value);
     if (isNarrowViewport()) setSidebarExpanded(false);
     workspace.dismissNotice();
-    if (screen === 'marketplaces' && value === 'inventory') void workspace.refreshSnapshot();
+    if (screen === 'marketplaces' && (value === 'inventory' || value === 'billing'))
+      void workspace.refreshSnapshot();
   }
   return (
     <div className={`app-shell ${sidebarExpanded ? 'sidebar-expanded' : 'sidebar-collapsed'}`}>
@@ -87,24 +97,22 @@ export function App() {
         </button>
         <div className="sidebar-label">WORKSPACE</div>
         <nav aria-label="Main navigation">
-          {(['inventory', 'marketplaces', 'activity', 'connections', 'settings'] as Screen[]).map(
-            (value) => (
-              <button
-                key={value}
-                className={`nav-item ${screen === value ? 'active' : ''}`}
-                aria-label={value[0].toUpperCase() + value.slice(1)}
-                title={value[0].toUpperCase() + value.slice(1)}
-                aria-current={screen === value ? 'page' : undefined}
-                onClick={() => selectScreen(value)}
-              >
-                <Icon name={value} />
-                <span>{value[0].toUpperCase() + value.slice(1)}</span>
-                {value === 'inventory' && companyItems.length > 0 && (
-                  <span className="nav-count">{companyItems.length}</span>
-                )}
-              </button>
-            ),
-          )}
+          {(Object.keys(screens) as Screen[]).map((value) => (
+            <button
+              key={value}
+              className={`nav-item ${screen === value ? 'active' : ''}`}
+              aria-label={screens[value]}
+              title={screens[value]}
+              aria-current={screen === value ? 'page' : undefined}
+              onClick={() => selectScreen(value)}
+            >
+              <Icon name={value} />
+              <span>{screens[value]}</span>
+              {value === 'inventory' && companyItems.length > 0 && (
+                <span className="nav-count">{companyItems.length}</span>
+              )}
+            </button>
+          ))}
         </nav>
         <div className="sidebar-bottom">
           <div className="local-indicator">
@@ -221,6 +229,15 @@ export function App() {
             <MarketplacesScreen
               mode={state.mode}
               onOpenInventory={() => selectScreen('inventory')}
+            />
+          )}
+          {screen === 'billing' && (
+            <BillingScreen
+              companyId={companyId}
+              accountId={accountId}
+              accounts={state.accounts}
+              onAccountChange={changeAccount}
+              onConnect={() => selectScreen(companyId ? 'marketplaces' : 'connections')}
             />
           )}
           <div hidden={screen !== 'connections'}>

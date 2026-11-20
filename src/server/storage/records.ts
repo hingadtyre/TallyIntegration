@@ -88,8 +88,9 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
           packageAvailable: pack.package_available === 1,
           packConfirmedAt: pack.pack_confirmed_at,
           sourceScope: pack.source_scope,
-          tyreFloor: pack.tyre_floor === 1,
+          ...(pack.tyre_floor != null && { tyreFloor: pack.tyre_floor === 1 }),
           syncPendingItemVersion: pack.sync_pending_item_version,
+          orderSyncPending: pack.order_sync_pending,
         }),
       };
     });
@@ -287,6 +288,7 @@ export function writeSnapshot(database: DatabaseSync, input: Snapshot): void {
           row.packConfirmedAt !== undefined ||
           row.packageAvailable !== undefined ||
           row.syncPendingItemVersion != null ||
+          row.orderSyncPending != null ||
           row.sourceScope != null ||
           row.tyreFloor !== undefined,
       )
@@ -298,8 +300,9 @@ export function writeSnapshot(database: DatabaseSync, input: Snapshot): void {
         package_available: Number(row.packageAvailable ?? false),
         pack_confirmed_at: row.packConfirmedAt ?? null,
         source_scope: row.sourceScope ?? null,
-        tyre_floor: Number(row.tyreFloor ?? false),
+        tyre_floor: row.tyreFloor === undefined ? null : Number(row.tyreFloor),
         sync_pending_item_version: row.syncPendingItemVersion ?? null,
+        order_sync_pending: row.orderSyncPending ?? null,
       })),
   );
   syncTable(

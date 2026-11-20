@@ -132,7 +132,8 @@ Keep stock policy (Auto, Limited sales, Kept out of stock) separate from publica
 
 - Explicit Pause blocks every automatic marketplace publication, including zero stock and enforcement of an active hold. Source observations, order ingestion, allowance consumption and warnings continue. Explicit reviewed manual publication is allowed. Resume refreshes inputs and applies the retained policy; it does not silently clear a sales allowance or hold.
 - Consume sales allowance on the first qualifying approved order for the exact listing, before Tally billing. Count each order-item quantity once and do not deduct the same sale from already reduced observed marketplace stock or from Tally.
-- Normal Auto listings are recalculated/published on relevant Tally stock changes or explicit publication. Marketplace-only differences are observed and reported without automatically refilling a sold listing while its Tally bill is pending.
+- Normal Auto listings recalculate on relevant Tally stock changes or explicit publication. A newly verified Flipkart sale also triggers decrease-only checks on all eligible listings sharing the Tally item before billing. Marketplace-only differences are observed and reported without automatically refilling a sold listing while its Tally bill is pending.
+- On 20 November 2026 the seller approved publishing the balance after subtracting covered unbilled Flipkart units. Apply the listing pack size and any selected tyre floor to that balance. The company-wide starting date and order evidence are described in [the approved architecture](architecture.md#matching-flipkart-orders-to-tally-sales-bills).
 - Limited sales and zero holds retain their enforcement rules when running. If explicitly paused, they do not publish automatically. Use these same terms, precedence and behaviors in parent/child rows, bulk actions, settings, jobs, logs, restart and restoration.
 
 ## Accepted implementation stack and proposed deployment details

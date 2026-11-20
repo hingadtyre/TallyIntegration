@@ -87,7 +87,8 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
                 <span>seconds</span>
               </div>
               <small>
-                Reserved for separate stock checks. Catalogue refresh also reads listing stock.
+                Checks Flipkart orders for companies with automatic updates and order coverage. A
+                new sale can reduce stock on other listings that share the item.
               </small>
             </label>
             <label className="field">

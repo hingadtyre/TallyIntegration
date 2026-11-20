@@ -75,6 +75,32 @@ test('Tally requests are exports and stock is scoped and checked against the sel
   assert.match(requests[1], /<METHOD>StockbridgeCompanyGuid/);
 });
 
+test('Tally closing stock uses the Indian book date and can stay on a fixed date across Indian midnight', async (t) => {
+  const dates: string[] = [];
+  const previousZone = process.env.TZ;
+  process.env.TZ = 'UTC';
+  t.after(() => {
+    if (previousZone === undefined) delete process.env.TZ;
+    else process.env.TZ = previousZone;
+  });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-20T18:29:59.000Z') });
+  await withServer(
+    (body, response) => {
+      if (body.includes('<TYPE>StockItem</TYPE>'))
+        dates.push(body.match(/<SVTODATE TYPE="Date">(\d{8})<\/SVTODATE>/u)?.[1] ?? '');
+      response.end(envelope(body.includes('<TYPE>StockItem</TYPE>') ? stockXml() : companyXml));
+    },
+    async (url) => {
+      const client = new TallyClient(url);
+      await client.readStock(company);
+      t.mock.timers.setTime(Date.parse('2026-11-20T18:30:01.000Z'));
+      await client.readStock(company);
+      await client.readStock(company, '2026-11-20');
+    },
+  );
+  assert.deepEqual(dates, ['20261120', '20261121', '20261120']);
+});
+
 test('stock reads retain distinct items and unsupported quantities remain unknown', async () => {
   const stockItems =
     stockXml('-3.5 nos') + stockXml('1 box = 4 nos').replace('stock-guid', 'compound-stock-guid');
@@ -288,5 +314,119 @@ test('UTF-16 with a BOM is decoded and oversized responses are rejected', async 
     async (url) => {
       await assert.rejects(new TallyClient(url).listCompanies(), /size limit/);
     },
+  );
+});
+
+const ledgerXml =
+  '<LEDGER NAME="Marketplace &amp; Co"><GUID>ledger-guid</GUID><STOCKBRIDGECOMPANYGUID>company-a-guid</STOCKBRIDGECOMPANYGUID></LEDGER>';
+const saleLine = (qty: string, allocation = 'Marketplace &amp; Co', extra = '') =>
+  `<ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>A tyre</STOCKITEMNAME><ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE><ACTUALQTY>${qty}</ACTUALQTY><BILLEDQTY>99 nos</BILLEDQTY><ACCOUNTINGALLOCATIONS.LIST><LEDGERNAME>${allocation}</LEDGERNAME></ACCOUNTINGALLOCATIONS.LIST>${extra}</ALLINVENTORYENTRIES.LIST>`;
+const billXml = (guid: string, lines: string, party = 'Buyer') =>
+  `<VOUCHER><GUID>${guid}</GUID><DATE>20261115</DATE><VOUCHERNUMBER>Sales/42</VOUCHERNUMBER><PARTYLEDGERNAME>${party}</PARTYLEDGERNAME><REFERENCE>external-invoice</REFERENCE><NARRATION>Order ABC</NARRATION><STOCKBRIDGECOMPANYGUID>company-a-guid</STOCKBRIDGECOMPANYGUID><STOCKBRIDGELEDGERGUID>ledger-guid</STOCKBRIDGELEDGERGUID><STOCKBRIDGEPOSTEDSALE>Yes</STOCKBRIDGEPOSTEDSALE>${lines}</VOUCHER>`;
+
+function billingResponse(request: string, vouchers: string, ledgers = ledgerXml): string {
+  if (request.includes('<TYPE>Ledger</TYPE>')) return envelope(ledgers);
+  if (request.includes('<TYPE>StockItem</TYPE>')) return envelope(stockXml());
+  if (request.includes('<TYPE>Vouchers : Ledger</TYPE>')) return envelope(vouchers);
+  return envelope(companyXml);
+}
+
+test('billing uses selected company and ledger GUID, actual outward item units and inclusive bill dates', async () => {
+  const requests: string[] = [];
+  const mixed = billXml(
+    'sales-ledger-bill',
+    saleLine('2 nos') + saleLine('3 nos') + saleLine('8 nos', 'Shop'),
+  );
+  const party = billXml('party-ledger-bill', saleLine('1 nos', 'Sales'), 'Marketplace &amp; Co');
+  const base = billXml('bill', saleLine('1 nos'));
+  const ignored = [
+    billXml('shop', saleLine('5 nos', 'Shop')),
+    billXml('fee', ''),
+    billXml('wrong-unit', saleLine('1 box')),
+    billXml('inward', saleLine('2 nos').replace('<ISDEEMEDPOSITIVE>No', '<ISDEEMEDPOSITIVE>Yes')),
+    billXml(
+      'delivery-linked',
+      saleLine(
+        '1 nos',
+        'Marketplace &amp; Co',
+        '<BATCHALLOCATIONS.LIST><TRACKINGNUMBER>Challan-12</TRACKINGNUMBER></BATCHALLOCATIONS.LIST>',
+      ),
+    ),
+    base.replace('<GUID>bill', '<GUID>non-sale').replace('POSTEDSALE>Yes', 'POSTEDSALE>No'),
+    base.replace('<GUID>bill', '<GUID>outside-period').replace('20261115', '20261031'),
+  ];
+  await withServer(
+    (request, response) => {
+      requests.push(request);
+      response.end(billingResponse(request, mixed + party + ignored.join('')));
+    },
+    async (url) => {
+      const client = new TallyClient(url);
+      assert.deepEqual(await client.listLedgers(company), [
+        { externalId: 'ledger-guid', name: 'Marketplace & Co' },
+      ]);
+      const result = await client.readSalesBills(
+        company,
+        'ledger-guid',
+        '2026-11-01',
+        '2026-11-15',
+      );
+      assert.deepEqual(
+        result.map((row) => [row.externalId, row.lines]),
+        [
+          ['sales-ledger-bill', [{ itemExternalId: 'stock-guid', unit: 'nos', quantity: 5 }]],
+          ['party-ledger-bill', [{ itemExternalId: 'stock-guid', unit: 'nos', quantity: 1 }]],
+        ],
+      );
+      assert.deepEqual(
+        [result[0].date, result[0].number, result[0].reference, result[0].narration],
+        ['2026-11-15', 'Sales/42', 'external-invoice', 'Order ABC'],
+      );
+    },
+  );
+  const voucherRequest = requests.find((body) => body.includes('<TYPE>Vouchers : Ledger</TYPE>'))!;
+  assert.match(voucherRequest, /<SVFROMDATE TYPE="Date">20261101<\/SVFROMDATE>/u);
+  assert.match(voucherRequest, /<SVTODATE TYPE="Date">20261115<\/SVTODATE>/u);
+  assert.match(voucherRequest, /<LEDGERNAME TYPE="String">Marketplace &amp; Co<\/LEDGERNAME>/u);
+  assert.match(
+    voucherRequest,
+    /\$\$IsSales:\$VoucherTypeName AND NOT \$IsCancelled AND NOT \$IsOptional AND NOT \$IsPostDated/u,
+  );
+  assert.match(voucherRequest, /<CHILDOF>##LedgerName<\/CHILDOF>/u);
+});
+
+test('billing rejects changed, duplicate or unverified identities and invalid calendar dates', async () => {
+  const bill = billXml('bill', saleLine('1 nos'));
+  for (const [vouchers, ledgers, problem] of [
+    [bill, ledgerXml + ledgerXml, /duplicate ledger identities/],
+    [bill, ledgerXml.replace('ledger-guid', 'another-ledger'), /no longer available/],
+    [bill, ledgerXml.replace('company-a-guid', 'other'), /different company/],
+    [bill.replace('ledger-guid', 'old-ledger'), ledgerXml, /different Tally company or ledger/],
+    [
+      bill.replace('company-a-guid', 'wrong-company'),
+      ledgerXml,
+      /different Tally company or ledger/,
+    ],
+    [bill + bill, ledgerXml, /duplicate voucher identities/],
+    [bill.replace('POSTEDSALE>Yes', 'POSTEDSALE>missing'), ledgerXml, /unknown voucher status/],
+  ] as const) {
+    await withServer(
+      (request, response) => response.end(billingResponse(request, vouchers, ledgers)),
+      async (url) => {
+        await assert.rejects(
+          new TallyClient(url).readSalesBills(company, 'ledger-guid', '2026-11-01', '2026-11-30'),
+          problem,
+        );
+      },
+    );
+  }
+  const client = new TallyClient('http://127.0.0.1:9000');
+  await assert.rejects(
+    client.readSalesBills(company, 'ledger-guid', '2026-02-30', '2026-03-01'),
+    /valid billing dates/,
+  );
+  await assert.rejects(
+    client.readSalesBills(company, 'ledger-guid', '2026-03-01', '2026-02-01'),
+    /end date/,
   );
 });

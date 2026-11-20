@@ -1,6 +1,58 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { queryFile, storageFixture as fixture } from '../support/server-fixture.js';
+import type { StockSyncCoverage } from '../../src/shared/stock-coverage.js';
+
+test('stock coverage retains observed orders across partial scans and restart until the start date changes', (t) => {
+  const f = fixture(t);
+  const store = f.open();
+  const companyId = store.read().companies[0].id;
+  const order = {
+    orderItemId: 'OI-1',
+    orderId: 'ORDER-1',
+    invoiceNumber: null,
+    sku: 'PAIR',
+    listingId: 'listing-1',
+    locationId: 'shop',
+    quantity: 1,
+    orderDate: '2026-11-01T01:00:00Z',
+    stockDispatchObserved: true as const,
+    stockIdentityConflict: true as const,
+    stockReconciliationRequired: true as const,
+  };
+  const record: StockSyncCoverage = {
+    companyId,
+    from: '2026-10-31T18:30:00.000Z',
+    signature: 'mapped',
+    checkedThrough: null,
+    orders: [{ accountId: 'seller-one', order }],
+  };
+  assert.equal(store.readStockCoverage(companyId), null);
+  store.saveStockCoverage(record);
+  store.saveStockCoverage({
+    ...record,
+    checkedThrough: '2026-11-02T12:00:00Z',
+    orders: [{ accountId: 'seller-two', order }],
+  });
+  const reopened = f.open();
+  const saved = reopened.readStockCoverage(companyId)!;
+  assert.equal(saved.checkedThrough, '2026-11-02T12:00:00Z');
+  assert.deepEqual(
+    saved.orders.map((entry) => entry.accountId),
+    ['seller-one', 'seller-two'],
+  );
+  assert.deepEqual(saved.orders[0].order, order);
+  assert.throws(() =>
+    reopened.saveStockCoverage({
+      ...record,
+      from: '2026-11-03T18:30:00.000Z',
+      orders: [{ accountId: 'seller-one', order: { ...order, quantity: 0 } }],
+    }),
+  );
+  assert.deepEqual(reopened.readStockCoverage(companyId), saved);
+  reopened.saveStockCoverage({ ...record, from: '2026-11-03T18:30:00.000Z', orders: [] });
+  assert.deepEqual(reopened.readStockCoverage(companyId)?.orders, []);
+});
 
 test('a new live workspace is empty and a reopened workspace requires fresh source verification', (t) => {
   const f = fixture(t);

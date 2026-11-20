@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Snapshot } from '../../../src/shared/contracts.js';
 import { initialState } from '../../../src/server/seed.js';
 import { InvalidStoredState } from '../../../src/server/storage/validation.js';
-import { createSchema } from '../../../src/server/storage/schema.js';
+import { createSchema, CURRENT_SCHEMA_VERSION } from '../../../src/server/storage/schema.js';
 import { readSnapshot, writeSnapshot } from '../../../src/server/storage/records.js';
 import { queryFile, storageFixture as fixture } from '../../support/server-fixture.js';
 
@@ -69,7 +69,7 @@ test('legacy migration preserves policies, drafts, identities and history with a
   const original = legacyState(f.directory);
   createLegacy(f.file, original);
   const store = f.open();
-  assert.equal(store.schemaVersion, 4);
+  assert.equal(store.schemaVersion, CURRENT_SCHEMA_VERSION);
   assert.deepEqual(store.read(), original);
   assert.ok(store.migrationBackupPath);
   assert.ok(existsSync(store.migrationBackupPath));
@@ -81,7 +81,10 @@ test('legacy migration preserves policies, drafts, identities and history with a
     assert.deepEqual(JSON.parse(value as string), original);
   });
   queryFile(f.file, (database) => {
-    assert.equal(database.prepare('PRAGMA user_version').get()?.user_version, 4);
+    assert.equal(
+      database.prepare('PRAGMA user_version').get()?.user_version,
+      CURRENT_SCHEMA_VERSION,
+    );
     assert.equal(
       database.prepare("SELECT name FROM sqlite_master WHERE name = 'app_state'").get(),
       undefined,
@@ -105,23 +108,45 @@ test('legacy migration preserves policies, drafts, identities and history with a
 function createVersionTwo(file: string, state: Snapshot): void {
   const database = new DatabaseSync(file);
   try {
-    createSchema(database);
+    createSchema(database, 6);
     writeSnapshot(database, state);
     database.exec(
-      'DROP TABLE listing_pack_settings; DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
+      'DROP TABLE stock_coverage_orders; DROP TABLE stock_coverage; DROP TABLE billing_links; DROP TABLE billing_rules; DROP TABLE listing_pack_settings; DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
     );
   } finally {
     database.close();
   }
 }
 
+test('schema four upgrades retain the stock mapping and start billing unconfigured', (t) => {
+  const f = fixture(t);
+  const original = legacyState(f.directory);
+  queryFile(f.file, (db) => {
+    createSchema(db, 6);
+    writeSnapshot(db, original);
+    db.exec(
+      'DROP TABLE stock_coverage_orders; DROP TABLE stock_coverage; DROP TABLE billing_links; DROP TABLE billing_rules; PRAGMA user_version = 4;',
+    );
+  });
+  const store = f.open();
+  assert.deepEqual(store.read(), original);
+  assert.deepEqual(store.readBilling(), { rules: [], links: [] });
+  assert.ok(store.migrationBackupPath);
+  queryFile(store.migrationBackupPath, (db) => {
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version, 4);
+    assert.deepEqual(readSnapshot(db), original);
+  });
+});
+
 test('version three mapping records migrate without opting live records into calculated publication', (t) => {
   const f = fixture(t);
   const original = legacyState(f.directory);
   queryFile(f.file, (db) => {
-    createSchema(db);
+    createSchema(db, 6);
     writeSnapshot(db, original);
-    db.exec('DROP TABLE listing_pack_settings; PRAGMA user_version = 3');
+    db.exec(
+      'DROP TABLE stock_coverage_orders; DROP TABLE stock_coverage; DROP TABLE billing_links; DROP TABLE billing_rules; DROP TABLE listing_pack_settings; PRAGMA user_version = 3',
+    );
   });
   const store = f.open();
   assert.deepEqual(store.read(), original);
@@ -140,7 +165,7 @@ test('version two upgrades preserve all records and a verified version-two safet
   const original = legacyState(f.directory);
   createVersionTwo(f.file, original);
   const store = f.open();
-  assert.equal(store.schemaVersion, 4);
+  assert.equal(store.schemaVersion, CURRENT_SCHEMA_VERSION);
   assert.deepEqual(store.read(), original);
   assert.deepEqual(store.readMarketplace(), { accounts: [], listings: [], changes: [] });
   assert.ok(store.migrationBackupPath);
@@ -154,6 +179,41 @@ test('version two upgrades preserve all records and a verified version-two safet
   });
   assert.equal(f.open().migrationBackupPath, null);
   assert.equal(readdirSync(join(f.directory, 'migration-backups')).length, 1);
+});
+
+test('schema five preserves saved billing setup and leaves the stock baseline unconfirmed', (t) => {
+  const f = fixture(t);
+  const original = legacyState(f.directory);
+  const companyId = original.companies[0].id;
+  const accountId = original.accounts[0].id;
+  queryFile(f.file, (db) => {
+    createSchema(db, 6);
+    writeSnapshot(db, original);
+    db.prepare('INSERT INTO billing_rules VALUES (?, ?, ?, ?, ?, ?)').run(
+      companyId,
+      accountId,
+      'ledger',
+      'Seller sales',
+      'reference',
+      'orderItemId',
+    );
+    db.prepare('INSERT INTO billing_links VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      companyId,
+      accountId,
+      'order',
+      'bill',
+      'item',
+      'ledger',
+      'fingerprint',
+    );
+    db.exec('DROP TABLE stock_coverage_orders; DROP TABLE stock_coverage; PRAGMA user_version = 5');
+  });
+  const store = f.open();
+  assert.ok(store.migrationBackupPath);
+  assert.equal(store.readBilling().rules[0].ledgerId, 'ledger');
+  assert.equal(store.readBilling().links[0].billId, 'bill');
+  assert.equal(store.readStockCoverage(companyId), null);
+  assert.deepEqual(store.read(), original);
 });
 
 test('a version-two migration failure rolls back new tables and preserves its pre-upgrade backup', (t) => {
@@ -173,6 +233,83 @@ test('a version-two migration failure rolls back new tables and preserves its pr
     );
   });
   assert.equal(readdirSync(join(f.directory, 'migration-backups')).length, 1);
+});
+
+test('schema six keeps observed orders and treats every older uncertain request as lacking proof', (t) => {
+  const f = fixture(t);
+  const state = legacyState(f.directory);
+  const { id: companyId } = state.companies[0];
+  const { id: accountId } = state.accounts[0];
+  const from = '2026-11-18T18:30:00.000Z';
+  const order = {
+    orderItemId: 'previous-line',
+    orderId: 'O1',
+    sku: 'A',
+    listingId: 'L',
+    locationId: 'W',
+    orderDate: from,
+    invoiceNumber: null,
+    quantity: 1,
+  };
+  queryFile(f.file, (db) => {
+    createSchema(db, 6);
+    writeSnapshot(db, state);
+    db.exec('PRAGMA user_version = 6');
+    db.prepare('INSERT INTO stock_coverage VALUES (?, ?, ?, ?)').run(
+      companyId,
+      from,
+      'confirmed',
+      from,
+    );
+    db.prepare('INSERT INTO stock_coverage_orders VALUES (?, ?, ?, ?)').run(
+      companyId,
+      accountId,
+      order.orderItemId,
+      JSON.stringify(order),
+    );
+    db.prepare('INSERT INTO marketplace_accounts VALUES (?, ?, ?, ?, ?)').run(
+      accountId,
+      'Seller',
+      'owner',
+      from,
+      0,
+    );
+    db.prepare('INSERT INTO marketplace_changes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      'old-attempt',
+      accountId,
+      'L',
+      'A',
+      'uncertain',
+      JSON.stringify({ kind: 'stock', quantity: 5, locationId: 'W', automation: 'once' }),
+      'Original outcome unknown',
+      from,
+      from,
+      0,
+    );
+  });
+  const store = f.open();
+  assert.ok(store.migrationBackupPath);
+  assert.deepEqual(store.readStockCoverage(companyId)?.orders, [{ accountId, order }]);
+  const change = store.readMarketplace().changes[0];
+  assert.equal(change.state, 'uncertain');
+  assert.equal(change.stockRequestFinality, undefined);
+  const coverage = store.readStockCoverage(companyId)!;
+  coverage.orders[0].order.stockSyncQueued = true;
+  assert.throws(
+    () =>
+      store.saveStockCoverage(coverage, () => {
+        throw new Error('interrupted');
+      }),
+    /interrupted/,
+  );
+  assert.equal(store.readStockCoverage(companyId)?.orders[0].order.stockSyncQueued, undefined);
+  store.saveStockCoverage(coverage, (current) => {
+    current.listings[0].orderSyncPending = 'new-sale';
+  });
+  const reopened = f.open();
+  assert.equal(reopened.readStockCoverage(companyId)?.orders[0].order.stockSyncQueued, true);
+  assert.equal(reopened.read().listings[0].orderSyncPending, 'new-sale');
+  assert.equal(reopened.read().listings[0].tyreFloor, state.listings[0].tyreFloor);
 });
 
 test('invalid legacy data is rejected before changing or backing up the source', (t) => {

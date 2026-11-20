@@ -163,6 +163,9 @@ function listing(value: unknown, field: string): Listing {
           ? null
           : integer(row.syncPendingItemVersion, `${field}.syncPendingItemVersion`),
     }),
+    ...(row.orderSyncPending != null && {
+      orderSyncPending: string(row.orderSyncPending, `${field}.orderSyncPending`),
+    }),
     verified: boolean(row.verified, `${field}.verified`),
     observed: row.observed === null ? null : integer(row.observed, `${field}.observed`),
     observedAt: nullableTimestamp(row.observedAt, `${field}.observedAt`),

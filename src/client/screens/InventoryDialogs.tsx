@@ -105,8 +105,8 @@ export function ReviewDialog({
               onChange={() => setPositiveEdits('once')}
             />
             <span>
-              <strong>Update once</strong> · Set the reviewed quantity. The next Tally stock change
-              can replace it when automatic updates are on.
+              <strong>Update once</strong> · Set the reviewed quantity. With automatic updates on, a
+              Tally stock change can replace it and a verified Flipkart sale can lower it.
             </span>
           </label>
           <label className="checkbox-label">

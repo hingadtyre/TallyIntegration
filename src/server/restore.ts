@@ -18,6 +18,7 @@ import { recordActivity } from './activity.js';
 import { cataloguesOverlap } from './marketplace-catalog.js';
 import { acquireWorkspaceOwnership } from './runtime.js';
 import { backupDatabase } from './storage/backup.js';
+import { readBilling, writeBilling, type BillingData } from './storage/billing-records.js';
 import { readSnapshot, writeSnapshot } from './storage/records.js';
 import {
   readMarketplace,
@@ -26,6 +27,7 @@ import {
   type MarketplaceData,
 } from './storage/marketplace-records.js';
 import { createSchema, CURRENT_SCHEMA_VERSION, schemaVersion } from './storage/schema.js';
+import { verifyStockCoverage } from './storage/stock-coverage.js';
 
 type WorkspaceMode = Snapshot['mode'];
 
@@ -72,7 +74,7 @@ function requireNoSidecars(file: string): void {
 
 function readCheckedSnapshot(database: DatabaseSync, mode: WorkspaceMode): Snapshot {
   const version = schemaVersion(database);
-  if (version !== 2 && version !== 3 && version !== CURRENT_SCHEMA_VERSION) {
+  if (version < 2 || version > CURRENT_SCHEMA_VERSION) {
     throw new Error(`Offline pilot restore accepts schemas 2 through ${CURRENT_SCHEMA_VERSION}.`);
   }
   const integrity = database.prepare('PRAGMA integrity_check').all();
@@ -87,6 +89,7 @@ function readCheckedSnapshot(database: DatabaseSync, mode: WorkspaceMode): Snaps
   }
   const snapshot = readSnapshot(database);
   if (version >= 3) readMarketplace(database);
+  if (version >= 6) verifyStockCoverage(database);
   if (snapshot.mode !== mode)
     throw new Error('The backup and destination must use the same live or demo workspace mode.');
   return snapshot;
@@ -95,7 +98,12 @@ function readCheckedSnapshot(database: DatabaseSync, mode: WorkspaceMode): Snaps
 function loadBackup(
   file: string,
   mode: WorkspaceMode,
-): { preview: PilotBackupPreview; snapshot: Snapshot; marketplace: MarketplaceData } {
+): {
+  preview: PilotBackupPreview;
+  snapshot: Snapshot;
+  marketplace: MarketplaceData;
+  billing: BillingData;
+} {
   requireMode(mode);
   requireLocalAbsolutePath(file);
   const backupFile = realpathSync.native(file);
@@ -117,9 +125,10 @@ function loadBackup(
     !('verified' in manifest) ||
     manifest.verified !== true ||
     !('schemaVersion' in manifest) ||
-    (manifest.schemaVersion !== 2 &&
-      manifest.schemaVersion !== 3 &&
-      manifest.schemaVersion !== CURRENT_SCHEMA_VERSION) ||
+    typeof manifest.schemaVersion !== 'number' ||
+    !Number.isInteger(manifest.schemaVersion) ||
+    manifest.schemaVersion < 2 ||
+    manifest.schemaVersion > CURRENT_SCHEMA_VERSION ||
     !('mode' in manifest) ||
     manifest.mode !== mode ||
     !('credentialsIncluded' in manifest) ||
@@ -154,6 +163,7 @@ function loadBackup(
   const database = new DatabaseSync(backupFile, { readOnly: true });
   let snapshot: Snapshot;
   let marketplace: MarketplaceData;
+  let billing: BillingData;
   try {
     if (database.prepare('PRAGMA journal_mode').get()?.journal_mode !== 'delete') {
       throw new Error(
@@ -164,6 +174,7 @@ function loadBackup(
     if (schemaVersion(database) !== manifest.schemaVersion)
       throw new Error('The backup schema does not match its manifest. Nothing was replaced.');
     snapshot = readCheckedSnapshot(database, mode);
+    billing = manifest.schemaVersion >= 5 ? readBilling(database) : { rules: [], links: [] };
     marketplace =
       manifest.schemaVersion === 2
         ? { accounts: [], listings: [], changes: [] }
@@ -178,6 +189,7 @@ function loadBackup(
   return {
     snapshot,
     marketplace,
+    billing,
     preview: {
       backupFile,
       createdAt: manifest.createdAt,
@@ -243,6 +255,7 @@ function restoredSnapshot(
     listing.observedAt = null;
     if (listing.packageAvailable !== undefined) listing.packageAvailable = false;
     if (listing.syncPendingItemVersion != null) listing.syncPendingItemVersion = null;
+    delete listing.orderSyncPending;
   }
   for (const account of restored.accounts)
     account.status = restored.mode === 'demo' ? 'demo' : 'not-connected';
@@ -299,8 +312,14 @@ function requirePreservedStockRestrictions(restored: Snapshot, current: Snapshot
 
 function restoredMarketplace(backup: MarketplaceData, current: MarketplaceData): MarketplaceData {
   const restored = structuredClone(backup);
-  const unfinished = current.changes.filter((change) =>
-    ['pending', 'sending', 'checking', 'uncertain'].includes(change.state),
+  const unsentHere = new Set<string>();
+  const savedPositions = new Map(restored.changes.map((change, index) => [change.id, index]));
+  // Current outcomes supersede older copies, including requests subsequently
+  // reconciled. Otherwise an old backup could reopen a completed recovery.
+  const preservedChanges = current.changes.filter(
+    (change) =>
+      ['pending', 'sending', 'checking', 'uncertain', 'reconciled'].includes(change.state) ||
+      savedPositions.has(change.id),
   );
   // A database rollback cannot undo a request already sent to Flipkart or the
   // seller identity verified against this machine's retained credentials.
@@ -320,14 +339,15 @@ function restoredMarketplace(backup: MarketplaceData, current: MarketplaceData):
       saved.sellerId = account.sellerId ?? saved.sellerId;
     } else if (
       account.sellerId ||
-      unfinished.some((row) => row.accountId === account.id) ||
+      preservedChanges.some((row) => row.accountId === account.id) ||
       current.listings.some((row) => row.accountId === account.id)
     ) {
       restored.accounts.push(structuredClone(account));
     }
   }
-  for (const change of unfinished) {
-    const saved = restored.changes.find((row) => row.id === change.id);
+  for (const change of preservedChanges) {
+    const position = savedPositions.get(change.id);
+    const saved = position === undefined ? undefined : restored.changes[position];
     if (
       saved &&
       (saved.accountId !== change.accountId ||
@@ -336,7 +356,12 @@ function restoredMarketplace(backup: MarketplaceData, current: MarketplaceData):
         JSON.stringify(saved.edit) !== JSON.stringify(change.edit))
     )
       throw new Error('The backup conflicts with a current unfinished marketplace update.');
-    if (saved) restored.changes[restored.changes.indexOf(saved)] = structuredClone(change);
+    if (
+      change.stockRequestFinality === 'not-sent' &&
+      (!saved || saved.stockRequestFinality === 'not-sent')
+    )
+      unsentHere.add(change.id);
+    if (position !== undefined) restored.changes[position] = structuredClone(change);
     else restored.changes.push(structuredClone(change));
   }
   // Keep every known listing identity and version, including listings added
@@ -371,6 +396,10 @@ function restoredMarketplace(backup: MarketplaceData, current: MarketplaceData):
   }
   for (const change of restored.changes) {
     if (['pending', 'sending', 'checking', 'uncertain'].includes(change.state)) {
+      // A backup can predate the actual dispatch of a prepared request. It
+      // cannot prove that the request never left the original installation.
+      if (change.stockRequestFinality === 'not-sent' && !unsentHere.has(change.id))
+        delete change.stockRequestFinality;
       change.state = 'uncertain';
       change.message =
         'Restored from backup. Verify the seller and refresh listings before checking this result; do not resend it automatically.';
@@ -380,13 +409,43 @@ function restoredMarketplace(backup: MarketplaceData, current: MarketplaceData):
   return validateMarketplace(restored);
 }
 
-function writeStage(file: string, snapshot: Snapshot, marketplace: MarketplaceData): void {
+function restoredBilling(
+  saved: BillingData,
+  current: BillingData,
+  snapshot: Snapshot,
+): BillingData {
+  const companies = new Set(snapshot.companies.map((row) => row.id));
+  const accounts = new Set(snapshot.accounts.map((row) => row.id));
+  const retained = current.rules.filter(
+    (rule) => companies.has(rule.companyId) && accounts.has(rule.accountId),
+  );
+  const key = (scope: { companyId: string; accountId: string }) =>
+    JSON.stringify([scope.companyId, scope.accountId]);
+  const currentScopes = new Set(retained.map(key));
+  return {
+    rules: [...retained, ...saved.rules.filter((row) => !currentScopes.has(key(row)))],
+    links: [
+      ...current.links.filter((row) => currentScopes.has(key(row))),
+      ...saved.links.filter((row) => !currentScopes.has(key(row))),
+    ],
+  };
+}
+
+function writeStage(
+  file: string,
+  snapshot: Snapshot,
+  marketplace: MarketplaceData,
+  billing: BillingData,
+): void {
   const database = new DatabaseSync(file);
   try {
     database.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;');
     createSchema(database);
     writeSnapshot(database, snapshot);
     writeMarketplace(database, marketplace);
+    writeBilling(database, billing);
+    // A restored workspace must reconcile its starting stock again. An old
+    // order journal can omit sales since the backup and cannot authorize increases.
     database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}; COMMIT;`);
     readCheckedSnapshot(database, snapshot.mode);
   } finally {
@@ -458,6 +517,8 @@ export async function restorePilotBackup(options: {
       );
     }
     const current = readCheckedSnapshot(database, options.mode);
+    const currentBilling =
+      schemaVersion(database) >= 5 ? readBilling(database) : { rules: [], links: [] };
     const currentMarketplace =
       schemaVersion(database) === 2
         ? { accounts: [], listings: [], changes: [] }
@@ -493,7 +554,12 @@ export async function restorePilotBackup(options: {
     const marketplace = restoredMarketplace(source.marketplace, currentMarketplace);
     const snapshot = restoredSnapshot(source.snapshot, current, marketplace);
     requirePreservedStockRestrictions(snapshot, current);
-    writeStage(stage, snapshot, marketplace);
+    writeStage(
+      stage,
+      snapshot,
+      marketplace,
+      restoredBilling(source.billing, currentBilling, snapshot),
+    );
     if (hashFile(source.preview.backupFile) !== options.expectedSha256)
       throw new Error('The backup changed before replacement. Inspect it again.');
     database.close();

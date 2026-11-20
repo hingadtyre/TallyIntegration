@@ -1,0 +1,234 @@
+import { useState } from 'react';
+import type { BillingReport, BillingRow } from '../../shared/billing-contracts.js';
+import { formatDateTime } from '../format.js';
+
+const saleDate = new Intl.DateTimeFormat('en-IN', {
+  dateStyle: 'medium',
+  timeZone: 'Asia/Kolkata',
+});
+
+const statusLabel: Record<BillingRow['status'], string> = {
+  matched: 'Billed',
+  review: 'Needs review',
+  unmatched: 'No matched bill',
+  unmapped: 'Check mapping',
+};
+
+interface Actions {
+  confirmed: boolean;
+  busy: boolean;
+  onMatch: (orderItemId: string, billId: string) => void;
+  onUnmatch: (orderItemId: string) => void;
+}
+
+export function BillingResults({ report, ...actions }: Actions & { report: BillingReport }) {
+  const [onlyOpen, setOnlyOpen] = useState(false);
+  const unresolved = report.rows.filter((row) => row.status !== 'matched');
+  const rows = onlyOpen ? unresolved : report.rows;
+  return (
+    <>
+      <section className="panel billing-results">
+        <div className="panel-heading">
+          <div>
+            <h2>Order items and bills</h2>
+            <p>
+              {saleDate.format(new Date(report.from))} through{' '}
+              {saleDate.format(new Date(report.to))} (India) · Checked{' '}
+              {formatDateTime(report.checkedAt)}
+            </p>
+            <p>
+              This preview covers recent seller-fulfilled standard and self-ship orders returned for
+              the selected period and sales bills from the selected ledger.
+            </p>
+          </div>
+        </div>
+        {report.rows.length === 0 ? (
+          <div className="empty-state compact-empty">
+            <h3>No order items in this preview</h3>
+            <p>
+              Check the selected seller and period, or refresh after an order appears in Flipkart.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="billing-filters">
+              <strong>
+                {report.rows.length - unresolved.length} matched · {unresolved.length} unresolved
+              </strong>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={onlyOpen}
+                  onChange={(event) => setOnlyOpen(event.target.checked)}
+                />{' '}
+                Show unresolved only
+              </label>
+            </div>
+            {rows.length > 0 ? (
+              <div className="table-scroll">
+                <table className="billing-table" aria-label="Order and bill matches">
+                  <thead>
+                    <tr>
+                      <th>Flipkart order item</th>
+                      <th>Item and stock</th>
+                      <th>Tally bill</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <OrderRow
+                        key={row.orderItemId}
+                        row={row}
+                        showInvoice={
+                          report.rule.reference === 'invoiceNumber' &&
+                          report.rule.field !== 'manual'
+                        }
+                        {...actions}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="billing-filters">
+                All order items in this preview have a matched bill.
+              </p>
+            )}
+          </>
+        )}
+      </section>
+      {report.stock.length > 0 && (
+        <section className="panel billing-results">
+          <div className="panel-heading">
+            <div>
+              <h2>Available stock preview</h2>
+              <p>
+                Physical stock less units without a matched bill, using current mappings for this
+                account and period. Orders outside this period and other seller accounts are
+                excluded. Automatic stock updates check orders across the company’s covered accounts
+                from its confirmed start date.
+              </p>
+            </div>
+          </div>
+          <div className="table-scroll">
+            <table className="billing-table" aria-label="Available stock preview">
+              <thead>
+                <tr>
+                  <th>Tally item</th>
+                  <th>Physical stock</th>
+                  <th>Units without a matched bill</th>
+                  <th>Preview available</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.stock.map((item, index) => (
+                  <tr key={index}>
+                    <td>
+                      {item.name}
+                      <small>{item.unit}</small>
+                    </td>
+                    <td>{item.physical ?? 'Unknown'}</td>
+                    <td>{item.unmatchedUnits ?? 'Unknown'}</td>
+                    <td>
+                      <strong>{item.previewAvailable ?? 'Unknown'}</strong>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+    </>
+  );
+}
+
+function OrderRow({
+  row,
+  showInvoice,
+  busy,
+  confirmed,
+  onMatch,
+  onUnmatch,
+}: { row: BillingRow; showInvoice: boolean } & Actions) {
+  const [selectedBill, setSelectedBill] = useState('');
+  const candidate = row.candidates.find((bill) => bill.id === selectedBill);
+  const labels = new Set<string>();
+  const duplicateLabels = new Set<string>();
+  const choices = row.candidates.map((bill) => {
+    const label = bill.number + ' · ' + bill.date;
+    if (labels.has(label)) duplicateLabels.add(label);
+    labels.add(label);
+    return { id: bill.id, label };
+  });
+  return (
+    <tr>
+      <td>
+        <strong>{row.orderItemId}</strong>
+        <small>Order ID {row.orderId}</small>
+        {row.orderDate && <small>Ordered {saleDate.format(new Date(row.orderDate))}</small>}
+        {showInvoice && (
+          <small>
+            {row.referenceValue
+              ? 'Invoice number ' + row.referenceValue
+              : 'Invoice number unavailable'}
+          </small>
+        )}
+      </td>
+      <td>
+        <strong>{row.sku}</strong>
+        <small>
+          {row.quantity} listing units ·{' '}
+          {row.baseUnits === null ? 'Tally units unknown' : row.baseUnits + ' Tally units'}
+        </small>
+        <small>{row.location}</small>
+      </td>
+      <td>
+        <strong>{statusLabel[row.status]}</strong>
+        {row.bill && (
+          <small>
+            Bill {row.bill.number} · {row.bill.date}
+          </small>
+        )}
+        <small>{row.reason}</small>
+        {confirmed && row.manualBillId ? (
+          <button
+            className="text-button"
+            disabled={busy}
+            onClick={() => onUnmatch(row.orderItemId)}
+          >
+            Release manual match
+          </button>
+        ) : (
+          confirmed &&
+          row.status !== 'matched' &&
+          row.candidates.length > 0 && (
+            <div className="billing-choice">
+              <select
+                aria-label={'Choose bill for ' + row.orderItemId}
+                value={candidate?.id ?? ''}
+                disabled={busy}
+                onChange={(event) => setSelectedBill(event.target.value)}
+              >
+                <option value="">Choose a bill</option>
+                {choices.map((bill) => (
+                  <option key={bill.id} value={bill.id}>
+                    {bill.label}
+                    {duplicateLabels.has(bill.label) && ' · Tally voucher ID ' + bill.id}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="button secondary compact"
+                disabled={busy || !candidate}
+                onClick={() => candidate && onMatch(row.orderItemId, candidate.id)}
+              >
+                Confirm bill match
+              </button>
+            </div>
+          )
+        )}
+      </td>
+    </tr>
+  );
+}

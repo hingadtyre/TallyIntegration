@@ -584,6 +584,12 @@ export class FlipkartListingsClient {
             uncertain,
           );
         }
+        // A 202 acknowledges processing. Only a finished HTTP 200 and the
+        // exact SKU's success response establish completion of an inventory write.
+        if (path === '/update/inventory' && response.status !== 200) {
+          void response.body?.cancel().catch(() => undefined);
+          throw invalidResponse(true);
+        }
         return readResponse(response, write);
       };
       return await Promise.race([operation(), timeout]);

@@ -4,6 +4,7 @@ import { readdirSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { availableParallelism } from 'node:os';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const testRoot = join(root, 'tests');
@@ -25,7 +26,13 @@ if (!sources.length || missing.length) {
   const compiled = sources
     .filter((file) => !requested.length || requested.some((selected) => matches(file, selected)))
     .map((file) => join(root, 'dist', 'tests', file.replace(/\.tsx?$/, '.js')));
-  const result = spawnSync(process.execPath, ['--test', ...compiled], {
+  // Browser simulations and Windows credential checks share the same CPU.
+  // Bound file-level parallelism so a busy test run can still start PowerShell on time.
+  const runnerOptions =
+    process.platform === 'win32'
+      ? [`--test-concurrency=${Math.max(1, Math.min(4, availableParallelism() - 1))}`]
+      : [];
+  const result = spawnSync(process.execPath, ['--test', ...runnerOptions, ...compiled], {
     cwd: root,
     stdio: 'inherit',
   });

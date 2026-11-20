@@ -7,6 +7,7 @@ import type {
 import { errorMessage, RequestError } from '../api.js';
 import { Modal } from '../components.js';
 import { marketplaceApi } from '../marketplace-api.js';
+import { StockRecoveryAction } from './MarketplaceStockRecovery.js';
 
 export type MarketplaceEditorTarget = { listing: MarketplaceListingView } & (
   { kind: 'stock'; locationId: string } | { kind: 'price'; field: 'mrp' | 'sellingPrice' }
@@ -19,6 +20,7 @@ export const changeLabels: Record<MarketplaceChange['state'], string> = {
   confirmed: 'Updated',
   failed: 'Failed',
   uncertain: 'Result uncertain',
+  reconciled: 'Recovery approved',
 };
 
 export function MarketplaceListingEditor({
@@ -31,6 +33,7 @@ export function MarketplaceListingEditor({
   onPending,
   knownChangeIds,
   onFailure,
+  onReviewRecovery,
 }: {
   target: MarketplaceEditorTarget;
   demo: boolean;
@@ -41,6 +44,7 @@ export function MarketplaceListingEditor({
   onPending: (pending: boolean) => void;
   knownChangeIds: string[];
   onFailure: (message: string, uncertain: boolean) => void;
+  onReviewRecovery: (change: MarketplaceChange) => void;
 }) {
   const [listing, setListing] = useState(target.listing);
   const [policyConfirmation, setPolicyConfirmation] = useState(false);
@@ -79,6 +83,7 @@ export function MarketplaceListingEditor({
         (!demo || policy.remaining === null || quantity > policy.remaining)));
   const needsReconcile =
     !!change && ['pending', 'sending', 'checking', 'uncertain'].includes(change.state);
+  const finished = change?.state === 'confirmed' || change?.state === 'reconciled';
   async function apply(reconcile = false) {
     if (
       submitting.current ||
@@ -208,7 +213,7 @@ export function MarketplaceListingEditor({
             min="0"
             step={target.kind === 'stock' ? '1' : '0.01'}
             value={value}
-            disabled={pending || lostResponse || needsReconcile || change?.state === 'confirmed'}
+            disabled={pending || lostResponse || needsReconcile || finished}
             onChange={(event) => {
               setValue(event.target.value);
               setChange(null);
@@ -218,7 +223,7 @@ export function MarketplaceListingEditor({
         {policy && (
           <fieldset
             className="marketplace-policy"
-            disabled={pending || lostResponse || needsReconcile || change?.state === 'confirmed'}
+            disabled={pending || lostResponse || needsReconcile || finished}
           >
             <legend>Tally stock automation</legend>
             <p>
@@ -239,8 +244,8 @@ export function MarketplaceListingEditor({
               <span>
                 <strong>Update once</strong>
                 <small>
-                  Keep the current automation setting. A later eligible Tally update can replace
-                  this quantity. A paused listing stays paused.
+                  Keep the current automation setting. A later Tally stock change or a verified
+                  Flipkart sale can update this quantity. A paused listing stays paused.
                 </small>
               </span>
             </label>
@@ -331,6 +336,11 @@ export function MarketplaceListingEditor({
           <div role="status" className={`marketplace-result result-${change.state}`}>
             <strong>{changeLabels[change.state]}</strong>
             <p>{change.message}</p>
+            <StockRecoveryAction
+              change={change}
+              disabled={pending || lostResponse}
+              onReview={onReviewRecovery}
+            />
           </div>
         )}
         {demo && (
@@ -340,7 +350,7 @@ export function MarketplaceListingEditor({
         )}
         <div className="modal-actions">
           <button className="button secondary" onClick={onClose}>
-            {change?.state === 'confirmed' ? 'Done' : pending ? 'Close' : 'Cancel'}
+            {finished ? 'Done' : pending ? 'Close' : 'Cancel'}
           </button>
           {lostResponse ? (
             <button className="button primary" disabled={pending} onClick={() => void recover()}>
@@ -351,7 +361,7 @@ export function MarketplaceListingEditor({
               {pending ? 'Checking result…' : 'Check result'}
             </button>
           ) : (
-            change?.state !== 'confirmed' && (
+            !finished && (
               <button
                 className="button primary"
                 disabled={pending || !valid || !!conflict || (!!policy && !automation)}

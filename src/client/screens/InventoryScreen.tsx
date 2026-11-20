@@ -161,8 +161,8 @@ export function InventoryScreen({
               <strong>Automatic stock updates · {company.automation ? 'On' : 'Off'}</strong>
               <small>
                 {state.mode === 'demo' ? 'Simulates updates' : 'Updates Flipkart stock'} for
-                eligible listings across all seller accounts for {company.name}, starting with the
-                next successful Tally check.
+                eligible listings across all seller accounts for {company.name}. Checks include
+                Tally stock changes and verified Flipkart sales that reduce shared stock.
               </small>
             </div>
             <button

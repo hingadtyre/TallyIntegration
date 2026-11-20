@@ -2,7 +2,9 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Snapshot } from '../shared/contracts.js';
+import type { StockSyncCoverage } from '../shared/stock-coverage.js';
 import { backupDatabase } from './storage/backup.js';
+import { readBilling, writeBilling, type BillingData } from './storage/billing-records.js';
 import { prepareDatabase } from './storage/migrations.js';
 import {
   readMarketplace,
@@ -11,6 +13,7 @@ import {
 } from './storage/marketplace-records.js';
 import { readSnapshot, writeSnapshot } from './storage/records.js';
 import { CURRENT_SCHEMA_VERSION } from './storage/schema.js';
+import { readStockCoverage, writeStockCoverage } from './storage/stock-coverage.js';
 
 /** SQLite owns records and transactions; callers receive a detached read model. */
 export class Store {
@@ -105,6 +108,60 @@ export class Store {
 
   backup(target: string): void {
     backupDatabase(this.database, target);
+  }
+
+  readBilling(): BillingData {
+    this.database.exec('BEGIN');
+    try {
+      const result = readBilling(this.database);
+      this.database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  updateBilling(change: (data: BillingData) => void): void {
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const data = readBilling(this.database);
+      change(data);
+      writeBilling(this.database, data);
+      this.database.exec('COMMIT');
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  readStockCoverage(companyId: string): StockSyncCoverage | null {
+    this.database.exec('BEGIN');
+    try {
+      const result = readStockCoverage(this.database, companyId);
+      this.database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  saveStockCoverage(record: StockSyncCoverage, queue?: (state: Snapshot) => void): void {
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      writeStockCoverage(this.database, record);
+      if (queue) {
+        const state = readSnapshot(this.database);
+        queue(state);
+        if (state.mode !== this.mode) throw new Error('The workspace mode cannot be changed.');
+        writeSnapshot(this.database, state);
+      }
+      this.database.exec('COMMIT');
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   close(): void {

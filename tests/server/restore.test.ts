@@ -16,6 +16,13 @@ import { initialState } from '../../src/server/seed.js';
 import { InventoryService } from '../../src/server/service.js';
 import { Store } from '../../src/server/store.js';
 import { readSnapshot } from '../../src/server/storage/records.js';
+import { CURRENT_SCHEMA_VERSION } from '../../src/server/storage/schema.js';
+import { readStockCoverage, writeStockCoverage } from '../../src/server/storage/stock-coverage.js';
+import {
+  readBilling,
+  writeBilling,
+  type BillingData,
+} from '../../src/server/storage/billing-records.js';
 import { readMarketplace, writeMarketplace } from '../../src/server/storage/marketplace-records.js';
 import { marketplaceData } from '../support/marketplace-fixture.js';
 import { queryFile } from '../support/server-fixture.js';
@@ -88,6 +95,84 @@ function restoreOptions(f: ReturnType<typeof fixture>) {
   };
 }
 
+test('restore keeps current matching decisions in configured scopes and restores the other billing rules and links', async (t) => {
+  const f = fixture(t);
+  const [first, second] = f.saved.companies;
+  const accountId = f.saved.accounts[0].id;
+  const rule = {
+    companyId: first.id,
+    accountId,
+    ledgerId: 'seller-ledger',
+    ledgerName: 'Flipkart billed sales',
+    field: 'reference',
+    reference: 'orderId',
+  } as const;
+  const link = {
+    companyId: first.id,
+    accountId,
+    orderItemId: 'item-1',
+    ledgerId: rule.ledgerId,
+    billId: 'voucher-1',
+    itemId: 'product',
+    fingerprint: 'verified',
+  };
+  const secondRule = { ...rule, companyId: second.id };
+  const secondLink = { ...link, companyId: second.id, orderItemId: 'item-2' };
+  const saved: BillingData = { rules: [rule, secondRule], links: [link, secondLink] };
+  const coverage = {
+    companyId: first.id,
+    from: '2026-11-18T18:30:00.000Z',
+    signature: 'original',
+    checkedThrough: null,
+    orders: [],
+  };
+  queryFile(f.backupFile, (db) => {
+    writeBilling(db, saved);
+    writeStockCoverage(db, coverage);
+  });
+  const currentRule = { ...rule, ledgerName: 'Marketplace sales account' };
+  const newLink = { ...link, billId: 'subsequent-confirmation' };
+  const store = new Store(f.destination, f.mode);
+  try {
+    store.update((state) => {
+      state.companies.push(first);
+    });
+    store.updateBilling((data) => {
+      data.rules.push(currentRule);
+      data.links.push(newLink);
+    });
+    store.saveStockCoverage({ ...coverage, signature: 'current' });
+  } finally {
+    store.close();
+  }
+  const result = await restorePilotBackup(restoreOptions(f));
+  const billing = queryFile(result.destination, readBilling);
+  assert.deepEqual(billing.rules, [currentRule, secondRule]);
+  assert.deepEqual(billing.links, [newLink, secondLink]);
+  assert.equal(
+    queryFile(result.destination, (db) => readStockCoverage(db, first.id)),
+    null,
+  );
+  assert.equal(result.requiresFreshRead, true);
+});
+
+test('schema-four pilot backups restore their mappings with no billing setup', async (t) => {
+  const f = fixture(t);
+  queryFile(f.backupFile, (db) =>
+    db.exec(
+      'DROP TABLE stock_coverage_orders; DROP TABLE stock_coverage; DROP TABLE billing_links; DROP TABLE billing_rules; PRAGMA user_version = 4;',
+    ),
+  );
+  const manifest = JSON.parse(readFileSync(f.backupFile + '.json', 'utf8'));
+  writeFileSync(f.backupFile + '.json', JSON.stringify({ ...manifest, schemaVersion: 4 }));
+  const result = await restorePilotBackup(restoreOptions(f));
+  assert.deepEqual(queryFile(result.destination, readBilling), { rules: [], links: [] });
+  assert.deepEqual(
+    queryFile(result.destination, readSnapshot).listings.map((row) => row.itemId),
+    f.saved.listings.map((row) => row.itemId),
+  );
+});
+
 test('inspection reports date, mode and record counts without changing the backup or destination', (t) => {
   const f = fixture(t);
   const before = readFileSync(f.backupFile);
@@ -95,7 +180,7 @@ test('inspection reports date, mode and record counts without changing the backu
   const destination = readFileSync(f.destination);
   const preview = inspectPilotBackup(f.backupFile, 'live');
   assert.equal(preview.mode, 'live');
-  assert.equal(preview.schemaVersion, 4);
+  assert.equal(preview.schemaVersion, CURRENT_SCHEMA_VERSION);
   assert.equal(preview.publishingEnabled, false);
   assert.ok(Number.isFinite(Date.parse(preview.createdAt)));
   assert.match(preview.sha256, /^[a-f0-9]{64}$/);
@@ -261,11 +346,11 @@ test('a staging failure retains the original database and its verified safety co
   assert.ok(!readdirSync(f.dataDirectory).some((name) => name.includes('.restore-')));
 });
 
-test('older schema-two backup manifests remain eligible and restore into schema three', async (t) => {
+test('older schema-two backup manifests remain eligible and restore into the current schema', async (t) => {
   const f = fixture(t);
   queryFile(f.backupFile, (database) =>
     database.exec(
-      'DROP TABLE listing_pack_settings; DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
+      'DROP TABLE stock_coverage_orders; DROP TABLE stock_coverage; DROP TABLE billing_links; DROP TABLE billing_rules; DROP TABLE listing_pack_settings; DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
     ),
   );
   const manifest = JSON.parse(readFileSync(`${f.backupFile}.json`, 'utf8'));
@@ -276,7 +361,10 @@ test('older schema-two backup manifests remain eligible and restore into schema 
   assert.equal(inspectPilotBackup(f.backupFile, 'live').schemaVersion, 2);
   await restorePilotBackup(restoreOptions(f));
   queryFile(f.destination, (database) => {
-    assert.equal(database.prepare('PRAGMA user_version').get()?.user_version, 4);
+    assert.equal(
+      database.prepare('PRAGMA user_version').get()?.user_version,
+      CURRENT_SCHEMA_VERSION,
+    );
     assert.deepEqual(readMarketplace(database), { accounts: [], listings: [], changes: [] });
   });
 });
@@ -376,11 +464,44 @@ test('an older backup cannot erase newer seller binding or unfinished update bar
   }
 });
 
+test('restore keeps a later recovery and never promotes a backup-only prepared request into proof of non-dispatch', async (t) => {
+  const f = fixture(t);
+  const saved = marketplaceData(f.saved.accounts[0].id);
+  const prepared = {
+    ...saved.changes[0],
+    state: 'pending' as const,
+    stockRequestFinality: 'not-sent' as const,
+  };
+  saved.changes = [
+    { ...prepared, id: 'later-recovered' },
+    { ...prepared, id: 'only-in-backup' },
+  ];
+  queryFile(f.backupFile, (db) => writeMarketplace(db, saved));
+  const current = {
+    ...saved,
+    changes: [
+      {
+        ...prepared,
+        id: 'later-recovered',
+        state: 'reconciled' as const,
+        stockRequestFinality: 'completed' as const,
+      },
+      { ...prepared, id: 'prepared-here' },
+    ],
+  };
+  queryFile(f.destination, (db) => writeMarketplace(db, current));
+  await restorePilotBackup(restoreOptions(f));
+  const changes = queryFile(f.destination, readMarketplace).changes;
+  assert.equal(changes.find((c) => c.id === 'later-recovered')?.state, 'reconciled');
+  assert.equal(changes.find((c) => c.id === 'only-in-backup')?.stockRequestFinality, undefined);
+  assert.equal(changes.find((c) => c.id === 'prepared-here')?.stockRequestFinality, 'not-sent');
+});
+
 test('schema-two restore keeps later account identities needed for unfinished updates', async (t) => {
   const f = fixture(t);
   queryFile(f.backupFile, (database) =>
     database.exec(
-      'DROP TABLE listing_pack_settings; DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
+      'DROP TABLE stock_coverage_orders; DROP TABLE stock_coverage; DROP TABLE billing_links; DROP TABLE billing_rules; DROP TABLE listing_pack_settings; DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
     ),
   );
   const manifest = JSON.parse(readFileSync(`${f.backupFile}.json`, 'utf8'));

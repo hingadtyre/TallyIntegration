@@ -13,6 +13,7 @@ import { Icon } from '../components.js';
 import { formatDateTime as time } from '../format.js';
 import { marketplaceApi } from '../marketplace-api.js';
 import { MarketplaceAccountForm } from './MarketplaceAccountForm.js';
+import { MarketplaceStockRecovery, StockRecoveryAction } from './MarketplaceStockRecovery.js';
 import {
   MarketplaceListingEditor,
   changeLabels,
@@ -289,6 +290,7 @@ function MarketplaceListings({
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   const [editor, setEditor] = useState<MarketplaceEditorTarget | null>(null);
+  const [recovery, setRecovery] = useState<MarketplaceChange | null>(null);
   const [pendingListings, setPendingListings] = useState<string[]>([]);
   const [rowErrors, setRowErrors] = useState<
     Record<string, { message: string; uncertain: boolean }>
@@ -375,6 +377,16 @@ function MarketplaceListings({
           ],
         },
     );
+  }
+  function setListingPending(id: string, pending: boolean) {
+    if (alive.current)
+      setPendingListings((current) =>
+        pending ? [...current, id] : current.filter((value) => value !== id),
+      );
+  }
+  function openRecovery(change: MarketplaceChange) {
+    setEditor(null);
+    setRecovery(change);
   }
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   return (
@@ -486,6 +498,7 @@ function MarketplaceListings({
                     onReload={() => setRevision((value) => value + 1)}
                     onEdit={setEditor}
                     onResult={applyResult}
+                    onReviewRecovery={openRecovery}
                   />
                 ))}
               </tbody>
@@ -529,6 +542,7 @@ function MarketplaceListings({
           target={editor}
           demo={demo}
           onResult={applyResult}
+          onReviewRecovery={openRecovery}
           onClose={() => setEditor(null)}
           onOpenInventory={onOpenInventory}
           onPolicyUpdated={updateListing}
@@ -540,13 +554,19 @@ function MarketplaceListings({
                 [editor.listing.id]: { message, uncertain },
               }));
           }}
-          onPending={(pending) => {
-            if (alive.current)
-              setPendingListings((current) =>
-                pending
-                  ? [...current, editor.listing.id]
-                  : current.filter((id) => id !== editor.listing.id),
-              );
+          onPending={(pending) => setListingPending(editor.listing.id, pending)}
+        />
+      )}
+      {recovery && (
+        <MarketplaceStockRecovery
+          key={recovery.id}
+          change={recovery}
+          accountName={account.name}
+          onClose={() => setRecovery(null)}
+          onResult={applyResult}
+          onPending={(pending) => setListingPending(recovery.listingId, pending)}
+          onReload={() => {
+            if (alive.current) setRevision((value) => value + 1);
           }}
         />
       )}
@@ -562,6 +582,7 @@ function MarketplaceListingRow({
   onReload,
   onEdit,
   onResult,
+  onReviewRecovery,
 }: {
   listing: MarketplaceListingView;
   changes: MarketplaceChange[];
@@ -570,13 +591,15 @@ function MarketplaceListingRow({
   onReload: () => void;
   onEdit: (target: MarketplaceEditorTarget) => void;
   onResult: (result: MarketplaceApplyResult) => void;
+  onReviewRecovery: (change: MarketplaceChange) => void;
 }) {
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
-  const latest = [...changes].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
   const unresolved = changes.find((change) =>
     ['pending', 'sending', 'checking', 'uncertain'].includes(change.state),
   );
+  const latest =
+    unresolved ?? [...changes].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
   async function reconcile() {
     if (!unresolved || checking) return;
     setChecking(true);
@@ -621,9 +644,20 @@ function MarketplaceListingRow({
             <strong>{changeLabels[latest.state]}</strong>
             <span>{latest.message}</span>
             {unresolved && (
-              <button className="text-button" disabled={checking} onClick={() => void reconcile()}>
-                {checking ? 'Checking result…' : 'Check result'}
-              </button>
+              <>
+                <button
+                  className="text-button"
+                  disabled={checking}
+                  onClick={() => void reconcile()}
+                >
+                  {checking ? 'Checking result…' : 'Check result'}
+                </button>
+                <StockRecoveryAction
+                  change={unresolved}
+                  disabled={checking}
+                  onReview={onReviewRecovery}
+                />
+              </>
             )}
           </div>
         )}

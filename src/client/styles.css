@@ -1827,6 +1827,64 @@ small {
   gap: 20px;
 }
 
+.billing-layout,
+.billing-form,
+.billing-panel {
+  display: grid;
+  gap: 18px;
+}
+.billing-panel h2,
+.billing-form p,
+.billing-panel p,
+.billing-results h2 {
+  margin: 0;
+}
+.billing-period,
+.billing-form .field {
+  max-width: 38rem;
+}
+.billing-actions,
+.billing-filters,
+.billing-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.billing-filters {
+  justify-content: space-between;
+  padding: 12px 24px;
+}
+.billing-results .panel-heading p,
+.billing-results small,
+.billing-form p {
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+.billing-table {
+  width: 100%;
+  min-width: 580px;
+  border-collapse: collapse;
+  text-align: left;
+}
+.billing-table th,
+.billing-table td {
+  padding: 14px 18px;
+  border-top: 1px solid var(--line);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.billing-table th {
+  background: #f9fbfa;
+  font-size: var(--font-caption);
+}
+.billing-table small {
+  display: block;
+}
+.billing-choice {
+  margin-top: 8px;
+}
+
 .settings-panel {
   padding: 24px 26px;
 }
@@ -2554,6 +2612,12 @@ small {
 .marketplace-editor > p {
   font-size: 13px;
   line-height: 1.65;
+}
+.marketplace-editor .connection-details {
+  font-size: 14px;
+}
+.marketplace-editor .connection-details dd {
+  font-weight: 650;
 }
 .marketplace-account-form fieldset {
   border: 0;

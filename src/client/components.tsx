@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import type { Activity } from '../shared/contracts.js';
 import { formatQuantity as quantity, formatDateTime as time } from './format.js';
 export type IconName =
+  | 'billing'
   | 'inventory'
   | 'activity'
   | 'connections'
@@ -20,6 +21,7 @@ export type IconName =
   | 'box'
   | 'info';
 const iconPaths: Record<IconName, ReactNode> = {
+  billing: <path d="M5 3h14v18l-3-2-4 2-4-2-3 2V3Zm3 5h8m-8 4h3m1 3 2 2 4-5" />,
   marketplaces: (
     <>
       <path d="M3 10h18l-2-6H5l-2 6ZM5 10v10h14V10M9 20v-6h6v6" />

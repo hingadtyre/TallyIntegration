@@ -1,4 +1,5 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
+import { saleDay } from '../domain/sale-day.js';
 
 export interface TallyCompany {
   externalId: string;
@@ -9,6 +10,20 @@ export interface TallyStockItem {
   name: string;
   unit: string;
   physical: number | null;
+}
+
+export interface TallyLedger {
+  externalId: string;
+  name: string;
+}
+
+export interface TallySalesBill {
+  externalId: string;
+  number: string;
+  date: string;
+  reference: string;
+  narration: string;
+  lines: { itemExternalId: string; quantity: number; unit: string }[];
 }
 
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
@@ -141,13 +156,22 @@ function exportRequest(
   type: string,
   fields: string,
   company?: TallyCompany,
+  asOf = saleDay(new Date().toISOString()),
+  options?: { fromDate: string; ledgerName: string },
 ): string {
-  const today = new Date();
-  const date = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
   const scope = company
-    ? `<SVCURRENTCOMPANY>${xml(company.name)}</SVCURRENTCOMPANY><SVTODATE TYPE="Date">${date}</SVTODATE>`
+    ? `<SVCURRENTCOMPANY>${xml(company.name)}</SVCURRENTCOMPANY><SVTODATE TYPE="Date">${tallyDate(asOf)}</SVTODATE>`
     : '';
-  // The projection permits checking the actual company context for every returned stock item.
+  const period = options
+    ? `<SVFROMDATE TYPE="Date">${options.fromDate}</SVFROMDATE><LEDGERNAME TYPE="String">${xml(options.ledgerName)}</LEDGERNAME>`
+    : '';
+  const voucherScope = options
+    ? '<CHILDOF>##LedgerName</CHILDOF><FILTERS>StockbridgeSalesOnly</FILTERS><METHOD>StockbridgeLedgerGuid : $GUID:Ledger:##LedgerName</METHOD><METHOD>StockbridgePostedSale : @@StockbridgeSalesOnly</METHOD>'
+    : '';
+  const salesFilter = options
+    ? '<SYSTEM TYPE="Formulae" NAME="StockbridgeSalesOnly">$$IsSales:$VoucherTypeName AND NOT $IsCancelled AND NOT $IsOptional AND NOT $IsPostDated</SYSTEM>'
+    : '';
+  // Every company-scoped collection carries its actual company identity.
   const projection = company
     ? '<METHOD>StockbridgeCompanyGuid : $GUID:Company:##SVCurrentCompany</METHOD>'
     : '';
@@ -155,7 +179,81 @@ function exportRequest(
     .split(',')
     .map((field) => `<NATIVEMETHOD>${field}</NATIVEMETHOD>`)
     .join('');
-  return `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>${collection}</ID></HEADER><BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>${scope}</STATICVARIABLES><TDL><TDLMESSAGE><COLLECTION NAME="${collection}" ISMODIFY="No"><TYPE>${type}</TYPE>${methods}${projection}</COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
+  return `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>${collection}</ID></HEADER><BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>${scope}${period}</STATICVARIABLES><TDL><TDLMESSAGE><COLLECTION NAME="${collection}" ISMODIFY="No"><TYPE>${type}</TYPE>${methods}${projection}${voucherScope}</COLLECTION>${salesFilter}</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
+}
+
+function tallyDate(day: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(day)) throw new Error('Choose valid billing dates.');
+  const parsed = new Date(day + 'T00:00:00Z');
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day)
+    throw new Error('Choose valid billing dates.');
+  return day.replaceAll('-', '');
+}
+
+function entries(row: XmlObject, key: string): XmlObject[] {
+  const list = row[key];
+  if (list === undefined || list === '') return [];
+  return (Array.isArray(list) ? list : [list]).map((entry) => {
+    const value = object(entry);
+    if (!value) throw new Error('Tally returned an invalid voucher allocation.');
+    return value;
+  });
+}
+
+function deliveryTracked(row: XmlObject): boolean {
+  const tracking = text(row.TRACKINGNUMBER).replace(String.fromCharCode(4), '').trim();
+  return tracking !== '' && !/^(?:&#4;\s*)?Not Applicable$/iu.test(tracking);
+}
+
+function salesBill(
+  row: XmlObject,
+  ledgerName: string,
+  items: Map<string, TallyStockItem>,
+): TallySalesBill | null {
+  const posted = required(row.STOCKBRIDGEPOSTEDSALE, 'the posted sales voucher classification');
+  if (posted.toLowerCase() === 'no') return null;
+  if (posted.toLowerCase() !== 'yes') throw new Error('Tally returned an unknown voucher status.');
+  const isParty = text(row.PARTYLEDGERNAME) === ledgerName;
+  const totals = new Map<string, TallySalesBill['lines'][number]>();
+  for (const line of entries(row, 'ALLINVENTORYENTRIES.LIST')) {
+    if (
+      !isParty &&
+      !entries(line, 'ACCOUNTINGALLOCATIONS.LIST').some(
+        (allocation) => text(allocation.LEDGERNAME) === ledgerName,
+      )
+    )
+      continue;
+    const item = items.get(text(line.STOCKITEMNAME));
+    // A tracked invoice may affect only accounts. Delivery notes own the physical movement.
+    if (
+      !item ||
+      text(line.ISDEEMEDPOSITIVE).toLowerCase() !== 'no' ||
+      deliveryTracked(line) ||
+      entries(line, 'BATCHALLOCATIONS.LIST').some(deliveryTracked)
+    )
+      return null;
+    const quantity = parseTallyQuantity(text(line.ACTUALQTY), item.unit);
+    if (quantity === null || !Number.isSafeInteger(quantity) || quantity <= 0) return null;
+    const total = (totals.get(item.externalId)?.quantity ?? 0) + quantity;
+    if (!Number.isSafeInteger(total)) return null;
+    totals.set(item.externalId, {
+      itemExternalId: item.externalId,
+      quantity: total,
+      unit: item.unit,
+    });
+  }
+  if (!totals.size) return null;
+  const date = required(row.DATE, 'the sales bill date');
+  const day = date.replace(/^(\d{4})(\d{2})(\d{2})$/u, '$1-$2-$3');
+  tallyDate(day);
+  return {
+    externalId: required(row.GUID, 'a voucher GUID'),
+    number: required(row.VOUCHERNUMBER, 'the sales bill number'),
+    date: day,
+    reference: text(row.REFERENCE),
+    narration: text(row.NARRATION),
+    lines: [...totals.values()],
+  };
 }
 
 export class TallyClient {
@@ -244,29 +342,44 @@ export class TallyClient {
     return companies;
   }
 
-  async readStock(company: TallyCompany): Promise<TallyStockItem[]> {
+  private async ensureCompany(company: TallyCompany): Promise<void> {
     if (!company.externalId.trim() || !company.name.trim())
       throw new Error('A verified Tally company is required.');
-    const ensureIdentity = async () => {
-      const companies = await this.listCompanies();
-      if (
-        !companies.some(
-          (candidate) =>
-            candidate.externalId === company.externalId && candidate.name === company.name,
-        )
-      ) {
-        throw new Error(
-          'The selected Tally company identity changed or is no longer loaded. Refresh companies before importing stock.',
-        );
-      }
-    };
-    await ensureIdentity();
+    const companies = await this.listCompanies();
+    if (
+      !companies.some(
+        (candidate) =>
+          candidate.externalId === company.externalId && candidate.name === company.name,
+      )
+    ) {
+      throw new Error(
+        'The selected Tally company identity changed or is no longer loaded. Refresh companies before importing stock.',
+      );
+    }
+  }
+
+  async readStock(
+    company: TallyCompany,
+    asOf = saleDay(new Date().toISOString()),
+  ): Promise<TallyStockItem[]> {
+    await this.ensureCompany(company);
+    const items = await this.stockMasters(company, true, asOf);
+    await this.ensureCompany(company);
+    return items;
+  }
+
+  private async stockMasters(
+    company: TallyCompany,
+    includeBalance: boolean,
+    asOf?: string,
+  ): Promise<TallyStockItem[]> {
     const document = await this.read(
       exportRequest(
         'StockbridgeStockItems',
         'StockItem',
-        'Name,GUID,BaseUnits,ClosingBalance',
+        includeBalance ? 'Name,GUID,BaseUnits,ClosingBalance' : 'Name,GUID,BaseUnits',
         company,
+        asOf,
       ),
     );
     const items = records(document, 'STOCKITEM').map((row) => {
@@ -283,7 +396,94 @@ export class TallyClient {
     });
     if (new Set(items.map((item) => item.externalId)).size !== items.length)
       throw new Error('Tally returned duplicate stock item identities.');
-    await ensureIdentity();
     return items;
+  }
+
+  async listLedgers(company: TallyCompany): Promise<TallyLedger[]> {
+    await this.ensureCompany(company);
+    const ledgers = await this.ledgerMasters(company);
+    await this.ensureCompany(company);
+    return ledgers;
+  }
+
+  private async ledgerMasters(company: TallyCompany): Promise<TallyLedger[]> {
+    const document = await this.read(
+      exportRequest('StockbridgeLedgers', 'Ledger', 'Name,GUID', company),
+    );
+    const ledgers = records(document, 'LEDGER').map((row) => {
+      if (required(row.STOCKBRIDGECOMPANYGUID, 'the ledger company GUID') !== company.externalId)
+        throw new Error('Tally returned a ledger from a different company.');
+      return {
+        externalId: required(row.GUID, 'a ledger GUID'),
+        name: required(row.NAME ?? row['@_NAME'], 'a ledger name'),
+      };
+    });
+    if (
+      new Set(ledgers.map((row) => row.externalId)).size !== ledgers.length ||
+      new Set(ledgers.map((row) => row.name)).size !== ledgers.length
+    )
+      throw new Error('Tally returned duplicate ledger identities.');
+    return ledgers;
+  }
+
+  async readSalesBills(
+    company: TallyCompany,
+    ledgerId: string,
+    fromDate: string,
+    toDate: string,
+  ): Promise<TallySalesBill[]> {
+    const from = tallyDate(fromDate);
+    const to = tallyDate(toDate);
+    if (from > to) throw new Error('The billing end date must follow the start date.');
+    await this.ensureCompany(company);
+    const ledger = (await this.ledgerMasters(company)).find((row) => row.externalId === ledgerId);
+    if (!ledger) throw new Error('The selected Tally ledger is no longer available.');
+    const stock = await this.stockMasters(company, false);
+    const items = new Map(stock.map((item) => [item.name, item]));
+    if (items.size !== stock.length)
+      throw new Error('Stock item names are ambiguous in this company.');
+    const fields = [
+      'GUID',
+      'Date',
+      'VoucherNumber',
+      'Reference',
+      'Narration',
+      'PartyLedgerName',
+      'AllInventoryEntries.StockItemName',
+      'AllInventoryEntries.IsDeemedPositive',
+      'AllInventoryEntries.ActualQty',
+      'AllInventoryEntries.TrackingNumber',
+      'AllInventoryEntries.BatchAllocations.TrackingNumber',
+      'AllInventoryEntries.AccountingAllocations.LedgerName',
+    ];
+    const document = await this.read(
+      exportRequest(
+        'StockbridgeLedgerVouchers',
+        'Vouchers : Ledger',
+        fields.join(','),
+        company,
+        toDate,
+        {
+          fromDate: from,
+          ledgerName: ledger.name,
+        },
+      ),
+    );
+    const bills: TallySalesBill[] = [];
+    const ids = new Set<string>();
+    for (const row of records(document, 'VOUCHER')) {
+      if (
+        required(row.STOCKBRIDGECOMPANYGUID, 'the voucher company GUID') !== company.externalId ||
+        required(row.STOCKBRIDGELEDGERGUID, 'the voucher ledger GUID') !== ledgerId
+      )
+        throw new Error('The voucher belongs to a different Tally company or ledger.');
+      const id = required(row.GUID, 'a voucher GUID');
+      if (ids.has(id)) throw new Error('Tally returned duplicate voucher identities.');
+      ids.add(id);
+      const bill = salesBill(row, ledger.name, items);
+      if (bill && bill.date >= fromDate && bill.date <= toDate) bills.push(bill);
+    }
+    await this.ensureCompany(company);
+    return bills;
   }
 }

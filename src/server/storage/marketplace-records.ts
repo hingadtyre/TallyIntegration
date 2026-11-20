@@ -142,17 +142,30 @@ function edit(value: unknown, field: string): MarketplaceEdit {
 
 function change(value: unknown, field: string): MarketplaceChange {
   const row = record(value, field);
+  const action = edit(row.edit, `${field}.edit`);
+  if (
+    (row.stockRequestFinality != null && action.kind !== 'stock') ||
+    (row.state === 'reconciled' && !row.stockRequestFinality)
+  )
+    throw new InvalidStoredState(field, 'has inconsistent stock recovery evidence');
   return {
     id: text(row.id, `${field}.id`),
     accountId: text(row.accountId, `${field}.accountId`),
     listingId: text(row.listingId, `${field}.listingId`),
     sku: text(row.sku, `${field}.sku`),
-    edit: edit(row.edit, `${field}.edit`),
+    edit: action,
     state: choice(
       row.state,
-      ['pending', 'sending', 'checking', 'confirmed', 'failed', 'uncertain'],
+      ['pending', 'sending', 'checking', 'confirmed', 'failed', 'uncertain', 'reconciled'],
       `${field}.state`,
     ),
+    ...(row.stockRequestFinality != null && {
+      stockRequestFinality: choice(
+        row.stockRequestFinality,
+        ['not-sent', 'completed'] as const,
+        `${field}.stockRequestFinality`,
+      ),
+    }),
     message: text(row.message, `${field}.message`, true),
     createdAt: timestamp(row.createdAt, `${field}.createdAt`),
     updatedAt: timestamp(row.updatedAt, `${field}.updatedAt`),
@@ -244,6 +257,7 @@ export function readMarketplace(database: DatabaseSync): MarketplaceData {
         listingId: row.listing_id,
         sku: row.sku,
         state: row.state,
+        stockRequestFinality: row.stock_request_finality,
         edit: json(row.edit, 'marketplace.change.edit'),
         message: row.message,
         createdAt: row.created_at,
@@ -252,9 +266,14 @@ export function readMarketplace(database: DatabaseSync): MarketplaceData {
   });
 }
 
-function syncTable(
+export function syncTable(
   database: DatabaseSync,
-  table: 'marketplace_accounts' | 'marketplace_listings' | 'marketplace_changes',
+  table:
+    | 'marketplace_accounts'
+    | 'marketplace_listings'
+    | 'marketplace_changes'
+    | 'billing_rules'
+    | 'billing_links',
   keys: string[],
   rows: SqlRow[],
 ): void {
@@ -328,6 +347,7 @@ export function writeMarketplace(database: DatabaseSync, input: MarketplaceData)
       listing_id: row.listingId,
       sku: row.sku,
       state: row.state,
+      stock_request_finality: row.stockRequestFinality ?? null,
       edit: JSON.stringify(row.edit),
       message: row.message,
       created_at: row.createdAt,

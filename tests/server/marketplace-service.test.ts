@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
 import { FlipkartListingError } from '../../src/adapters/flipkart-listings.js';
+import type { FlipkartBillingOrder } from '../../src/adapters/flipkart-billing.js';
+import type { TallySalesBill } from '../../src/adapters/tally.js';
 import type { FlipkartConnectionStatus } from '../../src/shared/contracts.js';
 import type { MarketplaceListing } from '../../src/shared/marketplace-contracts.js';
 import {
@@ -9,10 +11,13 @@ import {
 } from '../../src/server/marketplace-service.js';
 import type { ListingTransport } from '../../src/server/marketplace-publication.js';
 import { InventoryService } from '../../src/server/service.js';
-import { serverFixture } from '../support/server-fixture.js';
+import { createApp } from '../../src/server/http.js';
+import type { PollingTimers } from '../../src/server/polling.js';
+import type { BillingSources } from '../../src/server/billing-service.js';
+import { close, listen, serverFixture } from '../support/server-fixture.js';
 import { marketplaceData } from '../support/marketplace-fixture.js';
 
-function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
+function fixture(t: TestContext, mode: 'live' | 'demo' = 'live', billingSources?: BillingSources) {
   const base = serverFixture(t, mode);
   const credentials = new Map<string, string>();
   const statusChecks: string[] = [];
@@ -26,7 +31,7 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
     mrp?: number;
     price?: number;
   }> = [];
-  let failWrite: 'no' | 'before' | 'after' = 'no';
+  let failWrite: 'no' | 'before' | 'after' | 'lost-readback' = 'no';
   let failRead = false;
   let failImport = false;
   let afterRead: (() => void) | undefined;
@@ -97,6 +102,7 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
         failRead = true;
         throw new FlipkartListingError('Connection interrupted.', true);
       }
+      if (failWrite === 'lost-readback') failRead = true;
     },
     async updatePrice(token, listing, mrp, price) {
       transportCalls.push('updatePrice');
@@ -106,7 +112,11 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
       result.sellingPrice = price;
     },
   };
-  let service = new MarketplaceService(base.store, base.folder, { client, createConnection });
+  let service = new MarketplaceService(base.store, base.folder, {
+    client,
+    createConnection,
+    billingSources,
+  });
   t.after(async () => {
     service.stop();
     await service.idle();
@@ -183,10 +193,70 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
     async restart() {
       service.stop();
       await service.idle();
-      service = new MarketplaceService(base.store, base.folder, { client, createConnection });
+      service = new MarketplaceService(base.store, base.folder, {
+        client,
+        createConnection,
+        billingSources,
+      });
     },
   };
 }
+
+test('slow billing reads allow stock corrections and discard results after seller verification changes', async (t) => {
+  let started!: () => void;
+  let resume!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const release = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  const f = fixture(t, 'live', {
+    tally: () => ({
+      listLedgers: async () => [{ externalId: 'ledger', name: 'Sales' }],
+      readSalesBills: async () => [],
+      readStock: async () => [],
+    }),
+    orders: {
+      async readOrders() {
+        started();
+        await release;
+        return [];
+      },
+    },
+  });
+  const account = await f.add();
+  f.store.update((s) =>
+    s.companies.push({
+      id: 'tally:books',
+      name: 'Books',
+      source: 'tally',
+      automation: false,
+      lastSuccess: null,
+    }),
+  );
+  const review = f.service.billingCommand('/api/billing/preview', {
+    companyId: 'tally:books',
+    accountId: account.id,
+    ledgerId: 'ledger',
+    field: 'reference',
+    reference: 'orderId',
+    days: 7,
+  });
+  await entered;
+  // Always release the simulated provider even if the write queue regresses.
+  const fallback = setTimeout(resume, 2000);
+  try {
+    assert.equal((await f.stock(account.id, 0)).change.state, 'confirmed');
+    f.service.invalidate(account.id);
+    resume();
+    await assert.rejects(review, /verification changed/);
+    assert.deepEqual(f.store.readBilling().rules, []);
+  } finally {
+    clearTimeout(fallback);
+    resume();
+  }
+});
 
 test('verified connections import immediately, while saved-only credentials require an explicit verification', async (t) => {
   const f = fixture(t);
@@ -292,23 +362,48 @@ test('authenticated catalogue ownership survives restarts, rejects duplicate acc
   assert.equal(f.listing(primary.id).id, listing.id);
 });
 
-async function mappedInventory(t: TestContext, packSource: 'manual' | 'packages' = 'manual') {
-  const f = fixture(t);
+async function mappedInventory(
+  t: TestContext,
+  packSource: 'manual' | 'packages' = 'manual',
+  options: { coverage?: boolean; packSize?: number; tyreFloor?: boolean; physical?: number } = {},
+) {
+  let physical = options.physical ?? 14;
+  const readStock = async () => [{ externalId: 'item', name: 'Tyres', unit: 'pieces', physical }];
+  const orders: FlipkartBillingOrder[] = [];
+  const ordersBySeller = new Map([['seller-a', orders]]);
+  const bills: TallySalesBill[] = [];
+  let failOrders = false;
+  let beforeOrders: (() => Promise<void>) | undefined;
+  const f = fixture(t, 'live', {
+    tally: () => ({
+      listLedgers: async () => [{ externalId: 'flipkart-ledger', name: 'Flipkart sales' }],
+      readStock,
+      readSalesBills: async () => structuredClone(bills),
+    }),
+    orders: {
+      readOrders: async () => structuredClone(orders),
+      async readStockOrders(token) {
+        if (failOrders) throw new Error('Order read unavailable');
+        const action = beforeOrders;
+        beforeOrders = undefined;
+        await action?.();
+        return structuredClone(ordersBySeller.get(token) ?? []);
+      },
+    },
+  });
   const account = await f.add();
   const remote = f.remote.get('seller-a')![0];
   remote.packageCount = 2;
   await f.service.refresh(account.id);
-  let physical = 14;
-  const inventory = () =>
+  const inventory = (timers?: PollingTimers) =>
     new InventoryService(f.store, {
+      timers,
       marketplaces: f.service,
       createTallyReader: () => ({
         async listCompanies() {
           return [{ externalId: 'a', name: 'Tally company' }];
         },
-        async readStock() {
-          return [{ externalId: 'item', name: 'Tyres', unit: 'pieces', physical }];
-        },
+        readStock,
       }),
     });
   const service = inventory();
@@ -320,11 +415,29 @@ async function mappedInventory(t: TestContext, packSource: 'manual' | 'packages'
     listingId: listing.id,
     listingVersion: listing.version,
     confirmPackEvidence: true,
-    packSize: 2,
+    packSize: options.packSize ?? 2,
     packSource,
     sourceScope: 'company',
-    tyreFloor: true,
+    tyreFloor: options.tyreFloor ?? true,
   });
+  const scope = { companyId: item.companyId, accountId: account.id };
+  async function enableCoverage() {
+    f.store.updateBilling((data) => {
+      data.rules.push({
+        ...scope,
+        ledgerId: 'flipkart-ledger',
+        ledgerName: 'Flipkart sales',
+        field: 'reference',
+        reference: 'orderItemId',
+      });
+    });
+    await f.service.billingCommand('/api/billing/coverage/start', {
+      ...scope,
+      fromDate: new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10),
+      confirmed: true,
+    });
+  }
+  if (options.coverage !== false) await enableCoverage();
   function prepare() {
     service.calculate(item.companyId, [listing.id]);
     return service.review(item.companyId, [listing.id]);
@@ -338,6 +451,15 @@ async function mappedInventory(t: TestContext, packSource: 'manual' | 'packages'
     item,
     listing,
     prepare,
+    orders,
+    bills,
+    enableCoverage,
+    onNextOrders(action: () => Promise<void>) {
+      beforeOrders = action;
+    },
+    setOrdersOffline(offline: boolean) {
+      failOrders = offline;
+    },
     setPhysical(value: number) {
       physical = value;
     },
@@ -404,6 +526,408 @@ test('automatic Inventory follows Tally and saved mappings across restart; it do
   assert.equal(s.f.writes.at(-1)?.quantity, 8);
 });
 
+test('restocking from four to six publishes five until the Flipkart order is billed', async (t) => {
+  const s = await mappedInventory(t, 'manual', { physical: 4, packSize: 1, tyreFloor: false });
+  s.service.automation(s.item.companyId, true);
+  await s.service.refresh();
+  s.orders.push({
+    orderItemId: 'order-line-1',
+    orderId: 'order-1',
+    invoiceNumber: null,
+    listingId: s.remote.id,
+    sku: s.remote.sku,
+    locationId: s.listing.location,
+    quantity: 1,
+    orderDate: new Date().toISOString(),
+  });
+  s.remote.locations[0].quantity = 3;
+  await s.f.service.refresh(s.account.id);
+  await s.service.refresh();
+  assert.equal(s.remote.locations[0].quantity, 3);
+  s.setPhysical(6);
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [4, 5],
+  );
+  const review = s.prepare();
+  assert.equal(review.rows[0].quantity, 6);
+  const result = (await s.service.publish(review.id)).rows[0];
+  assert.equal(result.status, 'blocked');
+  assert.match(result.message, /review shows 6.+listing quantity is 5/);
+  s.bills.push({
+    externalId: 'bill-1',
+    number: '1',
+    date: new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10),
+    reference: 'order-line-1',
+    narration: '',
+    lines: [{ itemExternalId: 'item', quantity: 1, unit: 'pieces' }],
+  });
+  s.setPhysical(5);
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [4, 5],
+    'billing keeps five available',
+  );
+  assert.equal(
+    s.service.snapshot().listings.find((row) => row.id === s.listing.id)!.syncPendingItemVersion,
+    null,
+  );
+});
+
+test('the order poll takes another seller’s pair offline after one single sells, without waiting for Tally', async (t) => {
+  const s = await mappedInventory(t, 'manual', {
+    physical: 2,
+    packSize: 1,
+    tyreFloor: false,
+    coverage: false,
+  });
+  const sellerB = await s.f.add('seller-b');
+  const catalogue = s.f.remote.get('seller-b')!;
+  const pair = {
+    ...structuredClone(catalogue[0]),
+    id: 'pair-listing',
+    productId: 'pair-product',
+    sku: 'TYRE-PAIR',
+  };
+  catalogue.push(pair);
+  await s.f.service.refresh(sellerB.id);
+  const mapping = s.service
+    .snapshot()
+    .listings.find(
+      (l) => l.accountId === sellerB.id && l.sku === pair.sku && l.location === 'warehouse-a',
+    )!;
+  s.service.mapping({
+    listingId: mapping.id,
+    itemId: s.item.id,
+    listingVersion: mapping.version,
+    packSize: 2,
+    packSource: 'manual',
+    sourceScope: 'company',
+    tyreFloor: true,
+    confirmPackEvidence: true,
+  });
+  s.f.store.updateBilling((data) =>
+    data.rules.push({
+      accountId: sellerB.id,
+      companyId: s.item.companyId,
+      ledgerId: 'ledger-b',
+      ledgerName: 'Seller B sales',
+      field: 'reference',
+      reference: 'orderItemId',
+    }),
+  );
+  await s.enableCoverage();
+  s.service.automation(s.item.companyId, true);
+  await s.service.refresh();
+  assert.equal(s.remote.locations[0].quantity, 2);
+  assert.equal(pair.locations[0].quantity, 5);
+  const due = new Map<number, () => void>();
+  const running = s.inventory({
+    now: Date.now,
+    schedule(callback, delay) {
+      due.set(delay, callback);
+      return () => {
+        if (due.get(delay) === callback) due.delete(delay);
+      };
+    },
+  });
+  running.start();
+  try {
+    await running.idle();
+    const order = {
+      orderItemId: 'single-sale',
+      orderId: 'O1',
+      invoiceNumber: null,
+      listingId: s.remote.id,
+      sku: s.remote.sku,
+      locationId: s.listing.location,
+      quantity: 1,
+      orderDate: new Date().toISOString(),
+    };
+    s.orders.push(order);
+    s.remote.locations[0].quantity = 1;
+    const before = s.f.writes.length;
+    const interval = s.service.snapshot().settings.marketplaceSeconds * 1000;
+    due.get(interval)!();
+    await running.idle();
+    assert.equal(s.service.snapshot().items[0].physical, 2);
+    assert.equal(s.remote.locations[0].quantity, 1);
+    assert.equal(pair.locations[0].quantity, 0);
+    assert.deepEqual(
+      s.f.writes.slice(before).map((w) => [w.token, w.quantity]),
+      [['seller-b', 0]],
+    );
+    const reads = s.f.listingReadStatusChecks.length;
+    due.get(interval)!();
+    await running.idle();
+    assert.equal(
+      s.f.listingReadStatusChecks.length,
+      reads,
+      'a duplicate receipt schedules no new checks',
+    );
+    s.bills.push({
+      externalId: 'bill',
+      number: '1',
+      date: new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10),
+      reference: order.orderItemId,
+      narration: '',
+      lines: [{ itemExternalId: 'item', quantity: 1, unit: 'pieces' }],
+    });
+    s.setPhysical(1);
+    await s.service.refresh();
+    assert.equal(s.f.writes.length, before + 1, 'billing cannot deduct the same sale again');
+  } finally {
+    running.stop();
+    await running.idle();
+  }
+});
+
+test('a new order never raises lower fresh remote stock, and a duplicate cannot override a later seller edit', async (t) => {
+  const s = await mappedInventory(t, 'manual', { physical: 8, packSize: 1, tyreFloor: false });
+  s.service.automation(s.item.companyId, true);
+  await s.service.refresh();
+  s.orders.push({
+    orderItemId: 'first',
+    orderId: 'first',
+    invoiceNumber: null,
+    listingId: s.remote.id,
+    sku: s.remote.sku,
+    locationId: s.listing.location,
+    quantity: 1,
+    orderDate: new Date().toISOString(),
+  });
+  s.remote.locations[0].quantity = 3;
+  await s.service.refresh();
+  const row = s.service.snapshot().listings.find((l) => l.id === s.listing.id)!;
+  assert.equal(row.observed, 3);
+  assert.equal(row.orderSyncPending ?? null, null);
+  assert.deepEqual(
+    s.f.writes.map((w) => w.quantity),
+    [8],
+  );
+  await s.f.stock(s.account.id, 8);
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((w) => w.quantity),
+    [8, 8],
+  );
+});
+
+test('an unchanged Tally poll drains a saved sale, and Calculate wakes automation for a newly observed sale', async (t) => {
+  const s = await mappedInventory(t, 'manual', { physical: 6, packSize: 1, tyreFloor: false });
+  s.service.automation(s.item.companyId, true);
+  await s.service.refresh();
+  const sale = {
+    orderItemId: 'sale',
+    orderId: 'sale',
+    invoiceNumber: null,
+    listingId: s.remote.id,
+    sku: s.remote.sku,
+    locationId: s.listing.location,
+    quantity: 1,
+    orderDate: new Date().toISOString(),
+  };
+  s.orders.push(sale);
+  // Simulate discovery before the publishing worker starts.
+  await s.f.service.checkStockOrders(s.item.companyId, {});
+  assert.ok(s.service.snapshot().listings.find((l) => l.id === s.listing.id)!.orderSyncPending);
+  const callbacks = new Map<number, () => void>();
+  const running = s.inventory({
+    now: Date.now,
+    schedule(callback, delay) {
+      callbacks.set(delay, callback);
+      return () => callbacks.delete(delay);
+    },
+  });
+  running.start();
+  try {
+    await running.idle();
+    callbacks.get(s.service.snapshot().settings.tallySeconds * 1000)!();
+    await running.idle();
+    assert.equal(s.remote.locations[0].quantity, 5);
+    s.orders.push({ ...sale, orderItemId: 'another', orderId: 'another' });
+    const draft = await running.calculateAvailable(s.item.companyId, [s.listing.id]);
+    assert.equal(draft.proposals[0].quantity, 4, 'Calculate finishes saving its review');
+    await running.idle();
+    assert.equal(
+      s.remote.locations[0].quantity,
+      4,
+      'new sale is published without another scheduled poll',
+    );
+    assert.deepEqual(
+      s.f.writes.map((w) => w.quantity),
+      [6, 5, 4],
+    );
+  } finally {
+    running.stop();
+    await running.idle();
+  }
+});
+
+test('Calculate with automation off reviews and publishes five, then catches another order before Apply', async (t) => {
+  const s = await mappedInventory(t, 'manual', { physical: 6, packSize: 1, tyreFloor: false });
+  s.orders.push({
+    orderItemId: 'line-1',
+    orderId: 'order-1',
+    invoiceNumber: null,
+    listingId: s.remote.id,
+    sku: s.remote.sku,
+    locationId: s.listing.location,
+    quantity: 1,
+    orderDate: new Date().toISOString(),
+  });
+  s.remote.locations[0].quantity = 3;
+  await s.f.service.refresh(s.account.id);
+  const calculate = () => s.service.calculateAvailable(s.item.companyId, [s.listing.id]);
+  const review = () => s.service.review(s.item.companyId, [s.listing.id]);
+  const draft = (await calculate()).proposals[0];
+  assert.deepEqual([draft.quantity, draft.calculated, draft.edited], [5, 5, false]);
+  const first = review();
+  assert.equal(first.rows[0].quantity, 5);
+  assert.equal((await s.service.publish(first.id)).rows[0].status, 'confirmed');
+  await calculate();
+  const earlier = review();
+  s.orders.push({ ...s.orders[0], orderItemId: 'line-2', orderId: 'order-2' });
+  const blocked = (await s.service.publish(earlier.id)).rows[0];
+  assert.equal(blocked.status, 'blocked');
+  assert.match(blocked.message, /review shows 5.+listing quantity is 4/);
+  assert.equal((await calculate()).proposals[0].quantity, 4);
+  assert.equal((await s.service.publish(review().id)).rows[0].status, 'confirmed');
+  assert.deepEqual(
+    s.f.writes.map((entry) => entry.quantity),
+    [5, 4],
+  );
+});
+
+test('a manual edit during Calculate is preserved and an existing edited draft survives recalculation', async (t) => {
+  const s = await mappedInventory(t);
+  s.onNextOrders(async () => {
+    s.service.edit(s.item.companyId, s.listing.id, 1);
+  });
+  const calculate = () => s.service.calculateAvailable(s.item.companyId, [s.listing.id]);
+  await assert.rejects(calculate(), /selected draft changed/);
+  s.setOrdersOffline(true);
+  const draft = (await calculate()).proposals[0];
+  assert.equal(draft.quantity, 1);
+  assert.equal(draft.edited, true);
+});
+
+test('unknown order coverage and failed reads keep positive work pending and retry on unchanged Tally stock', async (t) => {
+  const s = await mappedInventory(t, 'manual', { coverage: false });
+  s.service.automation(s.item.companyId, true);
+  await s.service.refresh();
+  await s.service.refresh();
+  const blocked = s.service.snapshot();
+  assert.equal(s.f.writes.length, 0);
+  assert.notEqual(
+    blocked.listings.find((row) => row.id === s.listing.id)!.syncPendingItemVersion,
+    null,
+  );
+  assert.equal(
+    blocked.activity.filter((event) => event.operation === 'inventory-sync-blocked').length,
+    1,
+  );
+  await s.enableCoverage();
+  s.setOrdersOffline(true);
+  await s.service.refresh();
+  assert.equal(s.f.writes.length, 0);
+  s.setOrdersOffline(false);
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [7],
+  );
+});
+
+test('losing seller verification during a protected stock no-op leaves it pending', async (t) => {
+  const s = await mappedInventory(t, 'manual', { physical: 10 });
+  s.service.automation(s.item.companyId, true);
+  s.f.onNextRead(() => s.f.service.invalidate(s.account.id));
+  await s.service.refresh();
+  const pending = () =>
+    s.service.snapshot().listings.find((row) => row.id === s.listing.id)!.syncPendingItemVersion;
+  assert.notEqual(pending(), null);
+  assert.equal(s.f.store.readMarketplace().changes.length, 0);
+  await s.f.service.refresh(s.account.id);
+  await s.service.refresh();
+  assert.equal(pending(), null);
+  assert.equal(s.f.writes.length, 0);
+});
+
+test('an explicit stock correction during an order read runs immediately and supersedes the earlier calculated review', async (t) => {
+  const s = await mappedInventory(t);
+  const review = s.prepare();
+  s.onNextOrders(async () => {
+    assert.equal((await s.f.stock(s.account.id, 1)).change.state, 'confirmed');
+  });
+  const result = (await s.service.publish(review.id)).rows[0];
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(
+    s.f.writes.map((entry) => entry.quantity),
+    [1],
+  );
+});
+
+test('an unbilled multi-pack sale is deducted in base units before applying the tyre floor', async (t) => {
+  const s = await mappedInventory(t, 'manual', { physical: 5, packSize: 2, tyreFloor: true });
+  s.orders.push({
+    orderItemId: 'tyres-1',
+    orderId: 'multi-1',
+    invoiceNumber: null,
+    listingId: s.remote.id,
+    sku: s.remote.sku,
+    locationId: s.listing.location,
+    quantity: 2,
+    orderDate: new Date().toISOString(),
+  });
+  s.service.automation(s.item.companyId, true);
+  await s.service.refresh();
+  assert.equal(s.remote.locations[0].quantity, 0, 'one free tyre cannot form a set of two');
+  s.setPhysical(6);
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((entry) => entry.quantity),
+    [0, 5],
+  );
+});
+
+test('automatic zeros run before a positive stock check in the same refresh', async (t) => {
+  const s = await mappedInventory(t, 'manual', { coverage: false });
+  const second = s.service.snapshot().listings.find((row) => row.location === 'warehouse-b')!;
+  s.service.mapping({
+    listingId: second.id,
+    itemId: s.item.id,
+    listingVersion: second.version,
+    confirmPackEvidence: true,
+    packSize: 20,
+    packSource: 'manual',
+    sourceScope: 'company',
+    tyreFloor: false,
+  });
+  await s.enableCoverage();
+  s.service.automation(s.item.companyId, true);
+  s.onNextOrders(async () => {
+    assert.equal(s.remote.locations[1].quantity, 0);
+  });
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [0, 7],
+  );
+});
+
+test('a verified zero publishes even with no billing coverage', async (t) => {
+  const s = await mappedInventory(t, 'manual', { physical: 1, coverage: false });
+  s.service.automation(s.item.companyId, true);
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((entry) => entry.quantity),
+    [0],
+  );
+});
+
 test('a remote package change blocks a package-based write at final preflight and leaves a custom multiplier intact', async (t) => {
   for (const source of ['packages', 'manual'] as const) {
     const s = await mappedInventory(t, source);
@@ -452,7 +976,7 @@ test('new automatic quantities supersede rejected writes and uncertain attempts 
   s.f.setFailWrite('before');
   await s.service.refresh();
   s.setPhysical(1);
-  s.f.setFailWrite('after');
+  s.f.setFailWrite('lost-readback');
   await s.service.refresh();
   assert.deepEqual(
     s.f.writes.map((entry) => entry.quantity),
@@ -531,7 +1055,7 @@ test('a rejected reviewed zero activates the hold and queues its correction', as
 test('an uncertain Update once supersedes earlier pending stock only after the outcome is checked', async (t) => {
   const s = await mappedInventory(t);
   s.service.automation(s.item.companyId, true);
-  s.f.setFailWrite('after');
+  s.f.setFailWrite('lost-readback');
   const result = await s.f.stock(s.account.id, 2);
   assert.equal(result.change.state, 'uncertain');
   s.f.setFailRead(false);
@@ -815,10 +1339,10 @@ test('hold and sales allowance cannot be bypassed by Apply or Pause; policy chan
   assert.equal(after.paused, true);
 });
 
-test('an uncertain write is durable, blocks replay, and can be confirmed by readback after restart', async (t) => {
+test('an acknowledged write with missing readback blocks replay and can be confirmed after restart', async (t) => {
   const f = fixture(t);
   const account = await f.add();
-  f.setFailWrite('after');
+  f.setFailWrite('lost-readback');
   const result = await f.stock(account.id, 2);
   assert.equal(result.change.state, 'uncertain');
   await assert.rejects(f.stock(account.id, 2), /previous update result/);
@@ -845,6 +1369,51 @@ test('a rejected stock write keeps the requested pause and reports failure witho
   assert.equal(result.change.state, 'failed');
   assert.equal(result.listing.locations[0].quantity, 5);
   assert.equal(f.store.read().listings.find((row) => row.location === 'warehouse-a')!.paused, true);
+});
+
+test('seller recovery via HTTP rereads Tally and unbilled orders and resumes at four without resending five', async (t) => {
+  const s = await mappedInventory(t, 'manual', { packSize: 1, tyreFloor: false, physical: 5 });
+  s.f.setFailWrite('lost-readback');
+  const old = await s.f.stock(s.account.id, 5);
+  assert.equal(old.change.state, 'uncertain');
+  s.remote.locations[0].quantity = 4;
+  s.orders.push({
+    orderId: 'order-after-write',
+    orderItemId: 'unbilled-1',
+    invoiceNumber: null,
+    listingId: s.remote.id,
+    sku: s.remote.sku,
+    locationId: s.listing.location,
+    quantity: 1,
+    orderDate: new Date().toISOString(),
+  });
+  s.f.setFailRead(false);
+  s.f.setFailWrite('no');
+  const app = createApp(s.service, s.f.folder, undefined, undefined, s.f.service);
+  const address = await listen(app);
+  t.after(() => close(app));
+  const post = (action: string, extra: Record<string, unknown> = {}) =>
+    fetch(address + '/api/marketplaces/recovery/' + action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Stockbridge-Request': '1' },
+      body: JSON.stringify({ accountId: s.account.id, changeId: old.change.id, ...extra }),
+    });
+  const preview = await post('review');
+  assert.equal(preview.status, 200);
+  const review = (await preview.json()) as { reviewId: string; quantity: number; observed: number };
+  assert.deepEqual([review.quantity, review.observed], [4, 4]);
+  s.setOrdersOffline(true);
+  assert.notEqual((await post('approve', { reviewId: review.reviewId })).status, 200);
+  assert.equal(s.f.store.readMarketplace().changes[0].state, 'uncertain');
+  s.setOrdersOffline(false);
+  const again = (await (await post('review')).json()) as { reviewId: string };
+  const result = await post('approve', { reviewId: again.reviewId });
+  assert.equal(result.status, 200);
+  assert.equal(((await result.json()) as { change: { state: string } }).change.state, 'reconciled');
+  assert.deepEqual(
+    s.f.writes.map((w) => w.quantity),
+    [5],
+  );
 });
 
 test('replacing credentials cannot change a bound seller and failed imports preserve prior catalog', async (t) => {

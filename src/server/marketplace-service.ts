@@ -11,6 +11,7 @@ import type {
   MarketplacePage,
 } from '../shared/marketplace-contracts.js';
 import { recordActivity } from './activity.js';
+import { BillingService, type BillingSources } from './billing-service.js';
 import { FlipkartConnection } from './flipkart-connection.js';
 import {
   cataloguesOverlap,
@@ -21,6 +22,9 @@ import {
   updateInventoryObservations,
 } from './marketplace-catalog.js';
 import { MarketplacePublication, type ListingTransport } from './marketplace-publication.js';
+import { desiredStock } from './proposals.js';
+import { StockAvailabilityService } from './stock-availability.js';
+import { MarketplaceStockRecovery } from './marketplace-stock-recovery.js';
 import type { Store } from './store.js';
 import { InputError, requireText, requireWholeNumber } from './validation.js';
 
@@ -29,6 +33,7 @@ export type AccountConnection = Pick<
   'status' | 'save' | 'connect' | 'check' | 'disconnect' | 'getAccessToken' | 'stop' | 'idle'
 >;
 interface MarketplaceDependencies {
+  billingSources?: BillingSources;
   client?: ListingTransport;
   createConnection?: (accountId: string) => AccountConnection;
   legacyConnection?: AccountConnection;
@@ -47,9 +52,14 @@ export class MarketplaceService {
   private readonly connections = new Map<string, AccountConnection>();
   private readonly pending = new Map<string, Promise<unknown>>();
   private readonly verifiedAccounts = new Set<string>();
+  private readonly verificationRevision = new Map<string, number>();
   private readonly verifiedImportErrors = new Map<string, string>();
   private readonly client: ListingTransport;
   private readonly publisher: MarketplacePublication;
+  private readonly billing: BillingService;
+  private readonly availability: StockAvailabilityService;
+  private readonly orderListeners = new Set<(companyId: string, batch?: object) => void>();
+  private readonly recovery: MarketplaceStockRecovery;
   private stopped = false;
   private readonly mode: 'live' | 'demo';
 
@@ -61,8 +71,28 @@ export class MarketplaceService {
     this.mode = store.read().mode;
     this.client = dependencies.client ?? new FlipkartListingsClient();
     this.publisher = new MarketplacePublication(store, this.client);
+    this.billing = new BillingService(store, dependencies.billingSources);
+    this.availability = new StockAvailabilityService(
+      store,
+      dependencies.billingSources,
+      async (id) => {
+        const verify = this.sellerGuard(id);
+        const token = await this.verifiedToken(id);
+        verify();
+        return { token, verify };
+      },
+      (companyId, batch) => {
+        for (const listener of this.orderListeners) listener(companyId, batch);
+      },
+    );
     if (dependencies.legacyConnection)
       this.connections.set('flipkart-primary', dependencies.legacyConnection);
+    this.recovery = new MarketplaceStockRecovery(
+      store,
+      this.client,
+      this.publisher,
+      (companyId, itemId) => this.availableStock(companyId, itemId),
+    );
     store.updateMarketplace((data, state) => {
       seedSampleMarketplace(data, state);
       if (this.mode === 'live') markPackageCountsUnavailable(state);
@@ -246,6 +276,8 @@ export class MarketplaceService {
 
   invalidate(accountId: string): void {
     this.verifiedAccounts.delete(accountId);
+    this.verificationRevision.set(accountId, (this.verificationRevision.get(accountId) ?? 0) + 1);
+    this.billing.invalidate(accountId);
   }
 
   runLegacyCommand(
@@ -589,19 +621,85 @@ export class MarketplaceService {
     );
   }
 
-  async publishInventory(intent: InventoryIntent): Promise<InventoryPublishRow> {
-    const row = this.store.read().listings.find((entry) => entry.id === intent.listingId);
+  private sellerGuard(accountId: string): () => void {
+    const revision = this.verificationRevision.get(accountId);
+    return () => {
+      if (
+        this.stopped ||
+        (this.mode === 'live' && !this.verifiedAccounts.has(accountId)) ||
+        revision !== this.verificationRevision.get(accountId)
+      )
+        throw new InputError(
+          'Seller verification changed during the billing review. Refresh listings and try again.',
+          409,
+        );
+    };
+  }
+
+  async billingCommand(path: string, input: Record<string, unknown>) {
+    const account = this.account(input.accountId);
+    if (path === '/api/billing/coverage' || path === '/api/billing/coverage/start')
+      return this.availability.coverageCommand(path, input);
+    // A long period of order history must not delay an urgent stock correction.
+    // Revalidate seller ownership if credentials or catalogue access change meanwhile.
+    return this.serial('billing:' + account.id, () =>
+      this.billing.command(
+        path,
+        input,
+        () => this.verifiedToken(account.id),
+        this.sellerGuard(account.id),
+      ),
+    );
+  }
+
+  availableStock(companyId: string, itemId: string, batch?: object) {
+    return this.serial('stock-evidence:' + companyId, () =>
+      this.availability.forItem(companyId, itemId, batch),
+    );
+  }
+
+  checkStockOrders(companyId: string, batch: object): Promise<void> {
+    return this.serial('stock-evidence:' + companyId, () =>
+      this.availability.checkOrders(companyId, batch),
+    );
+  }
+
+  onStockOrdersPending(listener: (companyId: string, batch?: object) => void): () => void {
+    this.orderListeners.add(listener);
+    return () => {
+      this.orderListeners.delete(listener);
+    };
+  }
+
+  async publishInventory(intent: InventoryIntent, batch?: object): Promise<InventoryPublishRow> {
+    const state = this.store.read();
+    const row = state.listings.find((entry) => entry.id === intent.listingId);
     const identity = { listingId: intent.listingId, sku: row?.sku ?? '' };
     try {
       if (!row) throw new InputError('The listing is no longer mapped.', 409);
+      const marketplace = this.store
+        .readMarketplace()
+        .listings.find((entry) => entry.accountId === row.accountId && entry.sku === row.sku);
+      if (!marketplace)
+        throw new InputError('Refresh the seller account to locate this listing.', 409);
+      // Keep slow order and bill reads off the seller's write queue so an
+      // explicit zero or pause can still take effect during reconciliation.
+      const protectedStock =
+        !intent.draft?.edited &&
+        (this.mode === 'live' || this.store.readStockCoverage(intent.companyId)) &&
+        desiredStock(state, row) > 0;
+      const evidence = protectedStock
+        ? await this.availableStock(intent.companyId, row.itemId!, batch)
+        : undefined;
       return await this.serial(row.accountId, async () => {
+        const verifySeller = this.sellerGuard(row.accountId);
         const token = await this.verifiedToken(row.accountId);
-        const marketplace = this.store
-          .readMarketplace()
-          .listings.find((entry) => entry.accountId === row.accountId && entry.sku === row.sku);
-        if (!marketplace)
-          throw new InputError('Refresh the seller account to locate this listing.', 409);
-        const { listing, quantity } = inventoryTarget(this.store.read(), intent, marketplace);
+        const { listing, quantity } = inventoryTarget(
+          this.store.read(),
+          intent,
+          marketplace,
+          evidence?.available,
+        );
         const result = await this.publisher.apply(
           row.accountId,
           {
@@ -611,6 +709,13 @@ export class MarketplaceService {
           },
           token,
           intent,
+          {
+            available: evidence?.available,
+            verify: () => {
+              verifySeller();
+              evidence?.verify();
+            },
+          },
         );
         if (!result)
           return {
@@ -678,6 +783,24 @@ export class MarketplaceService {
     );
   }
 
+  recoverStock(input: Record<string, unknown>, action: 'review' | 'approve') {
+    const account = this.account(input.accountId);
+    const changeId = requireText(input.changeId, 'Update');
+    return this.serial(account.id, async () => {
+      const verify = this.sellerGuard(account.id);
+      const token = await this.verifiedToken(account.id);
+      verify();
+      if (action === 'review') return this.recovery.review(account.id, changeId, token, verify);
+      return this.recovery.approve(
+        account.id,
+        changeId,
+        requireText(input.reviewId, 'Recovery review'),
+        token,
+        verify,
+      );
+    });
+  }
+
   changePolicy(input: Record<string, unknown>): Promise<MarketplaceListingView> {
     const account = this.account(input.accountId);
     return this.serial(account.id, async () => {
@@ -701,7 +824,10 @@ export class MarketplaceService {
         for (const row of rows) {
           // A pending correction belongs to the old restriction. Returning to
           // Auto must wait for its own Tally change or an explicit publication.
-          if (row.policy !== 'auto') row.syncPendingItemVersion = null;
+          if (row.policy !== 'auto') {
+            row.syncPendingItemVersion = null;
+            row.orderSyncPending = null;
+          }
           row.policy = 'auto';
           row.remaining = null;
           row.version++;

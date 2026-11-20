@@ -1,10 +1,13 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 /** Each managed record has an explicit table. Array order is presentation state,
  * so sort_order is retained without making names or positions into identities. */
-export function createSchema(database: DatabaseSync): void {
+export function createSchema(
+  database: DatabaseSync,
+  version: 6 | 7 = CURRENT_SCHEMA_VERSION,
+): void {
   database.exec(`
     CREATE TABLE app_metadata (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -105,6 +108,71 @@ export function createSchema(database: DatabaseSync): void {
   // historical identifiers, so deleting a record must not delete its history.
   createMarketplaceSchema(database);
   createPackSchema(database);
+  createBillingSchema(database);
+  createStockCoverageSchema(database);
+  if (version === 7) upgradeOrderSyncSchema(database);
+}
+
+/** Old uncertain writes have no recorded request finality and must stay that way. */
+export function upgradeOrderSyncSchema(database: DatabaseSync): void {
+  database.exec(`
+    ALTER TABLE listing_pack_settings ADD COLUMN order_sync_pending TEXT
+      CHECK (order_sync_pending IS NULL OR length(trim(order_sync_pending)) > 0);
+    DROP INDEX marketplace_changes_destination;
+    ALTER TABLE marketplace_changes RENAME TO marketplace_changes_before_recovery;
+  `);
+  createChangeTable(database, true);
+  database.exec(`
+    INSERT INTO marketplace_changes (id, account_id, listing_id, sku, state, edit, message, created_at, updated_at, sort_order)
+      SELECT id, account_id, listing_id, sku, state, edit, message, created_at, updated_at, sort_order
+      FROM marketplace_changes_before_recovery;
+    DROP TABLE marketplace_changes_before_recovery;
+  `);
+}
+
+export function createStockCoverageSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE stock_coverage (
+      company_id TEXT PRIMARY KEY NOT NULL REFERENCES companies(id) DEFERRABLE INITIALLY DEFERRED,
+      from_at TEXT NOT NULL CHECK (from_at GLOB '????-??-??T18:30:00.000Z' AND julianday(from_at) IS NOT NULL),
+      signature TEXT NOT NULL CHECK (length(trim(signature)) > 0),
+      checked_through TEXT CHECK (checked_through IS NULL OR
+        (julianday(checked_through) IS NOT NULL AND julianday(checked_through) >= julianday(from_at)))
+    ) STRICT;
+    CREATE TABLE stock_coverage_orders (
+      company_id TEXT NOT NULL REFERENCES stock_coverage(company_id),
+      account_id TEXT NOT NULL CHECK (length(trim(account_id)) > 0),
+      order_item_id TEXT NOT NULL CHECK (length(trim(order_item_id)) > 0),
+      evidence TEXT NOT NULL CHECK (json_valid(evidence) AND json_extract(evidence, '$.orderItemId') IS order_item_id),
+      PRIMARY KEY(company_id, account_id, order_item_id)
+    ) STRICT;
+  `);
+}
+
+export function createBillingSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE billing_rules (
+      company_id TEXT NOT NULL REFERENCES companies(id) DEFERRABLE INITIALLY DEFERRED,
+      account_id TEXT NOT NULL REFERENCES seller_accounts(id) DEFERRABLE INITIALLY DEFERRED,
+      ledger_id TEXT NOT NULL CHECK (length(trim(ledger_id)) > 0),
+      ledger_name TEXT NOT NULL CHECK (length(trim(ledger_name)) > 0),
+      field TEXT NOT NULL CHECK (field IN ('reference','number','narration','manual')),
+      reference TEXT NOT NULL CHECK (reference IN ('orderId','orderItemId','invoiceNumber')),
+      PRIMARY KEY(company_id, account_id)
+    ) STRICT;
+    CREATE TABLE billing_links (
+      company_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      order_item_id TEXT NOT NULL CHECK (length(trim(order_item_id)) > 0),
+      bill_id TEXT NOT NULL CHECK (length(trim(bill_id)) > 0),
+      item_id TEXT NOT NULL CHECK (length(trim(item_id)) > 0),
+      ledger_id TEXT NOT NULL CHECK (length(trim(ledger_id)) > 0),
+      fingerprint TEXT NOT NULL CHECK (length(trim(fingerprint)) > 0),
+      PRIMARY KEY(account_id, order_item_id),
+      UNIQUE(company_id, bill_id, item_id),
+      FOREIGN KEY(company_id, account_id) REFERENCES billing_rules(company_id, account_id) DEFERRABLE INITIALLY DEFERRED
+    ) STRICT;
+  `);
 }
 
 /** Each row belongs to a specific account, seller SKU and inventory location
@@ -150,13 +218,28 @@ export function createMarketplaceSchema(database: DatabaseSync): void {
       PRIMARY KEY (account_id, id),
       UNIQUE (account_id, sku)
     );
+  `);
+  createChangeTable(database, false);
+}
+
+function createChangeTable(database: DatabaseSync, recovery: boolean): void {
+  database.exec(`
     CREATE TABLE marketplace_changes (
       id TEXT PRIMARY KEY NOT NULL,
       account_id TEXT NOT NULL REFERENCES marketplace_accounts(account_id) DEFERRABLE INITIALLY DEFERRED,
       listing_id TEXT NOT NULL,
       sku TEXT NOT NULL,
-      state TEXT NOT NULL CHECK (state IN ('pending', 'sending', 'checking', 'confirmed', 'failed', 'uncertain')),
+      state TEXT NOT NULL CHECK (state IN ('pending', 'sending', 'checking', 'confirmed', 'failed', 'uncertain'${recovery ? ", 'reconciled'" : ''})),
       edit TEXT NOT NULL CHECK (json_valid(edit)),
+      ${
+        recovery
+          ? `stock_request_finality TEXT CHECK (stock_request_finality IS NULL OR
+        (json_extract(edit, '$.kind') = 'stock' AND
+        ((stock_request_finality = 'not-sent' AND state IN ('pending','uncertain','failed','reconciled')) OR
+         (stock_request_finality = 'completed' AND state IN ('checking','uncertain','confirmed','reconciled')))))
+         CHECK (state <> 'reconciled' OR stock_request_finality IS NOT NULL),`
+          : ''
+      }
       message TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,

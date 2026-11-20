@@ -10,13 +10,19 @@ A fresh live workspace has no company or seller account in its selectors. Tally 
 
 ## Current milestone
 
+**Order matching** lets each seller select a Tally company, Flipkart account and sales ledger. Choose where the order ID, order-item ID or invoice number is recorded, or review bills manually. Select today, the last 7 days or the last 30 days, preview the results, then save the setup. An exact reference, matching stock item and quantity can identify a unique bill. A seller can confirm or release a manual match. Flipkart supplies the orders and Tally supplies posted sales evidence. A ledger entry alone cannot establish that a Flipkart order exists.
+
+For automatic stock updates, confirm a starting date in **Order matching** after accounting for all earlier sales. Stockbridge checks all participating sellers, converts each unbilled Flipkart order into Tally units, and subtracts those units before calculating packs for each listing. If Tally shows six tyres and one is already sold on Flipkart, a single-tyre listing can publish five. Once the matching sale is billed and Tally shows five, five remain available. An incomplete check keeps a positive calculated update pending. The short, single-account preview helps identify bills. [Customer setup](docs/customer-setup.md) · [Flipkart coverage](docs/integration/flipkart-validation.md) · [Tally coverage](docs/integration/tally-validation.md)
+
 The first local foundation is implemented. It includes company-separated stock views, parent/child listing rows, search/brand/pack filters, selected or filtered bulk proposals, saved manual drafts, stale-review protection, Pause state, activity/diagnostic views, editable polling settings and verified manual SQLite backups.
+
+With coverage configured, **Inventory → Calculate** also prepares the adjusted quantity for review when automatic sync is off. Apply checks the available stock again. If a new order makes the reviewed quantity too high, calculate again to see the new amount.
 
 The sidebar starts collapsed at every screen size. Use the arrow below the Stockbridge logo to expand or collapse it. Navigation icons remain available in the collapsed view. On narrow screens, navigation expands over the page and closes after selecting a screen. Toggling the sidebar preserves the current screen and its unsaved inputs.
 
 **Marketplaces supports direct stock, MRP and selling-price edits with each editor's Apply action. In live mode Apply sends a real Flipkart request.** Accounts have independent credentials, seller binding, listing observations and outcomes. Refresh imports all five documented listing states and location stock; search and filters cover the complete last successful import. Tally setup is not required for this view. Settlement opens Seller Hub because a supported listing-settlement API has not been established.
 
-Inventory can publish a reviewed proposal or synchronize a mapped listing after Tally stock changes. Select **Set of** for each Flipkart destination. One available Tally unit and a Set of 2 give zero sellable packs. With company automation enabled, a later sale or purchase recalculates eligible destinations. A manual zero holds the listing out of stock. A positive one-time edit on Auto keeps it eligible for the next Tally change. Positive order-tracked sales allowances require order reconciliation.
+With automatic updates and order coverage enabled, a newly verified Flipkart sale can lower every eligible listing sharing that Tally item, including listings in another connected seller account. If two tyres supply both single and pair listings, selling one single leaves zero complete pairs. Stockbridge checks on the **Marketplace stock** schedule and can reduce the pair listing to zero before the Tally bill arrives. A Tally purchase can still increase available stock. Sellers can also calculate, review and publish manually.
 
 After importing listings, map a Tally item to a Flipkart SKU and stock location in Inventory. Confirm that this location draws on the selected company’s whole item balance. Choose the observed package count or enter the number of Tally units sold together. The choice survives restart. A changed package count flags package-based mappings for review and leaves seller-entered numbers in effect. The tyre minimum of five is an explicit choice for eligible destinations.
 
@@ -81,9 +87,9 @@ Tests exercise real loopback HTTP transport with Tally-shaped fixtures, stock-po
 - `src/desktop`: packaged Windows start/status/stop orchestration; verifies the responding instance before sending a private stop token.
 - `src/shared`: API contracts.
 
-SQLite schema version 4 stores the confirmed Set of, its source, package observations, company balance choice, tyre rule and pending Tally stock change for each destination. The migration validates and backs up supported older databases before upgrading.
+SQLite schema version 7 also retains pending order-triggered stock checks and evidence of whether a stock request finished or was never sent. Upgrades preserve existing order history, billing rules, manual matches and inventory settings. After an offline restore, reconcile earlier sales and confirm a starting date again before increasing calculated stock.
 
-Direct Apply persists the attempt, checks fresh values before writing and verifies the result with another read. Unconfirmed outcomes block another edit for that listing until resolved through **Check result**. Restarted in-flight attempts become uncertain and are never automatically resent.
+For an uncertain stock update, **Check result** reads current stock. When Stockbridge has proof that the previous request finished or was never sent, the seller can review fresh Flipkart stock and calculated availability, then approve recovery. Equal quantities close the review without a write. A lost submission reply with no proof of completion keeps the listing blocked. [Customer setup](docs/customer-setup.md)
 
 ## Data and operational limits
 

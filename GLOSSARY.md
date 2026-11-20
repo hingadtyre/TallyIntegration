@@ -64,7 +64,7 @@ The seller's confirmation that an individual returned package has arrived and ha
 _Avoid_: Delivered when only a tracking status is known
 
 **Fulfillable pack quantity**:
-The number of complete packs that can be supplied from a stock item's physical quantity, before applying any marketplace advertising policy.
+The number of complete packs that can be supplied from the available Tally units before applying a marketplace advertising policy. For calculated stock sync, available units are the verified Tally balance less covered Flipkart sales whose stock deduction has yet to be matched in Tally, with a lower bound of zero.
 
 **Advertised stock floor**:
 A minimum marketplace quantity applied when at least one complete pack is physically available. For the agreed Flipkart tyre policy the floor is five; zero fulfillable packs still results in zero advertised stock.
@@ -99,6 +99,15 @@ A quantity prepared for review before publication to a marketplace. It may diffe
 
 **Stock publication**:
 An attempt to send a proposed stock quantity to a marketplace. A sent request and a confirmed marketplace update are distinct outcomes.
+
+**Order-to-bill match**:
+Evidence that a Flipkart order item was billed through the selected Tally company and sales ledger for its mapped item and units. A ledger entry identifies a possible sales channel. A matching order reference or explicit seller confirmation links the bill to the order item.
+
+**Unbilled stock reservation**:
+The Tally units already committed to a verified Flipkart order but still awaiting a matching stock deduction in Tally. Every listing supplied by the same stock item draws on the remaining available units.
+
+**Stock recovery review**:
+A seller’s comparison of the current marketplace quantity with the newly calculated available stock after an earlier update had an uncertain outcome. Recovery requires evidence that the earlier request can no longer change stock.
 
 **Direct stock update**:
 A seller instruction to set an absolute marketplace stock quantity for a specified listing and seller location. It is distinct from changing physical Tally stock or granting a sales allowance.

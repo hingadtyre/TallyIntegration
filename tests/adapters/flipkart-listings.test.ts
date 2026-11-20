@@ -586,6 +586,10 @@ test('per-SKU failures are definitive; warnings and malformed or inconsistent su
 });
 
 test('HTTP and network errors are sanitized and distinguish uncertain writes from definite rejection', async () => {
+  const accepted = new FlipkartListingsClient({
+    request: async () => Response.json({ 'sku-1': { status: 'SUCCESS' } }, { status: 202 }),
+  });
+  await assert.rejects(accepted.updateStock(token, listing, 'warehouse-1', 3), safeError(true));
   for (const status of [301, 400, 401, 403, 408, 422, 429, 500, 503]) {
     const client = new FlipkartListingsClient({
       request: async () => new Response(`private-upstream ${token}`, { status }),

@@ -92,17 +92,29 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
       </p>
       <p>
         Use Calculate, Review changes and Publish to send reviewed stock. For a positive manual edit
-        on an Auto listing, choose Update once to publish that quantity until the next Tally stock
-        change. Enable automatic updates for the company to publish eligible quantities after a
-        successful Tally check. Review any package-count changes in the listing’s Set of cell. Each
-        publication reports its result.
+        on an Auto listing, choose Update once. With automatic updates enabled, a change in Tally
+        stock recalculates eligible listings. A verified Flipkart sale can also lower stock on other
+        listings supplied by the same Tally item before the sale is billed. Review any package-count
+        changes in the listing’s Set of cell.
+      </p>
+      <p>
+        To see which recent Flipkart orders you have billed, open Order matching. Select the Tally
+        company and Flipkart account, choose your Flipkart sales bill ledger, and select the bill
+        field where you record an order or invoice number. You can also match manually. Preview the
+        matches and confirm the setup for each seller using this company’s stock. Under Order
+        coverage for automatic stock updates, set a start date after checking all earlier sales are
+        in Tally. Automatic stock increases wait for this setup. Stockbridge deducts unbilled order
+        units before calculating how many sets to publish.
       </p>
       <p>
         Use the pencil beside stock, MRP or selling price, then Apply for that value only. For a
         Tally-managed listing, choose Update once or Pause Tally sync and update. Pause also stops
         automatic zero corrections until resumed. Existing holds and sales allowances require an
         explicit policy change before a conflicting edit. If an update is uncertain, choose Check
-        result rather than repeating it. Settlement editing opens Flipkart Seller Hub.
+        result. When the earlier stock request can no longer take effect, choose Review current
+        stock. Compare Flipkart stock with the freshly calculated quantity and approve the value for
+        that location. If the two match, approval completes the review without sending stock.
+        Settlement editing opens Flipkart Seller Hub.
       </p>
       <p>
         <a

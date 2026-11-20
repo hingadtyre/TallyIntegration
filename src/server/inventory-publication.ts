@@ -11,12 +11,15 @@ export interface InventoryIntent {
   listingVersion: number;
   draft?: Proposal;
   positiveEdits?: 'allowance' | 'once';
+  /** Receipt authorizing a decrease-only check when there is no Tally change. */
+  orderOnly?: string;
 }
 
 export function inventoryTarget(
   state: Snapshot,
   intent: InventoryIntent,
   marketplace: MarketplaceListing,
+  availableUnits?: number,
 ): { listing: Listing; quantity: number } {
   const listing = state.listings.find((row) => row.id === intent.listingId);
   if (!listing || listing.accountId !== marketplace.accountId || listing.sku !== marketplace.sku)
@@ -44,7 +47,10 @@ export function inventoryTarget(
     );
   const draft = intent.draft;
   if (!draft) {
-    if (!company.automation || listing.paused || listing.syncPendingItemVersion !== item.version)
+    const current = intent.orderOnly
+      ? listing.orderSyncPending === intent.orderOnly && listing.syncPendingItemVersion == null
+      : listing.syncPendingItemVersion === item.version;
+    if (!company.automation || listing.paused || !current)
       throw new InputError('This automatic update is no longer current.', 409);
   } else {
     const current = state.proposals.find((row) => row.listingId === listing.id);
@@ -60,7 +66,24 @@ export function inventoryTarget(
     )
       throw new InputError('The reviewed proposal changed. Calculate and review it again.', 409);
   }
-  const quantity = draft?.quantity ?? desiredStock(state, listing);
+  let quantity = draft?.quantity ?? desiredStock(state, listing, 'current', availableUnits);
+  if (intent.orderOnly) {
+    const observed = marketplace.locations.find((loc) => loc.id === listing.location)?.quantity;
+    if (observed == null)
+      throw new InputError(
+        'Refresh the current marketplace stock before checking a shared sale.',
+        409,
+      );
+    quantity = Math.min(quantity, observed);
+  }
+  if (draft && !draft.edited && availableUnits !== undefined) {
+    const availableQuantity = desiredStock(state, listing, 'current', availableUnits);
+    if (quantity !== availableQuantity)
+      throw new InputError(
+        `This review shows ${quantity}. After allowing for unbilled orders, the listing quantity is ${availableQuantity}. Calculate again in Inventory and review the new quantity.`,
+        409,
+      );
+  }
   if (!Number.isSafeInteger(quantity) || quantity < 0 || quantity > 5000)
     throw new InputError('Calculated stock must be a whole number between 0 and 5000.', 409);
   if (draft?.edited && quantity > desiredStock(state, listing, 'normal'))
@@ -97,4 +120,5 @@ export function activateInventoryIntent(
   }
   if (intent.draft) state.proposals = state.proposals.filter((row) => row.listingId !== listing.id);
   listing.syncPendingItemVersion = null;
+  listing.orderSyncPending = null;
 }

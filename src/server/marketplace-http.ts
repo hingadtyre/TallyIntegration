@@ -17,6 +17,10 @@ export async function runMarketplaceCommand(
       return service.apply(input);
     case '/api/marketplaces/reconcile':
       return service.reconcile(input);
+    case '/api/marketplaces/recovery/review':
+      return service.recoverStock(input, 'review');
+    case '/api/marketplaces/recovery/approve':
+      return service.recoverStock(input, 'approve');
     case '/api/marketplaces/policy':
       return service.changePolicy(input);
     default:

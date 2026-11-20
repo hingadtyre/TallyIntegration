@@ -6,10 +6,15 @@ import { initialState } from '../seed.js';
 import { backupDatabase } from './backup.js';
 import { readSnapshot, writeSnapshot } from './records.js';
 import { readMarketplace } from './marketplace-records.js';
+import { readBilling } from './billing-records.js';
+import { verifyStockCoverage } from './stock-coverage.js';
 import {
   createSchema,
   createMarketplaceSchema,
   createPackSchema,
+  createBillingSchema,
+  createStockCoverageSchema,
+  upgradeOrderSyncSchema,
   CURRENT_SCHEMA_VERSION,
   schemaVersion,
 } from './schema.js';
@@ -50,6 +55,8 @@ export function prepareDatabase(
   if (version === CURRENT_SCHEMA_VERSION) {
     requireMode(readSnapshot(database), mode);
     readMarketplace(database);
+    readBilling(database);
+    verifyStockCoverage(database);
     return null;
   }
   if (version === 0) {
@@ -65,13 +72,15 @@ export function prepareDatabase(
     });
     return null;
   }
-  if (version !== 1 && version !== 2 && version !== 3)
-    throw new Error(`Unsupported database schema ${version}.`);
+  if (version < 1 || version > 6) throw new Error(`Unsupported database schema ${version}.`);
 
+  const revision = database.prepare('PRAGMA data_version').get()?.data_version;
+  if (version === 6) verifyStockCoverage(database);
   const original = version === 1 ? legacyJson(database) : JSON.stringify(readSnapshot(database));
   const state = version === 1 ? parseLegacySnapshot(original) : readSnapshot(database);
   requireMode(state, mode);
-  const originalMarket = version === 3 ? JSON.stringify(readMarketplace(database)) : null;
+  const originalMarket = version >= 3 ? JSON.stringify(readMarketplace(database)) : null;
+  const originalBilling = version >= 5 ? JSON.stringify(readBilling(database)) : null;
   const stamp = new Date().toISOString().replaceAll(':', '-');
   const backupPath = join(
     dirname(file),
@@ -82,7 +91,9 @@ export function prepareDatabase(
   inTransaction(database, () => {
     if (
       schemaVersion(database) !== version ||
+      database.prepare('PRAGMA data_version').get()?.data_version !== revision ||
       (originalMarket !== null && JSON.stringify(readMarketplace(database)) !== originalMarket) ||
+      (originalBilling !== null && JSON.stringify(readBilling(database)) !== originalBilling) ||
       (version === 1 ? legacyJson(database) : JSON.stringify(readSnapshot(database))) !== original
     ) {
       throw new Error('The database changed during upgrade. Stop other app processes and retry.');
@@ -93,7 +104,10 @@ export function prepareDatabase(
       database.exec('DROP TABLE app_state;');
     } else {
       if (version === 2) createMarketplaceSchema(database);
-      createPackSchema(database);
+      if (version < 4) createPackSchema(database);
+      if (version < 5) createBillingSchema(database);
+      if (version < 6) createStockCoverageSchema(database);
+      upgradeOrderSyncSchema(database);
     }
     database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION};`);
   });

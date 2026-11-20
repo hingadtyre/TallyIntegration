@@ -41,10 +41,11 @@ export function desiredStock(
   state: Snapshot,
   listing: Listing,
   policy: 'current' | 'normal' = 'current',
+  availableUnits?: number,
 ): number {
   const source = requireStockSource(state, listing);
   return calculateStock({
-    physical: source.physical,
+    physical: availableUnits ?? source.physical,
     packSize: source.packSize,
     tyreFloor: ruleVersion(state, listing) === 'flipkart-tyres-v1',
     policy:
@@ -58,9 +59,10 @@ export function prepareProposal(
   state: Snapshot,
   listing: Listing,
   editedQuantity?: number,
+  availableUnits?: number,
 ): Proposal {
   const { item } = requireStockSource(state, listing);
-  const calculated = desiredStock(state, listing);
+  const calculated = desiredStock(state, listing, 'current', availableUnits);
   return {
     listingId: listing.id,
     quantity: editedQuantity ?? calculated,

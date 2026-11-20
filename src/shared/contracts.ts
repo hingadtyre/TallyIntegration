@@ -35,6 +35,8 @@ export interface FlipkartConnectionStatus {
 export interface Listing {
   /** A Tally balance change still awaiting dispatch for this destination. */
   syncPendingItemVersion?: number | null;
+  /** A verified order queued a decrease check for this shared stock item. */
+  orderSyncPending?: string | null;
   id: string;
   accountId: string;
   sku: string;

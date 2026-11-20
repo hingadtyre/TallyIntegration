@@ -490,6 +490,184 @@ test('uncertain writes require readback instead of a second Apply and preserve t
   assert.equal(reconciliations, 1);
 });
 
+for (const [finality, calculated] of [
+  ['completed', 4],
+  ['not-sent', 3],
+] as const) {
+  test(`a settled ${finality} stock request requires a fresh review and explicit approval of ${calculated}`, async (t) => {
+    const item = listing();
+    const input: MarketplaceApplyInput = {
+      accountId: item.accountId,
+      listingId: item.id,
+      version: item.version,
+      edit: { kind: 'stock', quantity: 5, locationId: 'warehouse-1', automation: 'once' },
+    };
+    const original = { ...result(input, 'uncertain').change, stockRequestFinality: finality };
+    const recovered = {
+      ...original,
+      state: 'reconciled' as const,
+      message: 'Stock review completed.',
+    };
+    const replacement = {
+      ...result({
+        ...input,
+        edit: {
+          kind: 'stock',
+          quantity: calculated,
+          locationId: 'warehouse-1',
+          automation: 'once',
+        },
+      }).change,
+      id: 'fresh-change',
+      message: 'The new stock update was verified.',
+    };
+    let approvals = 0;
+    let reviews = 0;
+    let readsAfterApproval = 0;
+    t.mock.method(
+      globalThis,
+      'fetch',
+      async (url: string | URL | Request, options?: RequestInit) => {
+        const path = String(url);
+        if (path === '/api/marketplaces') return response({ accounts: [account()] });
+        if (path.startsWith('/api/marketplaces/listings?')) {
+          if (approvals) readsAfterApproval++;
+          return response({
+            ...page(item),
+            changes: approvals
+              ? calculated === 4
+                ? [recovered]
+                : [replacement, recovered]
+              : [original],
+          });
+        }
+        if (path === '/api/marketplaces/recovery/review') {
+          assert.deepEqual(JSON.parse(String(options?.body)), {
+            accountId: item.accountId,
+            changeId: original.id,
+          });
+          reviews++;
+          return response({
+            reviewId: 'fresh-review',
+            sku: item.sku,
+            locationId: 'warehouse-1',
+            observed: 4,
+            quantity: calculated,
+          });
+        }
+        assert.equal(path, '/api/marketplaces/recovery/approve');
+        assert.deepEqual(JSON.parse(String(options?.body)), {
+          accountId: item.accountId,
+          changeId: original.id,
+          reviewId: 'fresh-review',
+        });
+        approvals++;
+        return response({ listing: item, change: calculated === 4 ? recovered : replacement });
+      },
+    );
+    render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+    await openListings();
+    fireEvent.click(screen.getByRole('button', { name: 'Review current stock' }));
+    const dialog = screen.getByRole('dialog', { name: 'Review current stock' });
+    const approval = await within(dialog).findByRole('button', {
+      name: calculated === 4 ? 'Approve and keep 4' : 'Approve and send 3',
+    });
+    assert.equal(
+      within(dialog).getByText('Current Flipkart stock').nextElementSibling?.textContent,
+      '4',
+    );
+    assert.equal(
+      within(dialog).getByText('Calculated listing stock').nextElementSibling?.textContent,
+      String(calculated),
+    );
+    assert.equal(reviews, 1);
+    assert.equal(approvals, 0);
+    fireEvent.click(approval);
+    await within(dialog).findByText(calculated === 4 ? 'Current stock confirmed' : 'Stock updated');
+    assert.equal(approvals, 1);
+    await waitFor(() => assert.ok(readsAfterApproval));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() =>
+      assert.equal(
+        (
+          screen.getByRole('button', {
+            name: 'Edit stock for SKU-seller-a at warehouse-1',
+          }) as HTMLButtonElement
+        ).disabled,
+        false,
+      ),
+    );
+  });
+}
+
+test('an uncertain stock request with unknown finality leaves recovery unavailable', async (t) => {
+  const item = listing();
+  const change = result(
+    {
+      accountId: item.accountId,
+      listingId: item.id,
+      version: item.version,
+      edit: { kind: 'stock', quantity: 5, locationId: 'warehouse-1', automation: 'once' },
+    },
+    'uncertain',
+  ).change;
+  t.mock.method(globalThis, 'fetch', async (url: string | URL | Request) => {
+    if (String(url) === '/api/marketplaces') return response({ accounts: [account()] });
+    assert.ok(String(url).startsWith('/api/marketplaces/listings?'));
+    return response({ ...page(item), changes: [change] });
+  });
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  assert.ok(screen.getByText(/Flipkart could still apply the earlier stock update/));
+  assert.ok(screen.getByRole('button', { name: 'Check result' }));
+  assert.equal(screen.queryByRole('button', { name: 'Review current stock' }), null);
+});
+
+test('an uncertain stock edit opens recovery from its editor and stale approval needs a new review', async (t) => {
+  const item = listing();
+  let reviewReads = 0;
+  const approvals: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string | URL | Request, options?: RequestInit) => {
+    const path = String(url);
+    if (path === '/api/marketplaces/apply') {
+      const saved = result(JSON.parse(String(options?.body)) as MarketplaceApplyInput, 'uncertain');
+      return response({ ...saved, change: { ...saved.change, stockRequestFinality: 'completed' } });
+    }
+    if (path === '/api/marketplaces/recovery/review') {
+      reviewReads++;
+      return response({
+        reviewId: 'review-' + reviewReads,
+        sku: item.sku,
+        locationId: 'warehouse-1',
+        observed: 4,
+        quantity: reviewReads === 1 ? 3 : 2,
+      });
+    }
+    if (path === '/api/marketplaces/recovery/approve') {
+      approvals.push(JSON.parse(String(options?.body)).reviewId);
+      return response({ error: 'A new order changed the quantity.' }, 409);
+    }
+    return baseResponse(url);
+  });
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Edit stock for SKU-seller-a at warehouse-1' }),
+  );
+  const editor = screen.getByRole('dialog', { name: 'Edit stock' });
+  fireEvent.change(within(editor).getByLabelText('Stock'), { target: { value: '5' } });
+  fireEvent.click(within(editor).getByRole('button', { name: 'Apply' }));
+  fireEvent.click(await within(editor).findByRole('button', { name: 'Review current stock' }));
+  const dialog = screen.getByRole('dialog', { name: 'Review current stock' });
+  fireEvent.click(await within(dialog).findByRole('button', { name: 'Approve and send 3' }));
+  await within(dialog).findByText('A new order changed the quantity.');
+  assert.equal(within(dialog).queryByRole('button', { name: 'Approve and send 3' }), null);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Check current stock again' }));
+  await within(dialog).findByRole('button', { name: 'Approve and send 2' });
+  assert.deepEqual(approvals, ['review-1']);
+  assert.equal(reviewReads, 2);
+});
+
 test('account-wide search, status and pagination go to the backend and reset the page', async (t) => {
   const requests: URLSearchParams[] = [];
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
@@ -512,6 +690,57 @@ test('account-wide search, status and pagination go to the backend and reset the
   fireEvent.change(screen.getByLabelText('Listing status'), { target: { value: 'ARCHIVED' } });
   await waitFor(() => assert.equal(requests.at(-1)?.get('status'), 'ARCHIVED'));
   assert.equal(requests.at(-1)?.get('accountId'), 'seller-a');
+});
+
+test('a lost recovery approval response reloads the saved result without submitting another approval', async (t) => {
+  const item = listing();
+  const initial = result(
+    {
+      accountId: item.accountId,
+      listingId: item.id,
+      version: item.version,
+      edit: { kind: 'stock', quantity: 5, locationId: 'warehouse-1', automation: 'once' },
+    },
+    'uncertain',
+  );
+  const change = { ...initial.change, stockRequestFinality: 'completed' };
+  let approvals = 0;
+  t.mock.method(globalThis, 'fetch', async (url: string | URL | Request) => {
+    const path = String(url);
+    if (path === '/api/marketplaces') return response({ accounts: [account()] });
+    if (path === '/api/marketplaces/recovery/review')
+      return response({
+        reviewId: 'review',
+        sku: item.sku,
+        locationId: 'warehouse-1',
+        observed: 4,
+        quantity: 4,
+      });
+    if (path === '/api/marketplaces/recovery/approve') {
+      approvals++;
+      throw new Error('Connection lost.');
+    }
+    assert.ok(path.startsWith('/api/marketplaces/listings?'));
+    return response({
+      ...page(item),
+      changes: [
+        approvals
+          ? { ...change, state: 'reconciled', message: 'The seller approved the current stock.' }
+          : change,
+      ],
+    });
+  });
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  fireEvent.click(screen.getByRole('button', { name: 'Review current stock' }));
+  const dialog = screen.getByRole('dialog', { name: 'Review current stock' });
+  fireEvent.click(await within(dialog).findByRole('button', { name: 'Approve and keep 4' }));
+  await within(dialog).findByText('Connection lost.');
+  assert.equal(within(dialog).queryByRole('button', { name: /Approve and keep/ }), null);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Reload saved result' }));
+  await screen.findByText('The seller approved the current stock.');
+  assert.equal(approvals, 1);
+  assert.equal(screen.queryByRole('button', { name: 'Review current stock' }), null);
 });
 
 test('a late response from a previous account cannot appear in the newly opened account', async (t) => {

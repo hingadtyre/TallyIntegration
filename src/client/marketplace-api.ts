@@ -6,6 +6,7 @@ import type {
   MarketplaceListingView,
   MarketplacePage,
 } from '../shared/marketplace-contracts.js';
+import type { MarketplaceStockRecoveryReview } from '../shared/marketplace-recovery.js';
 import { requestJson } from './api.js';
 
 export const marketplaceApi = {
@@ -40,6 +41,18 @@ export const marketplaceApi = {
     requestJson<MarketplaceApplyResult>('/marketplaces/apply', input),
   reconcile: (accountId: string, changeId: string) =>
     requestJson<MarketplaceApplyResult>('/marketplaces/reconcile', { accountId, changeId }),
+  reviewStockRecovery: (accountId: string, changeId: string, signal?: AbortSignal) =>
+    requestJson<MarketplaceStockRecoveryReview>(
+      '/marketplaces/recovery/review',
+      { accountId, changeId },
+      signal,
+    ),
+  approveStockRecovery: (accountId: string, changeId: string, reviewId: string) =>
+    requestJson<MarketplaceApplyResult>('/marketplaces/recovery/approve', {
+      accountId,
+      changeId,
+      reviewId,
+    }),
   policy: (input: {
     accountId: string;
     listingId: string;
