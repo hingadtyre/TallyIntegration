@@ -15,6 +15,7 @@ const contentTypes: Record<string, string> = {
   '.js': 'application/javascript',
   '.css': 'text/css',
   '.svg': 'image/svg+xml',
+  '.woff2': 'font/woff2',
 };
 
 export interface RuntimeHealth {

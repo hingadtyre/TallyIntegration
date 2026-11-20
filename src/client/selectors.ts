@@ -1,11 +1,18 @@
 import type { Listing, Snapshot, StockItem } from '../shared/contracts.js';
 
+export type StockView = 'all' | 'mapped' | 'low' | 'drafts';
+
+export function isLowStock(item: StockItem): boolean {
+  return item.physical !== null && item.physical <= item.lowStockThreshold;
+}
+
 export interface InventoryFilters {
   companyId: string;
   accountId: string;
   query: string;
   brand: string;
   pack: string;
+  view?: StockView;
 }
 export interface ItemGroup {
   item: StockItem;
@@ -15,8 +22,11 @@ export interface ItemGroup {
 /** A matching child never brings an unmatched sibling into a bulk operation. */
 export function inventoryGroups(state: Snapshot, filters: InventoryFilters): ItemGroup[] {
   const query = filters.query.trim().toLocaleLowerCase();
+  const drafts =
+    filters.view === 'drafts' ? new Set(state.proposals.map((row) => row.listingId)) : null;
   return state.items
     .filter((item) => item.companyId === filters.companyId)
+    .filter((item) => filters.view !== 'low' || isLowStock(item))
     .filter((item) => !filters.brand || item.brand === filters.brand)
     .map((item) => {
       const parentMatches =
@@ -29,6 +39,7 @@ export function inventoryGroups(state: Snapshot, filters: InventoryFilters): Ite
       );
       const listings = allChildren.filter(
         (listing) =>
+          (!drafts || drafts.has(listing.id)) &&
           (!filters.pack || String(listing.packSize) === filters.pack) &&
           (parentMatches || `${listing.sku} ${listing.title}`.toLocaleLowerCase().includes(query)),
       );
@@ -36,7 +47,12 @@ export function inventoryGroups(state: Snapshot, filters: InventoryFilters): Ite
         item,
         listings,
         visible:
-          listings.length > 0 || (allChildren.length === 0 && parentMatches && !filters.pack),
+          listings.length > 0 ||
+          (filters.view !== 'mapped' &&
+            !drafts &&
+            allChildren.length === 0 &&
+            parentMatches &&
+            !filters.pack),
       };
     })
     .filter((group) => group.visible)

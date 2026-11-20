@@ -50,85 +50,100 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           </button>
         </li>
       </ol>
-      <h3>Starting and stopping the Windows pilot</h3>
-      <p>
-        Extract the entire supplied ZIP and double-click <strong>Start Stockbridge.cmd</strong>. It
-        opens the dashboard and keeps stock checks running in the background when you close your
-        browser. Start it again after signing in to Windows; automatic startup is not installed.
-        Keep the computer awake and Tally open with your company loaded.
-      </p>
-      <p>
-        Use <strong>Stop Stockbridge.cmd</strong> to stop the app and{' '}
-        <strong>Stockbridge Status.cmd</strong> to check whether it is running. Use{' '}
-        <strong>Open Data Folder.cmd</strong> to find its saved files and{' '}
-        <strong>Read Me.html</strong> for the full setup and troubleshooting guide.
-      </p>
-      <h3>Set up seller-owned Flipkart access</h3>
-      <p>
-        In your seller dashboard, open Manage Profile → Developer Access → Create New Access.
-        Register an application for your own seller use, then enter its Application ID and
-        Application Secret under Marketplaces → Add account → Flipkart. Give each account a name. If
-        Flipkart approval is pending, save credentials for later without verifying. After approval,
-        use Check connection on its account tile. Verify and save and Check connection both attempt
-        a listing import after access is verified. Open listings shows the imported catalogue. No
-        hosted Stockbridge authentication service is used. Sample mode does not accept credentials
-        or contact Flipkart.
-      </p>
-      <p>
-        Flipkart restricts Self Access to the seller's own use. Confirm this arrangement is
-        appropriate for your installation. A verified API credential is not proof of the seller's
-        identity or approval for a third-party product. Refresh listings checks which listings the
-        authenticated account owns.
-      </p>
-      <p>
-        In Inventory, select the company and seller account, then choose Map listing on the Tally
-        item. Search your imported listings by seller SKU, product title when available, FSN
-        (Flipkart product ID) or Flipkart listing ID. Check the product and warehouse before
-        selecting a suggested listing. For Set of, choose the shipping package count when it matches
-        the Tally units used per sale, or enter your own number. Confirm that the company-wide
-        balance supplies the selected Flipkart location. Enable the tyre minimum only for eligible
-        tyre listings. Stockbridge saves these choices in this workspace and reloads them on
-        restart.
-      </p>
-      <p>
-        Before enabling company sync, review the seller accounts, locations and expected quantities
-        in Inventory. Try one listing lets you approve a single update and verify it while company
-        sync stays off. Paused listings stay paused. Waiting listings can start when their checks
-        pass. If a Tally company cannot be read, check its last successful read. Other verified
-        companies can continue.
-      </p>
-      <p>
-        Use Calculate, Review changes and Publish to send reviewed stock. For a positive manual edit
-        on an Auto listing, choose Update once. Publishing a zero you entered pauses Tally sync at
-        that location. When Tally stock falls too low to fill a set, Stockbridge can publish a
-        calculated zero and update the listing again after restocking. With automatic updates
-        enabled, a change in Tally stock recalculates eligible listings. A verified Flipkart sale
-        can also lower stock on other listings supplied by the same Tally item before the sale is
-        billed. Review any package-count changes in the listing’s Set of cell. If a bulk calculation
-        reports blocked listings, use Fix Set of where offered or review the ready drafts.
-      </p>
-      <p>
-        To see which recent Flipkart orders you have billed, open Order matching. Select the Tally
-        company and Flipkart account, choose your Flipkart sales bill ledger, and select the bill
-        field where you record an order or invoice number. You can also match manually. Preview the
-        matches and confirm the setup for each seller using this company’s stock. Under Order
-        coverage for automatic stock updates, set a start date after checking all earlier sales are
-        in Tally. Automatic stock increases wait for this setup. Stockbridge deducts unbilled order
-        units before calculating how many sets to publish.
-      </p>
-      <p>
-        In Marketplaces, use the pencil beside stock, MRP or selling price. Applying a manual stock
-        edit to a Tally-mapped listing pauses sync at that warehouse. Flipkart can still deduct
-        sales. Stockbridge skips automatic updates, including zero, until you choose Resume sync
-        beside the lock. Resume replaces that location’s draft with a fresh proposed quantity. If
-        Stockbridge cannot verify the stock, the row shows what needs attention. With company sync
-        on, the next eligible update can publish. Existing sales allowances require an explicit
-        policy change before a conflicting edit. If an update is uncertain, choose Check result.
-        When the earlier stock request can no longer take effect, choose Review current stock.
-        Compare Flipkart stock with the freshly calculated quantity and approve the value for that
-        location. If the two match, approval completes the review without sending stock. Settlement
-        editing opens Flipkart Seller Hub.
-      </p>
+      <details className="guide-topic">
+        <summary>Start and stop the Windows pilot</summary>
+        <p>
+          Extract the entire supplied ZIP and double-click <strong>Start Stockbridge.cmd</strong>.
+          It opens the dashboard and keeps stock checks running in the background when you close
+          your browser. Start it again after signing in to Windows; automatic startup is not
+          installed. Keep the computer awake and Tally open with your company loaded.
+        </p>
+        <p>
+          Use <strong>Stop Stockbridge.cmd</strong> to stop the app and{' '}
+          <strong>Stockbridge Status.cmd</strong> to check whether it is running. Use{' '}
+          <strong>Open Data Folder.cmd</strong> to find its saved files and{' '}
+          <strong>Read Me.html</strong> for the full setup and troubleshooting guide.
+        </p>
+      </details>
+      <details className="guide-topic">
+        <summary>Set up seller-owned Flipkart access</summary>
+        <p>
+          In your seller dashboard, open Manage Profile → Developer Access → Create New Access.
+          Register an application for your own seller use, then enter its Application ID and
+          Application Secret under Marketplaces → Add account → Flipkart. Give each account a name.
+          If Flipkart approval is pending, save credentials for later without verifying. After
+          approval, use Check connection on its account tile. Verify and save and Check connection
+          both attempt a listing import after access is verified. Open listings shows the imported
+          catalogue. No hosted Stockbridge authentication service is used. Sample mode does not
+          accept credentials or contact Flipkart.
+        </p>
+        <p>
+          Flipkart restricts Self Access to the seller's own use. Confirm this arrangement is
+          appropriate for your installation. A verified API credential is not proof of the seller's
+          identity or approval for a third-party product. Refresh listings checks which listings the
+          authenticated account owns.
+        </p>
+      </details>
+      <details className="guide-topic">
+        <summary>Map listings and manage stock updates</summary>
+        <p>
+          In Inventory, select the company and seller account, then choose Map listing on the Tally
+          item. Search your imported listings by seller SKU, product title when available, FSN
+          (Flipkart product ID) or Flipkart listing ID. Check the product and warehouse before
+          selecting a suggested listing. For Set of, choose the shipping package count when it
+          matches the Tally units used per sale, or enter your own number. Confirm that the
+          company-wide balance supplies the selected Flipkart location. Enable the tyre minimum only
+          for eligible tyre listings. Stockbridge saves these choices in this workspace and reloads
+          them on restart.
+        </p>
+        <p>
+          Before enabling company sync, review the seller accounts, locations and expected
+          quantities in Inventory. Try one listing lets you approve a single update and verify it
+          while company sync stays off. Paused listings stay paused. Waiting listings can start when
+          their checks pass. If a Tally company cannot be read, check its last successful read.
+          Other verified companies can continue.
+        </p>
+        <p>
+          Choose Saved proposals at the top of Inventory to see listings with drafts. Choose Tally
+          stock items to return to all items. Use Calculate, Review changes and Publish to send
+          reviewed stock. For a positive manual edit on an Auto listing, choose Update once.
+          Publishing a zero you entered pauses Tally sync at that location. When Tally stock falls
+          too low to fill a set, Stockbridge can publish a calculated zero and update the listing
+          again after restocking. With automatic updates enabled, a change in Tally stock
+          recalculates eligible listings. A verified Flipkart sale can also lower stock on other
+          listings supplied by the same Tally item before the sale is billed. Review any
+          package-count changes in the listing’s Set of cell. If a bulk calculation reports blocked
+          listings, use Fix Set of where offered or review the ready drafts.
+        </p>
+      </details>
+      <details className="guide-topic">
+        <summary>Match Flipkart orders to Tally bills</summary>
+        <p>
+          To see which recent Flipkart orders you have billed, open Order matching. Select the Tally
+          company and Flipkart account, choose your Flipkart sales bill ledger, and select the bill
+          field where you record an order or invoice number. You can also match manually. Preview
+          the matches and confirm the setup for each seller using this company’s stock. Under Order
+          coverage for automatic stock updates, set a start date after checking all earlier sales
+          are in Tally. Automatic stock increases wait for this setup. Stockbridge deducts unbilled
+          order units before calculating how many sets to publish.
+        </p>
+      </details>
+      <details className="guide-topic">
+        <summary>Edit marketplace stock and prices</summary>
+        <p>
+          In Marketplaces, use the pencil beside stock, MRP or selling price. Applying a manual
+          stock edit to a Tally-mapped listing pauses sync at that warehouse. Flipkart can still
+          deduct sales. Stockbridge skips automatic updates, including zero, until you choose Resume
+          sync beside the lock. Resume replaces that location’s draft with a fresh proposed
+          quantity. If Stockbridge cannot verify the stock, the row shows what needs attention. With
+          company sync on, the next eligible update can publish. Existing sales allowances require
+          an explicit policy change before a conflicting edit. If an update is uncertain, choose
+          Check result. When the earlier stock request can no longer take effect, choose Review
+          current stock. Compare Flipkart stock with the freshly calculated quantity and approve the
+          value for that location. If the two match, approval completes the review without sending
+          stock. Settlement editing opens Flipkart Seller Hub.
+        </p>
+      </details>
       <p>
         <a
           href="https://help.tallysolutions.com/building-tunnel-based-connectivity-for-tallyprime-integrations/"

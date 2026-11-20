@@ -1172,5 +1172,5 @@ test('switching company clears inventory selection and filters without combining
   assert.ok(screen.getByText('SAMPLE-BRANCH-1'));
   assert.equal(screen.queryByText('SAMPLE-CEAT-2-2'), null);
   assert.equal(screen.queryByLabelText('Select SAMPLE-CEAT-2-2'), null);
-  assert.match(screen.getByText('1 filtered listings').textContent ?? '', /1 filtered listings/);
+  assert.match(screen.getByText('1 filtered listing').textContent ?? '', /1 filtered listing/);
 });

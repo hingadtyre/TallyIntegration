@@ -83,9 +83,7 @@ export function App() {
           <span className="logo-mark">
             <Icon name="box" />
           </span>
-          <span>
-            stockbridge<span className="wordmark-caption">TALLY · MARKETPLACES</span>
-          </span>
+          <span>stockbridge</span>
         </a>
         <button
           type="button"
@@ -98,7 +96,7 @@ export function App() {
         >
           <Icon name="chevron" />
         </button>
-        <div className="sidebar-label">WORKSPACE</div>
+
         <nav aria-label="Main navigation">
           {(Object.keys(screens) as Screen[]).map((value) => (
             <button
@@ -126,11 +124,11 @@ export function App() {
               ? 'Sample data · separate database'
               : 'Your inventory stays on this computer.'}
           </p>
-          <div className="sidebar-version">LOCAL INVENTORY REVIEW</div>
         </div>
       </aside>
       <div className="main-shell">
         <header className="topbar">
+          <span className="topbar-brand">Stockbridge</span>
           {screen === 'marketplaces' ? (
             <div className="marketplace-context">
               <Icon name="marketplaces" />
@@ -157,36 +155,30 @@ export function App() {
             </div>
           )}
           <div className="topbar-right">
-            {screen !== 'marketplaces' && (
+            {screen !== 'marketplaces' && state.mode !== 'demo' && (
               <span
                 className={`connection-pill ${state.connection.tally === 'online' ? 'online' : 'offline'}`}
               >
                 <span className="status-dot" />
                 Tally{' '}
-                {state.mode === 'demo'
-                  ? 'sample'
-                  : state.connection.tally === 'online'
-                    ? 'connected'
-                    : state.connection.tally === 'offline'
-                      ? 'offline'
-                      : 'not checked'}
+                {state.connection.tally === 'online'
+                  ? 'connected'
+                  : state.connection.tally === 'offline'
+                    ? 'offline'
+                    : 'not checked'}
               </span>
             )}
-            <span className="avatar" title="Local workspace">
-              <Icon name="box" />
-            </span>
+            {state.mode === 'demo' && (
+              <span
+                className="sample-label"
+                title="Sample data. Tally and Flipkart updates are simulated."
+              >
+                Sample workspace
+              </span>
+            )}
           </div>
         </header>
         <main className="main-content">
-          {state.mode === 'demo' && (
-            <div className="environment-banner">
-              <strong>Sample workspace</strong>
-              <span>
-                These items and quantities are demonstration data. Nothing is connected to Tally or
-                Flipkart.
-              </span>
-            </div>
-          )}
           {error && (
             <div className="message error" role="alert">
               <Icon name="info" />

@@ -127,9 +127,11 @@ export function BillingResults({ report, ...actions }: Actions & { report: Billi
                       {item.name}
                       <small>{item.unit}</small>
                     </td>
-                    <td>{item.physical ?? 'Unknown'}</td>
-                    <td>{item.unmatchedUnits ?? 'Unknown'}</td>
-                    <td>
+                    <td data-label="Physical stock">{item.physical ?? 'Unknown'}</td>
+                    <td data-label="Units without a matched bill">
+                      {item.unmatchedUnits ?? 'Unknown'}
+                    </td>
+                    <td data-label="Preview available">
                       <strong>{item.previewAvailable ?? 'Unknown'}</strong>
                     </td>
                   </tr>
@@ -175,7 +177,7 @@ function OrderRow({
           </small>
         )}
       </td>
-      <td>
+      <td data-label="Item and stock">
         <strong>{row.sku}</strong>
         <small>
           {row.quantity} listing units ·{' '}
@@ -183,7 +185,7 @@ function OrderRow({
         </small>
         <small>{row.location}</small>
       </td>
-      <td>
+      <td data-label="Tally bill">
         <strong>{statusLabel[row.status]}</strong>
         {row.bill && (
           <small>

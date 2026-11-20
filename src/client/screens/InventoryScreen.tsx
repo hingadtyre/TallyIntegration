@@ -7,7 +7,7 @@ import type {
   Snapshot,
   StockItem,
 } from '../../shared/contracts.js';
-import { actionScope, inventoryGroups } from '../selectors.js';
+import { actionScope, inventoryGroups, isLowStock, type StockView } from '../selectors.js';
 import { Icon, Stat } from '../components.js';
 import { formatCompanyStockIssue, formatDateTime as time } from '../format.js';
 import type { Workspace } from '../useWorkspace.js';
@@ -37,6 +37,7 @@ export function InventoryScreen({
 }: InventoryScreenProps) {
   const { busy, mutate } = workspace;
   const [query, setQuery] = useState('');
+  const [view, setView] = useState<StockView>('all');
   const [brand, setBrand] = useState('');
   const [pack, setPack] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
@@ -65,7 +66,7 @@ export function InventoryScreen({
     setSelected([]);
     onAccountChange(id);
   }
-  const filters = { companyId, accountId, query, brand, pack };
+  const filters = { companyId, accountId, query, brand, pack, view };
   const groups = inventoryGroups(state, filters);
   const scope = actionScope(state, filters, selected);
   const scopeKey = JSON.stringify([companyId, accountId, [...scope].sort()]);
@@ -89,9 +90,7 @@ export function InventoryScreen({
       companyItemIds.has(listing.itemId) &&
       (!accountId || listing.accountId === accountId),
   );
-  const lowStock = companyItems.filter(
-    (item) => item.physical !== null && item.physical <= item.lowStockThreshold,
-  ).length;
+  const lowStock = companyItems.filter(isLowStock).length;
   const visibleIds = groups.flatMap((group) => group.listings.map((listing) => listing.id));
   const hiddenSelected = selected.filter((id) => !visibleIds.includes(id)).length;
   const reviewIds = calculation
@@ -177,20 +176,44 @@ export function InventoryScreen({
           {busy === 'Refreshing Tally' ? 'Refreshing…' : 'Refresh Tally'}
         </button>
       </div>
-      <div className="stat-grid inventory-summary">
-        <Stat label="Tally stock items" value={companyItems.length} detail="In this company" />
+      <div className="stat-grid inventory-summary" role="group" aria-label="Inventory views">
         <Stat
+          icon="box"
+          selected={view === 'all'}
+          onSelect={() => setView('all')}
+          disabled={dirtyListings.length > 0}
+          label="Tally stock items"
+          value={companyItems.length}
+          detail="In this company"
+        />
+        <Stat
+          icon="connections"
+          selected={view === 'mapped'}
+          onSelect={() => setView('mapped')}
+          disabled={dirtyListings.length > 0}
           label="Mapped listings"
           value={companyListings.length}
           detail={account?.name || 'Across seller accounts'}
         />
         <Stat
+          icon="info"
+          selected={view === 'low'}
+          onSelect={() => setView('low')}
+          disabled={dirtyListings.length > 0}
           label="Low physical stock"
           value={lowStock}
           detail="Based on each item's threshold"
           warm={lowStock > 0}
         />
-        <Stat label="Saved proposals" value={draftCount} detail="Awaiting review · nothing sent" />
+        <Stat
+          icon="edit"
+          selected={view === 'drafts'}
+          onSelect={() => setView('drafts')}
+          disabled={dirtyListings.length > 0}
+          label="Saved proposals"
+          value={draftCount}
+          detail="Awaiting review"
+        />
       </div>
       <section className="inventory-panel" aria-label="Inventory table">
         {dirtyListings.length > 0 && (
@@ -202,7 +225,9 @@ export function InventoryScreen({
         <div className="panel-heading">
           <div className="panel-title">
             <h2>Stock & listings</h2>
-            <span className="count-badge">{groups.length} items</span>
+            <span className="count-badge">
+              {groups.length} {groups.length === 1 ? 'item' : 'items'}
+            </span>
           </div>
           <label className="account-select">
             <span>Flipkart seller</span>
@@ -222,14 +247,21 @@ export function InventoryScreen({
         </div>
         {company && (
           <div className="company-sync">
-            <div>
-              <strong>Automatic stock updates · {company.automation ? 'On' : 'Off'}</strong>
+            <details className="sync-description">
+              <summary>
+                <Icon name="refresh" />
+                <strong>Automatic stock updates</strong>
+                <span className={company.automation ? 'sync-enabled' : 'sync-disabled'}>
+                  {company.automation ? 'On' : 'Off'}
+                </span>
+                <Icon name="chevron" />
+              </summary>
               <small>
                 {state.mode === 'demo' ? 'Simulates updates' : 'Updates Flipkart stock'} for
                 eligible listings across all seller accounts for {company.name}. Checks include
                 Tally stock changes and verified Flipkart sales that reduce shared stock.
               </small>
-            </div>
+            </details>
             <div className="company-sync-actions">
               {!company.automation && (
                 <button
@@ -309,9 +341,8 @@ export function InventoryScreen({
         <div className="scope-bar">
           <div>
             <strong>
-              {selected.length
-                ? `${scope.length} selected listings`
-                : `${scope.length} filtered listings`}
+              {scope.length} {selected.length ? 'selected' : 'filtered'}{' '}
+              {scope.length === 1 ? 'listing' : 'listings'}
             </strong>
             <span>
               {selected.length
@@ -397,13 +428,18 @@ export function InventoryScreen({
           <div className="empty-state">
             <Icon name="search" />
             <h3>No matching items</h3>
-            <p>Try another name, brand or pack size.</p>
+            <p>
+              {view === 'all'
+                ? 'Try another name, brand or pack size.'
+                : 'Try another inventory view or clear your filters.'}
+            </p>
             <button
               className="text-button"
               onClick={() => {
                 setQuery('');
                 setBrand('');
                 setPack('');
+                setView('all');
               }}
             >
               Reset filters
@@ -424,9 +460,10 @@ export function InventoryScreen({
                       disabled={!visibleIds.length}
                       onChange={toggleAll}
                     />
+                    <span className="mobile-select-label">Select all filtered listings</span>
                   </th>
-                  <th>Stock item / mapped listing</th>
-                  <th className="number-column">Tally stock</th>
+                  <th>Stock item / listing</th>
+
                   <th>Set of</th>
                   <th className="number-column">Observed stock</th>
                   <th>Proposed stock</th>

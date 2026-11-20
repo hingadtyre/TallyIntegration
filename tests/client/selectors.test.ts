@@ -73,3 +73,41 @@ test('unmapped stock is searchable but does not match a listing pack filter', ()
   assert.deepEqual(actionScope(state, { ...filters, query: 'Bridgestone' }, []), []);
   assert.deepEqual(inventoryGroups(state, { ...filters, query: 'Bridgestone', pack: '1' }), []);
 });
+
+test('summary views narrow filtered actions while an explicit selection keeps its scope', () => {
+  const state = initialState('demo', 'unused');
+  const lowStock = { ...filters, view: 'low' as const };
+  assert.deepEqual(
+    inventoryGroups(state, lowStock).map((group) => group.item.brand),
+    ['Apollo', 'CEAT'],
+  );
+  assert.deepEqual(actionScope(state, lowStock, []), [
+    'listing-7',
+    'listing-1',
+    'listing-2',
+    'listing-3',
+    'listing-4',
+    'listing-5',
+  ]);
+  assert.ok(
+    inventoryGroups(state, { ...filters, view: 'mapped' }).every((group) => group.listings.length),
+  );
+  const listingId = 'listing-2';
+  state.proposals = [
+    {
+      listingId,
+      calculated: 2,
+      quantity: 0,
+      edited: true,
+      stale: false,
+      createdAt: new Date().toISOString(),
+      listingVersion: 1,
+      itemVersion: 1,
+      ruleVersion: 'flipkart-tyres-v1',
+    },
+  ];
+  const drafts = { ...filters, view: 'drafts' as const };
+  assert.deepEqual(actionScope(state, drafts, []), [listingId]);
+  assert.deepEqual(actionScope(state, { ...drafts, pack: '1' }, []), []);
+  assert.deepEqual(actionScope(state, drafts, ['listing-1']), ['listing-1']);
+});

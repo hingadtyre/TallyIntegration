@@ -63,7 +63,6 @@ export function ActivityScreen({
     <>
       <div className="page-heading">
         <div>
-          <div className="eyebrow">A CLEAR RECORD</div>
           <h1>Activity</h1>
           <p>Follow stock calculations, settings changes and connection checks.</p>
         </div>
@@ -72,10 +71,18 @@ export function ActivityScreen({
         </a>
       </div>
       <div className="segmented" aria-label="Activity view">
-        <button className={!diagnostics ? 'selected' : ''} onClick={() => setDiagnostics(false)}>
+        <button
+          aria-pressed={!diagnostics}
+          className={!diagnostics ? 'selected' : ''}
+          onClick={() => setDiagnostics(false)}
+        >
           Business activity
         </button>
-        <button className={diagnostics ? 'selected' : ''} onClick={() => setDiagnostics(true)}>
+        <button
+          aria-pressed={diagnostics}
+          className={diagnostics ? 'selected' : ''}
+          onClick={() => setDiagnostics(true)}
+        >
           Diagnostics
         </button>
       </div>

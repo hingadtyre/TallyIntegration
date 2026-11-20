@@ -6,6 +6,7 @@ import {
   formatQuantity as quantity,
   formatPolicy as policyLabel,
 } from '../format.js';
+import { isLowStock } from '../selectors.js';
 import { QuantityEditor } from './QuantityEditor.js';
 export function ItemRows({
   item,
@@ -44,45 +45,49 @@ export function ItemRows({
   onRemove: (listing: Listing) => void;
   onDirty: (listingId: string, dirty: boolean) => void;
 }) {
-  const low = item.physical !== null && item.physical <= item.lowStockThreshold;
+  const low = isLowStock(item);
   return (
     <>
       <tr className="parent-row">
-        <td className="select-column">
-          <button
-            className="expand-button"
-            disabled={!listings.length}
-            onClick={onToggleCollapse}
-            aria-expanded={!collapsed}
-            aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${item.name}`}
-          >
-            <Icon name="chevron" className={collapsed ? '' : 'expanded'} />
-          </button>
-        </td>
-        <td>
-          <div className="item-name">{item.name}</div>
-          <div className="item-meta">
-            {item.brand && <span>{item.brand}</span>}
-            <span>
-              {listings.length
-                ? `${listings.length} matching listing${listings.length === 1 ? '' : 's'}`
-                : 'No mapped listing'}
-            </span>
+        <td colSpan={7}>
+          <div className="stock-group">
+            {listings.length > 0 ? (
+              <button
+                className="expand-button"
+                onClick={onToggleCollapse}
+                aria-expanded={!collapsed}
+                aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${item.name}`}
+              >
+                <Icon name="chevron" className={collapsed ? '' : 'expanded'} />
+              </button>
+            ) : (
+              <span className="stock-group-icon">
+                <Icon name="box" />
+              </span>
+            )}
+            <div className="stock-group-name">
+              <div className="item-name">{item.name}</div>
+              <div className="item-meta">
+                {item.brand && <span>{item.brand}</span>}
+                <span>
+                  {listings.length
+                    ? `${listings.length} matching listing${listings.length === 1 ? '' : 's'}`
+                    : 'No mapped listing'}
+                </span>
+              </div>
+            </div>
+            <div className="group-stock">
+              <span>Tally stock</span>
+              <strong>
+                {quantity(item.physical)} {item.unit || 'base units'}
+              </strong>
+              {low && <small>Low stock</small>}
+            </div>
+            <span className="parent-observation">Observed {time(item.observedAt)}</span>
+            <button className="text-button map-button" disabled={busy} onClick={onMap}>
+              <Icon name="plus" /> Map listing
+            </button>
           </div>
-        </td>
-        <td className={`physical-cell ${low ? 'low-stock' : ''}`}>
-          <strong>{quantity(item.physical)}</strong>
-          <span>{item.unit || 'base units'}</span>
-          {low && <small>Low stock</small>}
-        </td>
-        <td colSpan={4}>
-          <span className="parent-observation">Observed {time(item.observedAt)}</span>
-        </td>
-        <td>
-          <button className="text-button map-button" disabled={busy} onClick={onMap}>
-            <Icon name="plus" />
-            Map listing
-          </button>
         </td>
       </tr>
       {!collapsed &&
@@ -113,13 +118,7 @@ export function ItemRows({
                 </div>
               </div>
             </td>
-            <td
-              className="shared-stock-cell"
-              title="Uses the full physical stock of the parent Tally item"
-            >
-              ↳ shared
-            </td>
-            <td>
+            <td data-label="Set of">
               <button
                 className={`pack-tag ${listing.verified ? '' : 'unverified'}`}
                 title={listing.packEvidence}
@@ -150,7 +149,7 @@ export function ItemRows({
                 </small>
               )}
             </td>
-            <td className="observed-cell">
+            <td className="observed-cell" data-label="Observed stock">
               <strong>{quantity(listing.observed)}</strong>
               <small title={time(listing.observedAt)}>
                 {listing.observedAt
@@ -161,7 +160,7 @@ export function ItemRows({
                   : 'Not observed'}
               </small>
             </td>
-            <td>
+            <td data-label="Proposed stock">
               <QuantityEditor
                 key={`${listing.id}:${proposals.get(listing.id)?.createdAt ?? 'new'}:${proposals.get(listing.id)?.listingVersion ?? listing.proposalIssue ?? ''}`}
                 listing={listing}
@@ -171,7 +170,7 @@ export function ItemRows({
                 onDirty={onDirty}
               />
             </td>
-            <td>
+            <td data-label="Policy & automation">
               {(!listing.paused || listing.policy === 'limited') && (
                 <span className={`policy-pill policy-${listing.policy}`}>
                   <span className="status-dot" />
@@ -236,17 +235,6 @@ export function ItemRows({
             </td>
           </tr>
         ))}
-      {!collapsed && !listings.length && (
-        <tr className="unmapped-row">
-          <td />
-          <td colSpan={7}>
-            This Tally item is visible even without a marketplace listing.{' '}
-            <button className="text-button" onClick={onMap} disabled={busy}>
-              Map an existing listing
-            </button>
-          </td>
-        </tr>
-      )}
     </>
   );
 }

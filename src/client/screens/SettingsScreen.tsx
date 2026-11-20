@@ -15,7 +15,6 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
     <>
       <div className="page-heading">
         <div>
-          <div className="eyebrow">MAKE IT YOURS</div>
           <h1>Settings</h1>
           <p>Saved locally. Valid changes apply without restarting the app.</p>
         </div>

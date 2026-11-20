@@ -22,7 +22,9 @@ The first local foundation is implemented. It includes company-separated stock v
 
 With coverage configured, **Inventory → Calculate** also prepares the adjusted quantity for review when automatic sync is off. Apply checks the available stock again. If a new order makes the reviewed quantity too high, calculate again to see the new amount.
 
-The sidebar starts collapsed at every screen size. Use the arrow below the Stockbridge logo to expand or collapse it. Navigation icons remain available in the collapsed view. On narrow screens, navigation expands over the page and closes after selecting a screen. Toggling the sidebar preserves the current screen and its unsaved inputs.
+In **Inventory**, choose a summary card to show all Tally stock items, mapped listings, low physical stock or saved proposals. The cards show totals for the current company or seller. Search, brand and pack filters narrow the chosen view. On narrow screens, inventory, marketplace listings and order-matching results show labelled fields beneath each entry.
+
+The sidebar starts collapsed at every screen size. Use the arrow below the Stockbridge logo to expand or collapse it. The collapsed view shows navigation icons, with labels on wider screens. On narrow screens, navigation expands over the page and closes after selecting a screen. Toggling the sidebar preserves the current screen and its unsaved inputs.
 
 **Marketplaces supports direct stock, MRP and selling-price edits with each editor's Apply action. In live mode Apply sends a real Flipkart request.** Accounts have independent credentials, seller binding, listing observations and outcomes. Refresh imports all five documented listing states and location stock; search and filters cover the complete last successful import. Tally setup is not required for this view. Settlement opens Seller Hub because a supported listing-settlement API has not been established.
 

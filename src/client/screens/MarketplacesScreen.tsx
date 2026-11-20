@@ -93,7 +93,6 @@ export function MarketplacesScreen({
         <>
           <div className="page-heading">
             <div>
-              <div className="eyebrow">YOUR SELLER ACCOUNTS</div>
               <h1>Marketplaces</h1>
               <p>Manage each seller account’s listings, prices and stock.</p>
             </div>
@@ -726,13 +725,13 @@ function MarketplaceListingRow({
           </div>
         )}
       </td>
-      <td>
+      <td data-label="Flipkart status">
         <span className={`badge ${listing.status === 'ACTIVE' ? 'badge-green' : 'badge-amber'}`}>
           {statuses.find((status) => status.value === listing.status)?.label ?? listing.status}
         </span>
       </td>
       {(['mrp', 'sellingPrice'] as const).map((field) => (
-        <td key={field}>
+        <td key={field} data-label={field === 'mrp' ? 'MRP' : 'Selling price'}>
           <button
             className="marketplace-value"
             disabled={
@@ -742,14 +741,14 @@ function MarketplaceListingRow({
             onClick={() => onEdit({ listing, kind: 'price', field })}
           >
             <span>{listing[field] == null ? 'Not available' : money.format(listing[field])}</span>
-            <span aria-hidden="true">✎</span>
+            <Icon name="edit" />
           </button>
         </td>
       ))}
-      <td>
+      <td data-label="Shipping packages">
         {listing.observedAt && listing.packageCount != null ? listing.packageCount : 'Unavailable'}
       </td>
-      <td>
+      <td data-label="Stock by location">
         <div className="marketplace-locations">
           {listing.locations.length === 0 && <span>Flipkart supplied no stock location.</span>}
           {listing.locations.map((location) => {
@@ -772,7 +771,7 @@ function MarketplaceListingRow({
                   onClick={() => onEdit({ listing, kind: 'stock', locationId: location.id })}
                 >
                   <strong>{location.quantity ?? 'Not available'}</strong>
-                  <span aria-hidden="true">✎</span>
+                  <Icon name="edit" />
                 </button>
                 <small>
                   {policy?.companyName ?? 'Not mapped to Tally'}
@@ -809,7 +808,7 @@ function MarketplaceListingRow({
           })}
         </div>
       </td>
-      <td>
+      <td data-label="Settlement">
         <a
           className="text-button"
           href="https://seller.flipkart.com/"

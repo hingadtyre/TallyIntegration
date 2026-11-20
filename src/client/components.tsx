@@ -186,19 +186,37 @@ export function Stat({
   label,
   value,
   detail,
+  icon,
+  selected,
+  onSelect,
+  disabled,
   warm = false,
 }: {
   label: string;
   value: number;
   detail: string;
+  icon: IconName;
+  selected: boolean;
+  onSelect: () => void;
+  disabled: boolean;
   warm?: boolean;
 }) {
   return (
-    <div className={`stat-card ${warm ? 'stat-warm' : ''}`}>
+    <button
+      type="button"
+      aria-label={`Show ${label.toLowerCase()}, ${quantity(value)}. ${detail}`}
+      aria-pressed={selected}
+      onClick={onSelect}
+      disabled={disabled}
+      className={`stat-card ${warm ? 'stat-warm' : ''}`}
+    >
+      <span className="stat-icon">
+        <Icon name={icon} />
+      </span>
       <span className="stat-label">{label}</span>
       <strong>{quantity(value)}</strong>
       <small>{detail}</small>
-    </div>
+    </button>
   );
 }
 
