@@ -13,6 +13,7 @@ import type {
 import { recordActivity } from './activity.js';
 import {
   findMarketplaceListing,
+  hasConfirmedPickup,
   listingView,
   updateInventoryObservations,
 } from './marketplace-catalog.js';
@@ -137,9 +138,11 @@ function validateStockPolicy(
 
 function expectedListing(listing: MarketplaceListing, edit: MarketplaceEdit): MarketplaceListing {
   const result = structuredClone(listing);
-  if (edit.kind === 'stock')
-    result.locations.find((location) => location.id === edit.locationId)!.quantity = edit.quantity;
-  else result[edit.field] = edit.value;
+  if (edit.kind === 'stock') {
+    const location = result.locations.find((location) => location.id === edit.locationId);
+    if (location) location.quantity = edit.quantity;
+    else result.locations.push({ id: edit.locationId, status: 'ENABLED', quantity: edit.quantity });
+  } else result[edit.field] = edit.value;
   if (
     edit.kind === 'price' &&
     (result.mrp === null || result.sellingPrice === null || result.sellingPrice > result.mrp)
@@ -319,8 +322,10 @@ export class MarketplacePublication {
         'Flipkart returned a different listing identity. Refresh the account.',
         409,
       );
+    let firstPickupWrite = false;
     if (intent) {
       const target = inventoryTarget(this.store.read(), intent, before, evidence?.available);
+      firstPickupWrite = hasConfirmedPickup(target.listing, before);
       if (
         target.listing.packSource === 'packages' &&
         before.packageCount !== target.listing.packSize
@@ -335,7 +340,8 @@ export class MarketplacePublication {
         edit.kind !== 'stock' ||
         (!intent.orderOnly && target.quantity !== edit.quantity) ||
         target.listing.location !== edit.locationId ||
-        before.locations.find((l) => l.id === edit.locationId)?.quantity == null
+        (!firstPickupWrite &&
+          before.locations.find((l) => l.id === edit.locationId)?.quantity == null)
       )
         throw new InputError(
           'The stock target changed or its current quantity is unavailable. Refresh and review.',
@@ -356,8 +362,8 @@ export class MarketplacePublication {
       listing.locations.find((loc) => loc.id === edit.locationId)?.status ===
         before.locations.find((loc) => loc.id === edit.locationId)?.status;
     const baselineMatches = intent?.trial
-      ? before.locations.find((location) => location.id === intent.trial!.location)?.quantity ===
-        intent.trial.observed
+      ? (before.locations.find((location) => location.id === intent.trial!.location)?.quantity ??
+          null) === intent.trial.observed
       : sameBaseline(listing, before, edit);
     if (!orderStockDrift && !baselineMatches) {
       this.saveObservation(before);
@@ -494,7 +500,7 @@ export class MarketplacePublication {
         ),
       };
     }
-    return this.dispatch(change, token, before, expected, consumedWork);
+    return this.dispatch(change, token, before, expected, consumedWork, firstPickupWrite);
   }
 
   private async dispatch(
@@ -503,13 +509,20 @@ export class MarketplacePublication {
     before: MarketplaceListing,
     expected: MarketplaceListing,
     consumedWork: PendingStockSync[],
+    firstPickupWrite = false,
   ) {
     const { accountId, edit } = change;
     this.finish(change.id, 'sending', 'Applying update.');
     try {
       if (token !== null) {
         if (edit.kind === 'stock')
-          await this.client.updateStock(token, before, edit.locationId, edit.quantity);
+          await this.client.updateStock(
+            token,
+            before,
+            edit.locationId,
+            edit.quantity,
+            firstPickupWrite,
+          );
         else await this.client.updatePrice(token, before, expected.mrp!, expected.sellingPrice!);
       }
     } catch (error) {

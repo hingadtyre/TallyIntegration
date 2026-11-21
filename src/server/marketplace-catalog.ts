@@ -87,6 +87,46 @@ function observePackageCount(row: Listing, listing: MarketplaceListing): boolean
 
 /** Both screens refer to the same account/SKU/location; refresh never grants a mapping. */
 export function updateInventoryObservations(state: Snapshot, listing: MarketplaceListing): void {
+  const skuRows = state.listings.filter(
+    (row) => row.accountId === listing.accountId && row.sku === listing.sku,
+  );
+  const pending = skuRows.find((row) => row.skuMappingId === listing.id && !row.location);
+  if (listing.locations.length && pending && !pending.itemId) {
+    state.listings = state.listings.filter((row) => row !== pending);
+  }
+  if (!listing.locations.length || pending?.itemId) {
+    const retained = skuRows.filter(
+      (row) => row.skuMappingId === listing.id && (!listing.locations.length || !row.location),
+    );
+    if (!retained.length && !listing.locations.length) {
+      retained.push({
+        id: randomUUID(),
+        accountId: listing.accountId,
+        sku: listing.sku,
+        title: listing.title,
+        skuMappingId: listing.id,
+        location: '',
+        itemId: null,
+        packSize: null,
+        packEvidence: 'Pack evidence has not been verified.',
+        verified: false,
+        observed: null,
+        observedAt: null,
+        policy: 'auto',
+        remaining: null,
+        paused: false,
+        version: 1,
+      });
+      state.listings.push(retained[0]);
+    }
+    for (const row of retained) {
+      row.title = listing.title;
+      const packChanged = observePackageCount(row, listing);
+      if (row.observed !== null || packChanged) row.version++;
+      row.observed = null;
+      row.observedAt = null;
+    }
+  }
   for (const location of listing.locations) {
     const existing = state.listings.find(
       (row) =>
@@ -137,6 +177,35 @@ export function updateInventoryObservations(state: Snapshot, listing: Marketplac
       state.listings.push(added);
     }
   }
+}
+
+export function pickupChoices(
+  listings: MarketplaceListing[],
+  target: MarketplaceListing,
+): string[] {
+  if (!target.observedAt) return [];
+  const sources = target.locations.length
+    ? [target]
+    : listings.filter((row) => row.accountId === target.accountId && row.observedAt);
+  return [
+    ...new Set(
+      sources.flatMap((row) =>
+        row.locations.filter((loc) => loc.status === 'ENABLED').map((loc) => loc.id),
+      ),
+    ),
+  ].sort();
+}
+
+export function hasConfirmedPickup(row: Listing, remote: MarketplaceListing): boolean {
+  return (
+    !!row.itemId &&
+    !!row.location &&
+    row.skuMappingId === remote.id &&
+    row.accountId === remote.accountId &&
+    row.sku === remote.sku &&
+    !!remote.observedAt &&
+    remote.locations.length === 0
+  );
 }
 
 export function seedSampleMarketplace(data: MarketplaceData, state: Snapshot): void {

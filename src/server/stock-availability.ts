@@ -4,6 +4,7 @@ import { TallyClient, type TallySalesBill, type TallyStockItem } from '../adapte
 import type { StockSyncCoverage } from '../shared/stock-coverage.js';
 import { fingerprint, matchBills, saleDay } from './billing-matcher.js';
 import { sampleBills } from './billing-sample.js';
+import { hasConfirmedPickup } from './marketplace-catalog.js';
 import type { BillingSources } from './billing-service.js';
 import type { Store } from './store.js';
 import { InputError, requireCompany, requireText } from './validation.js';
@@ -44,7 +45,7 @@ function configuration(store: Store, companyId: string) {
     .map((l) => {
       const item = items.get(l.itemId!)!;
       const remote = (catalogue.get(JSON.stringify([l.accountId, l.sku])) ?? []).filter((r) =>
-        r.locations.some((loc) => loc.id === l.location),
+        l.skuMappingId ? r.id === l.skuMappingId : r.locations.some((loc) => loc.id === l.location),
       );
       return JSON.stringify([
         l.id,
@@ -217,19 +218,22 @@ function mappedSaleItem(
   const destinations = ctx.bindings.filter(
     (l) => l.accountId === accountId && l.sku === order.sku && l.location === order.locationId,
   );
+  if (destinations.length !== 1) return null;
+  const [destination] = destinations;
   const remote = ctx.market.listings.filter(
     (l) =>
       l.accountId === accountId &&
       l.sku === order.sku &&
-      l.locations.some((loc) => loc.id === order.locationId),
+      (!destination.skuMappingId || destination.skuMappingId === l.id) &&
+      (l.locations.some((loc) => loc.id === order.locationId) ||
+        hasConfirmedPickup(destination, l)),
   );
-  return destinations.length === 1 &&
-    destinations[0].verified &&
-    (ctx.state.mode !== 'live' || destinations[0].sourceScope === 'company') &&
+  return destination.verified &&
+    (ctx.state.mode !== 'live' || destination.sourceScope === 'company') &&
     remote.length === 1 &&
     remote[0].observedAt &&
     remote[0].id === order.listingId
-    ? destinations[0].itemId
+    ? destination.itemId
     : null;
 }
 

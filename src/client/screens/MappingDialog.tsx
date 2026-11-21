@@ -25,12 +25,20 @@ export function MappingDialog({
   onSave: SaveMapping;
 }) {
   const [selectedId, setSelectedId] = useState(editListingId ?? '');
+  const skuMappings = new Set(
+    state.listings
+      .filter((row) => row.accountId === accountId && row.skuMappingId)
+      .map((row) => row.sku),
+  );
   const listings = state.listings.filter((listing) =>
     editListingId
       ? listing.id === editListingId &&
         listing.itemId === item.id &&
         (!accountId || listing.accountId === accountId)
-      : Boolean(accountId) && listing.accountId === accountId && listing.itemId === null,
+      : Boolean(accountId) &&
+        listing.accountId === accountId &&
+        listing.itemId === null &&
+        (!skuMappings.has(listing.sku) || !!listing.marketplaceListingId),
   );
   const listing = listings.find((entry) => entry.id === selectedId);
   const company =
@@ -130,6 +138,8 @@ function PackForm({
   const [tyreFloor, setTyreFloor] = useState(listing.tyreFloor === true);
   const [confirmedSize, setConfirmedSize] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const choices = listing.pickupChoices ?? [];
+  const [pickup, setPickup] = useState(choices.length === 1 ? choices[0] : '');
   const size = source === 'packages' ? packages : Number(customSize);
   const valid = size !== null && Number.isSafeInteger(size) && size > 0;
   const confirmed = valid && confirmedSize === size;
@@ -139,6 +149,7 @@ function PackForm({
     setError('');
     const result = await onSave({
       listingId: listing.id,
+      ...(!listing.location && { pickupLocation: pickup }),
       itemId: item.id,
       confirmPackEvidence: true,
       expectedUnit: item.unit,
@@ -156,6 +167,29 @@ function PackForm({
       <fieldset className="pack-fields" disabled={busy}>
         <legend>Set of</legend>
         <p>How many {item.unit || 'Tally units'} of this item does one sale consume?</p>
+        {!listing.location && (
+          <label className="field">
+            <span>Flipkart pickup location</span>
+            <select
+              value={pickup}
+              onChange={(event) => {
+                setPickup(event.target.value);
+                setConfirmedSize(null);
+              }}
+            >
+              <option value="">Choose later</option>
+              {choices.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </select>
+            <small>
+              You can save the mapping now. Stock updates use the pickup location you confirm for
+              this seller.
+            </small>
+          </label>
+        )}
         {changed && (
           <p className="message warning" role="status">
             Flipkart package count changed from {listing.packSize} to {packages}. Review this
@@ -240,8 +274,19 @@ function PackForm({
             onChange={(event) => setConfirmedSize(event.target.checked ? size : null)}
           />
           <span>
-            I confirm the item and Set of value, and that the full stock of this item in{' '}
-            <strong>{company}</strong> supplies <strong>{listing.location}</strong>.
+            I confirm the item and Set of value
+            {listing.location || pickup ? (
+              <>
+                , and that the full stock of this item in <strong>{company}</strong> supplies{' '}
+                <strong>{listing.location || pickup}</strong>
+              </>
+            ) : (
+              <>
+                {' '}
+                for <strong>{company}</strong>. Stock updates will wait for a pickup location
+              </>
+            )}
+            .
           </span>
         </label>
       </fieldset>

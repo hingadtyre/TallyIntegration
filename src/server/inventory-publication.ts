@@ -2,6 +2,7 @@ import type { Listing, Proposal, Snapshot } from '../shared/contracts.js';
 import type { MarketplaceListing } from '../shared/marketplace-contracts.js';
 import { desiredStock, isStaleProposal, requireStockSource } from './proposals.js';
 import { InputError } from './validation.js';
+import { hasConfirmedPickup } from './marketplace-catalog.js';
 
 /** The review belongs to this server session. The saved proposal supplies the quantity. */
 export interface InventoryIntent {
@@ -19,7 +20,7 @@ export interface InventoryIntent {
     productId: string;
     sellerId: string | null;
     location: string;
-    observed: number;
+    observed: number | null;
     quantity: number;
   };
 }
@@ -31,7 +32,12 @@ export function inventoryTarget(
   availableUnits?: number,
 ): { listing: Listing; quantity: number } {
   const listing = state.listings.find((row) => row.id === intent.listingId);
-  if (!listing || listing.accountId !== marketplace.accountId || listing.sku !== marketplace.sku)
+  if (
+    !listing ||
+    listing.accountId !== marketplace.accountId ||
+    listing.sku !== marketplace.sku ||
+    (listing.skuMappingId && listing.skuMappingId !== marketplace.id)
+  )
     throw new InputError('The mapped listing changed. Review the current destination.', 409);
   const company = state.companies.find((row) => row.id === intent.companyId);
   const { item } = requireStockSource(state, listing);
@@ -44,11 +50,14 @@ export function inventoryTarget(
       'Confirm which Tally stock supplies this location before publishing.',
       409,
     );
+  if (!listing.location)
+    throw new InputError('Choose a pickup location in Edit Set of before publishing.', 409);
   if (
     marketplace.status !== 'ACTIVE' ||
-    !marketplace.locations.some(
-      (location) => location.id === listing.location && location.status === 'ENABLED',
-    )
+    (!hasConfirmedPickup(listing, marketplace) &&
+      !marketplace.locations.some(
+        (location) => location.id === listing.location && location.status === 'ENABLED',
+      ))
   )
     throw new InputError(
       'Only an active listing with an enabled stock location can be updated.',

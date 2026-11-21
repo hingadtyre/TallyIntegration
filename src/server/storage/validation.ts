@@ -135,7 +135,10 @@ function listing(value: unknown, field: string, legacyHolds?: Set<string>): List
     accountId: string(row.accountId, `${field}.accountId`),
     sku: string(row.sku, `${field}.sku`),
     title: string(row.title, `${field}.title`, true),
-    location: string(row.location, `${field}.location`),
+    location: string(row.location, `${field}.location`, !!row.skuMappingId && row.location === ''),
+    ...(row.skuMappingId !== undefined && {
+      skuMappingId: string(row.skuMappingId, `${field}.skuMappingId`),
+    }),
     itemId: nullableString(row.itemId, `${field}.itemId`),
     packSize: row.packSize === null ? null : integer(row.packSize, `${field}.packSize`, 1),
     packEvidence: string(row.packEvidence, `${field}.packEvidence`, true),

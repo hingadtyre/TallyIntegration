@@ -90,14 +90,14 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live', billingSources?
         observedAt: new Date().toISOString(),
       };
     },
-    async updateStock(token, listing, locationId, quantity) {
+    async updateStock(token, listing, locationId, quantity, confirmedPickup) {
       transportCalls.push('updateStock');
       writes.push({ token, kind: 'stock', quantity });
       if (failWrite === 'before') throw new FlipkartListingError('Flipkart rejected this stock.');
-      remote
-        .get(token)!
-        .find((row) => row.id === listing.id)!
-        .locations.find((row) => row.id === locationId)!.quantity = quantity;
+      const target = remote.get(token)!.find((row) => row.id === listing.id)!;
+      if (confirmedPickup && !target.locations.length)
+        target.locations.push({ id: locationId, quantity, status: 'ENABLED' });
+      else target.locations.find((row) => row.id === locationId)!.quantity = quantity;
       if (failWrite === 'after') {
         failRead = true;
         throw new FlipkartListingError('Connection interrupted.', true);
@@ -2097,6 +2097,14 @@ test('Inventory reads saved Flipkart identifiers by seller, SKU and location wit
       ['warehouse-b', 'listing-one', 'product-one'],
     ],
   );
+  const listingWithoutLocation = f.remote.get('seller-a')![0];
+  listingWithoutLocation.locations = [];
+  await f.service.refresh(sellerA.id);
+  const pending = inventory
+    .snapshot()
+    .listings.find((row) => row.accountId === sellerA.id && row.location === '')!;
+  assert.equal(pending.marketplaceListingId, listingWithoutLocation.id);
+  assert.deepEqual(pending.pickupChoices, []);
   f.remote.set('seller-a', []);
   await f.service.refresh(sellerA.id);
   assert.ok(
@@ -2105,6 +2113,48 @@ test('Inventory reads saved Flipkart identifiers by seller, SKU and location wit
       .listings.filter((row) => row.accountId === sellerA.id)
       .every((row) => !row.productId && !row.marketplaceListingId),
   );
+});
+
+test('map a SKU before choosing its pickup location, then publish and verify its first positive stock', async (t) => {
+  const s = await mappedInventory(t, 'manual', { coverage: false });
+  const remote = {
+    ...s.remote,
+    id: 'single-id',
+    productId: 'single-product',
+    sku: '155/65R14',
+    locations: [],
+    packageCount: 1,
+  };
+  s.f.remote.get('seller-a')!.push(remote);
+  await s.f.service.refresh(s.account.id);
+  const row = () => s.service.snapshot().listings.find((row) => row.sku === remote.sku)!;
+  assert.deepEqual(row().pickupChoices, ['warehouse-a', 'warehouse-b']);
+  const map = (pickupLocation: string) =>
+    s.service.mapping({
+      listingId: row().id,
+      itemId: s.item.id,
+      listingVersion: row().version,
+      confirmPackEvidence: true,
+      packSource: 'packages',
+      packSize: 1,
+      sourceScope: 'company',
+      tyreFloor: false,
+      pickupLocation,
+    });
+  map('');
+  assert.equal(row().itemId, s.item.id);
+  assert.throws(() => map('foreign-warehouse'), /current pickup location/);
+  map('warehouse-b');
+  await s.f.service.refresh(s.account.id);
+  assert.equal(row().verified, true);
+  assert.equal(row().observed, null);
+  await s.enableCoverage();
+  s.service.calculate(s.item.companyId, [row().id]);
+  const review = s.service.review(s.item.companyId, [row().id]);
+  const result = await s.service.publish(review.id);
+  assert.equal(result.rows[0].status, 'confirmed', result.rows[0].message);
+  assert.deepEqual(remote.locations, [{ id: 'warehouse-b', quantity: 14, status: 'ENABLED' }]);
+  assert.equal(row().observed, 14);
 });
 
 test('a recreated unprotected SKU imports with fresh Inventory identities and rejects the old listing editor', async (t) => {

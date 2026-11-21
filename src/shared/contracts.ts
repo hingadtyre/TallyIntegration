@@ -50,6 +50,9 @@ export interface Listing {
   sku: string;
   title: string;
   location: string;
+  /** Marketplace identity for a mapping created before Flipkart supplied a location. */
+  skuMappingId?: string;
+  pickupChoices?: string[];
   itemId: string | null;
   packSize: number | null;
   packEvidence: string;
@@ -156,6 +159,7 @@ export interface InventoryPublishResult {
 }
 export interface MappingInput {
   listingId: string;
+  pickupLocation?: string;
   itemId: string;
   expectedUnit?: string;
   confirmPackEvidence: boolean;

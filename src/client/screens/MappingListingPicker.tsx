@@ -16,10 +16,16 @@ function ListingDetails({ listing }: { listing: Listing }) {
             <b>Seller SKU</b> {listing.sku}
           </span>
         )}
-        <span>
-          <b>Location</b> {listing.location}
-        </span>
-        {!listing.observedAt && <span>Refresh listings to verify this location.</span>}
+        {listing.location ? (
+          <span>
+            <b>Location</b> {listing.location}
+          </span>
+        ) : (
+          <span>Flipkart has not reported stock at a pickup location for this SKU.</span>
+        )}
+        {listing.location && !listing.observedAt && (
+          <span>Refresh listings to verify this location.</span>
+        )}
       </span>
       {(listing.productId || listing.marketplaceListingId) && (
         <span className="mapping-listing-meta">

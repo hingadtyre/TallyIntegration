@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { hasConfirmedPickup } from './marketplace-catalog.js';
 import type { AutomationPreview, AutomationPreviewRow } from '../shared/automation.js';
 import type { Listing, Snapshot, StockItem } from '../shared/contracts.js';
 import type { MarketplaceListing } from '../shared/marketplace-contracts.js';
@@ -15,14 +16,16 @@ function waiting(message: string): never {
   throw new InputError(message, 409);
 }
 
-function checkLocation(listing: Listing, remote: MarketplaceListing): number {
+function checkLocation(listing: Listing, remote: MarketplaceListing): number | null {
+  if (!listing.location) waiting('Choose a pickup location in Edit Set of before publishing.');
+  if (listing.packSource === 'packages' && listing.packSize !== remote.packageCount)
+    waiting('Review Set of. The Flipkart package count changed or is unavailable.');
+  if (remote.status === 'ACTIVE' && hasConfirmedPickup(listing, remote)) return null;
   const locations = remote.locations.filter((location) => location.id === listing.location);
   if (remote.status !== 'ACTIVE' || locations.length !== 1 || locations[0].status !== 'ENABLED')
     waiting('Verify the active Flipkart listing and its enabled stock location.');
   if (locations[0].quantity === null || !remote.observedAt)
     waiting('Refresh Flipkart to verify the stock at this location.');
-  if (listing.packSource === 'packages' && listing.packSize !== remote.packageCount)
-    waiting('Review Set of. The Flipkart package count changed or is unavailable.');
   return locations[0].quantity;
 }
 

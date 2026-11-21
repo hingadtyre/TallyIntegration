@@ -62,6 +62,62 @@ test('mapping offers only unmapped listings from the selected seller account', (
   assert.ok(screen.getByRole('button', { name: /SAMPLE-UNMAPPED-1/ }));
 });
 
+test('an imported SKU without a stock location is searchable but cannot select a stale warehouse or another seller', () => {
+  const state = initialState('demo', 'unused');
+  const accountId = 'flipkart-primary';
+  const catalogueRow = {
+    accountId,
+    sku: '155/65R14',
+    title: 'Example tyre',
+    productId: 'FSN-1',
+    marketplaceListingId: 'LISTING-1',
+  };
+  const pending = {
+    ...state.listings[0],
+    ...catalogueRow,
+    skuMappingId: 'LISTING-1',
+    itemId: null,
+    location: '',
+    observedAt: null,
+    pickupChoices: ['North'],
+  };
+  state.listings = [
+    pending,
+    { ...pending, id: 'other-row', accountId: 'other', title: 'Other seller tyre' },
+    {
+      ...state.listings[0],
+      id: 'historical',
+      accountId,
+      sku: catalogueRow.sku,
+      itemId: null,
+      observedAt: null,
+    },
+  ];
+  render(
+    <MappingDialog
+      item={state.items[0]}
+      state={state}
+      accountId={accountId}
+      busy={false}
+      onClose={() => {}}
+      onSave={async () => ({ ok: true, value: state })}
+    />,
+  );
+  for (const query of ['155/65R14', 'FSN-1', 'LISTING-1', 'Example tyre']) {
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: query } });
+    assert.ok(screen.getByText('Example tyre'));
+    assert.ok(screen.getByText(/Flipkart has not reported stock/));
+    assert.equal(screen.queryByText('Other seller tyre'), null);
+    assert.equal(screen.getAllByRole('button', { name: /155\/65R14/ }).length, 1);
+    assert.ok((screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled);
+  }
+  fireEvent.click(screen.getByRole('button', { name: /155\/65R14/ }));
+  assert.equal(
+    (screen.getByLabelText(/Flipkart pickup location/) as HTMLSelectElement).value,
+    'North',
+  );
+});
+
 test('mapping requires a selected seller before showing inventory destinations', () => {
   const state = initialState('demo', 'unused');
   render(

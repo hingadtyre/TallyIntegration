@@ -312,6 +312,7 @@ export class FlipkartListingsClient {
     listing: MarketplaceListing,
     locationId: string,
     quantity: number,
+    confirmedPickup = false,
   ): Promise<void> {
     validateListing(listing);
     if (observedNumber(quantity) === null) {
@@ -320,8 +321,8 @@ export class FlipkartListingsClient {
     const locations = listing.locations.filter((location) => location.id === locationId);
     if (
       !identity(locationId) ||
-      locations.length !== 1 ||
-      !['ENABLED', 'DISABLED'].includes(locations[0].status)
+      (!(confirmedPickup && listing.status === 'ACTIVE' && listing.locations.length === 0) &&
+        (locations.length !== 1 || !['ENABLED', 'DISABLED'].includes(locations[0].status)))
     ) {
       throw new FlipkartListingError('Refresh this listing to verify the selected stock location.');
     }

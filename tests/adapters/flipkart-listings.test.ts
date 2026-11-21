@@ -483,6 +483,28 @@ test('stock writes send only the location ID and absolute inventory without chan
   await client.updateStock(token, listing, 'warehouse-2', 0);
 });
 
+test('first stock write uses the confirmed pickup when the SKU has no location', async () => {
+  const sku = { ...listing, sku: '155/65R14', locations: [] };
+  let calls = 0;
+  const client = new FlipkartListingsClient({
+    request: async (url, options) => {
+      calls++;
+      assert.equal(url, 'https://api.flipkart.net/sellers/listings/v3/update/inventory');
+      assert.deepEqual(JSON.parse(String(options?.body)), {
+        '155/65R14': {
+          product_id: sku.productId,
+          locations: [{ id: 'warehouse-1', inventory: 1 }],
+        },
+      });
+      return Response.json({ '155/65R14': { status: 'SUCCESS' } });
+    },
+  });
+  await assert.rejects(client.updateStock(token, sku, 'warehouse-1', 1), safeError(false));
+  await assert.rejects(client.updateStock(token, listing, 'other', 1, true), safeError(false));
+  await client.updateStock(token, sku, 'warehouse-1', 1, true);
+  assert.equal(calls, 1);
+});
+
 test('price writes use the current documented selling_price field, both prices and INR', async () => {
   const client = new FlipkartListingsClient({
     request: async (url, options) => {

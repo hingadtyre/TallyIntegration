@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Snapshot } from '../../shared/contracts.js';
 import { initialState } from '../seed.js';
+import { updateInventoryObservations } from '../marketplace-catalog.js';
 import { backupDatabase } from './backup.js';
 import { readSnapshot, writeSnapshot } from './records.js';
 import { readMarketplace } from './marketplace-records.js';
@@ -16,6 +17,7 @@ import {
   createStockCoverageSchema,
   addCompanyStockIssue,
   addProposalIssue,
+  createSkuMappings,
   upgradeOrderSyncSchema,
   CURRENT_SCHEMA_VERSION,
   schemaVersion,
@@ -112,9 +114,14 @@ export function prepareDatabase(
       if (version < 7) upgradeOrderSyncSchema(database);
       if (version < 8) addCompanyStockIssue(database);
       if (version < 10) addProposalIssue(database);
+      if (version < 11) createSkuMappings(database);
     }
     database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION};`);
     // The old-schema reader converted holds to pauses with their drafts and queued work.
+    for (const listing of readMarketplace(database).listings) {
+      if (listing.observedAt && !listing.locations.length)
+        updateInventoryObservations(state, listing);
+    }
     writeSnapshot(database, state);
   });
   return backupPath;

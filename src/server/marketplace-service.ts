@@ -525,6 +525,20 @@ export class MarketplaceService {
                 row.version++;
               }
             }
+            if (!listing.locations.length && previous?.observedAt) {
+              for (const row of state.listings) {
+                if (
+                  row.accountId === listing.accountId &&
+                  row.sku === listing.sku &&
+                  row.itemId &&
+                  row.sourceScope === 'company' &&
+                  previous.locations.some(
+                    (loc) => loc.id === row.location && loc.status === 'ENABLED',
+                  )
+                )
+                  row.skuMappingId = listing.id;
+              }
+            }
             updateInventoryObservations(state, listing);
           }
           for (const row of state.listings.filter((row) => row.accountId === account.id)) {
@@ -532,7 +546,9 @@ export class MarketplaceService {
               !listings.some(
                 (listing) =>
                   listing.sku === row.sku &&
-                  listing.locations.some((location) => location.id === row.location),
+                  (listing.locations.some((location) => location.id === row.location) ||
+                    (row.skuMappingId === listing.id &&
+                      (!row.location || !listing.locations.length))),
               )
             ) {
               row.observed = null;

@@ -1,12 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 10;
+export const CURRENT_SCHEMA_VERSION = 11;
 
 /** Each managed record has an explicit table. Array order is presentation state,
  * so sort_order is retained without making names or positions into identities. */
 export function createSchema(
   database: DatabaseSync,
-  version: 6 | 7 | 8 | 9 | 10 = CURRENT_SCHEMA_VERSION,
+  version: 6 | 7 | 8 | 9 | 10 | 11 = CURRENT_SCHEMA_VERSION,
 ): void {
   database.exec(`
     CREATE TABLE app_metadata (
@@ -113,6 +113,13 @@ export function createSchema(
   if (version >= 7) upgradeOrderSyncSchema(database);
   if (version >= 8) addCompanyStockIssue(database);
   if (version >= 10) addProposalIssue(database);
+  if (version >= 11) createSkuMappings(database);
+}
+
+export function createSkuMappings(database: DatabaseSync): void {
+  database.exec(
+    'CREATE TABLE IF NOT EXISTS sku_mappings (listing_id TEXT PRIMARY KEY NOT NULL REFERENCES listings(id) ON DELETE CASCADE, marketplace_listing_id TEXT NOT NULL)',
+  );
 }
 
 export function addProposalIssue(database: DatabaseSync): void {

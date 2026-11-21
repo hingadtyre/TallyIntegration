@@ -13,6 +13,7 @@ type TableName =
   | 'seller_accounts'
   | 'stock_items'
   | 'listings'
+  | 'sku_mappings'
   | 'listing_pack_settings'
   | 'proposals'
   | 'activity';
@@ -66,6 +67,14 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
       (row) => [row.listing_id, row],
     ),
   );
+  const skuMappings = new Map(
+    version >= 11
+      ? database
+          .prepare('SELECT * FROM sku_mappings')
+          .all()
+          .map((row) => [row.listing_id, row.marketplace_listing_id] as const)
+      : [],
+  );
   const listings = database
     .prepare(
       `
@@ -81,6 +90,7 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
       const pack = packs.get(row.id);
       return {
         ...row,
+        ...(skuMappings.has(row.id) && { skuMappingId: skuMappings.get(row.id) }),
         verified: row.verified === 1,
         paused: row.paused === 1,
         ...(pack && {
@@ -283,6 +293,15 @@ export function writeSnapshot(database: DatabaseSync, input: Snapshot): void {
       sort_order: index,
     })),
   );
+  if (version >= 11)
+    syncTable(
+      database,
+      'sku_mappings',
+      'listing_id',
+      state.listings
+        .filter((row) => row.skuMappingId)
+        .map((row) => ({ listing_id: row.id, marketplace_listing_id: row.skuMappingId! })),
+    );
   syncTable(
     database,
     'listing_pack_settings',

@@ -113,7 +113,7 @@ export function ItemRows({
                     {listing.title}
                   </p>
                   <small>
-                    {accountName} · {listing.location}
+                    {accountName} · {listing.location || 'Pickup location pending'}
                   </small>
                 </div>
               </div>
@@ -122,7 +122,7 @@ export function ItemRows({
               <button
                 className={`pack-tag ${listing.verified ? '' : 'unverified'}`}
                 title={listing.packEvidence}
-                aria-label={`Edit Set of for ${listing.sku} at ${listing.location}`}
+                aria-label={`Edit Set of for ${listing.sku} at ${listing.location || 'pending pickup location'}`}
                 disabled={busy}
                 onClick={() => onEditPack(listing)}
               >

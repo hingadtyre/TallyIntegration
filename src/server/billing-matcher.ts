@@ -6,6 +6,7 @@ import type { BillingReport, BillingRow, BillingRule } from '../shared/billing-c
 import type { Snapshot } from '../shared/contracts.js';
 import type { MarketplaceListing } from '../shared/marketplace-contracts.js';
 import type { BillingData, BillingLink } from './storage/billing-records.js';
+import { hasConfirmedPickup } from './marketplace-catalog.js';
 
 export interface BillingScope {
   companyId: string;
@@ -95,9 +96,14 @@ export function matchBills(
   }
   for (const order of evidence.orders) {
     const listing = listings.get(order.listingId);
+    const candidate = destinations.get(JSON.stringify([order.sku, order.locationId]));
     const mapping =
-      listing?.sku === order.sku && listing.locations.some((loc) => loc.id === order.locationId)
-        ? destinations.get(JSON.stringify([order.sku, order.locationId]))
+      candidate &&
+      listing?.sku === order.sku &&
+      (!candidate.skuMappingId || candidate.skuMappingId === listing.id) &&
+      (listing.locations.some((loc) => loc.id === order.locationId) ||
+        hasConfirmedPickup(candidate, listing))
+        ? candidate
         : undefined;
     const item = mapping?.itemId ? items.get(mapping.itemId) : undefined;
     if (item && item.companyId !== scope.companyId) continue;

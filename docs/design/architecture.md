@@ -141,6 +141,8 @@ Purchases, cancellations and returns never replenish allowance automatically. Sh
 
 ## Review, bulk actions and background work
 
+An imported seller SKU can be mapped before Flipkart returns a stock location. The seller can confirm an enabled pickup location from that account’s catalogue during mapping or later. Until chosen, the SKU mapping retains its Set of and publication waits. An absent location carries unknown stock. The first stock update uses the confirmed pickup ID and requires the usual identity, policy and readback checks.
+
 Parent rows show unique Tally stock items. Each child shows a mapped listing and its location-specific inventory. Display source quantity, title/SKU, the **Set of** column, observed quantity/time, proposed quantity and row actions. Low-stock highlighting defaults to five or fewer physical base units, configurable per item.
 
 Bulk actions use selected listings when any are selected; otherwise all filtered matching listings across pages. Capture that destination set at review and show company, account, locations and count. Exclude unmatched siblings. New items or filter changes must not silently enlarge an already reviewed operation. If stock, mapping, pack, rule or active-policy versions change, mark affected proposals stale and require review again while preserving the seller's edit for comparison.

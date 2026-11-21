@@ -10,6 +10,7 @@ import type {
   Snapshot,
 } from '../shared/contracts.js';
 import type { MarketplaceService } from './marketplace-service.js';
+import { pickupChoices } from './marketplace-catalog.js';
 import { checkCalculationStock, saveCalculation } from './inventory-calculation.js';
 import { inventoryTarget } from './inventory-publication.js';
 import { AutomationReviews, indexAutomationCatalog } from './automation-preview.js';
@@ -100,9 +101,20 @@ export class InventoryService {
     const catalog = indexAutomationCatalog(market);
     for (const row of state.listings) {
       const matches = catalog.listingsFor(row);
-      if (!row.observedAt || matches.length !== 1) continue;
+      if (matches.length !== 1) continue;
       const [listing] = matches;
       if (
+        listing.observedAt &&
+        row.skuMappingId === listing.id &&
+        (!row.location || !listing.locations.length)
+      ) {
+        if (!row.location) row.pickupChoices = pickupChoices(market.listings, listing);
+        row.productId = listing.productId;
+        row.marketplaceListingId = listing.id;
+        continue;
+      }
+      if (
+        !row.observedAt ||
         !listing.observedAt ||
         !listing.locations.some((location) => location.id === row.location)
       )
@@ -399,7 +411,7 @@ export class InventoryService {
   }
 
   mapping(input: Record<string, unknown>): Snapshot {
-    this.store.update((state) => {
+    this.store.updateMarketplace((market, state) => {
       const listing = state.listings.find((row) => row.id === input.listingId);
       const item = state.items.find((row) => row.id === input.itemId);
       if (!listing || !item || (listing.itemId && listing.itemId !== item.id))
@@ -409,6 +421,52 @@ export class InventoryService {
       if (input.confirmPackEvidence !== true)
         throw new InputError('Verified pack evidence is required.');
       const editing = listing.itemId !== null;
+      let pickupChanged = false;
+      if (!listing.location || input.pickupLocation !== undefined) {
+        const remote = market.listings.find(
+          (row) =>
+            row.id === listing.skuMappingId &&
+            row.accountId === listing.accountId &&
+            row.sku === listing.sku,
+        );
+        if (
+          listing.location ||
+          !remote?.observedAt ||
+          input.packSource === undefined ||
+          typeof input.pickupLocation !== 'string'
+        )
+          throw new InputError('Refresh the imported listing and review its pickup location.', 409);
+        const choice = input.pickupLocation;
+        if (choice) {
+          if (!pickupChoices(market.listings, remote).includes(choice))
+            throw new InputError('Choose a current pickup location for this seller.', 409);
+          const other = state.listings.find(
+            (row) =>
+              row.accountId === listing.accountId &&
+              row.sku === listing.sku &&
+              row.location === choice,
+          );
+          if (other) {
+            if (
+              other.itemId ||
+              other.paused ||
+              other.policy !== 'auto' ||
+              other.remaining !== null ||
+              state.proposals.some((p) => p.listingId === other.id)
+            )
+              throw new InputError(
+                'This pickup location already has a mapping or stock policy.',
+                409,
+              );
+            state.listings = state.listings.filter((row) => row !== other);
+          }
+          listing.location = choice;
+          const location = remote.locations.find((loc) => loc.id === choice);
+          listing.observed = location?.quantity ?? null;
+          listing.observedAt = location ? remote.observedAt : null;
+          pickupChanged = true;
+        }
+      }
       if (input.packSource !== undefined) {
         if (input.expectedUnit !== undefined && input.expectedUnit !== item.unit)
           throw new InputError(
@@ -436,6 +494,7 @@ export class InventoryService {
         // on Flipkart may still be waiting to reach Tally.
         const sameConversion =
           editing &&
+          !pickupChanged &&
           listing.verified &&
           listing.packSource === input.packSource &&
           listing.packSize === size &&
