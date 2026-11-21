@@ -3085,13 +3085,13 @@ small {
   color: #4c5952;
 }
 .stock-group {
-  display: flex;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 14rem 13rem auto;
   align-items: center;
   gap: 12px;
 }
 .stock-group-name {
   min-width: 0;
-  flex: 1;
   overflow-wrap: anywhere;
 }
 .stock-group .item-meta {
@@ -3123,6 +3123,7 @@ small {
   font-size: var(--font-body);
   color: var(--ink);
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 .group-stock small {
   color: #754d13;
@@ -3234,7 +3235,6 @@ small {
     display: block;
   }
   .stock-group {
-    display: grid;
     grid-template-columns: 28px minmax(0, 1fr) auto;
     gap: 6px 9px;
   }
