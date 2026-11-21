@@ -50,6 +50,8 @@ The pilot package bundles Node.js 24, the built application, runtime dependencie
 
 This is a portable pilot with read-only Tally access and explicit marketplace edits. It starts manually after Windows login; a signed installer, automatic startup/crash restart, controlled upgrades and full production recovery remain release work. Customer distribution requires a verified package built from the intended source; see the dated artifact evidence in [release readiness](docs/release-readiness.md), [packaging instructions for the provider](CONTRIBUTING.md#build-the-windows-pilot-package) and the [customer guide](docs/customer-setup.md).
 
+For an existing Windows pilot, extract the new ZIP into a separate folder and run **Upgrade Stockbridge.cmd** under the original Windows login. It stops the previous instance, makes a verified database safety copy, migrates the existing workspace and opens the updated dashboard. The managed **Stockbridge** desktop shortcut opens that workspace for daily use. See the [customer upgrade steps](docs/customer-setup.md#10-updates-recovery-and-removing-the-pilot).
+
 For the provider, `npm run package:pilot` verifies/builds a new ZIP and `npm run test:pilot -- '<absolute ZIP path>'` checks that extracted artifact with an isolated local Tally simulation. These are development/release commands; customers use the supplied launch files.
 
 ## Run on this computer

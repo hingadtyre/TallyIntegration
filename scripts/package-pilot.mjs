@@ -137,6 +137,7 @@ function createCustomerGuide(folder, build) {
 function createLaunchers(folder) {
   const actions = {
     'Start Stockbridge.cmd': 'start',
+    'Upgrade Stockbridge.cmd': 'upgrade',
     'Stop Stockbridge.cmd': 'stop',
     'Stockbridge Status.cmd': 'status',
     'Open Data Folder.cmd': 'data',

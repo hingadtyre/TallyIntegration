@@ -4,6 +4,16 @@
 
 This is the readiness checklist for the first customer delivery. The [approved architecture](design/architecture.md#customer-release-completion) defines the required behavior; [README](../README.md) describes the delivered build; [customer setup](customer-setup.md) describes the available operating steps. Test fixtures establish local behavior, not a live Tally or Flipkart connection.
 
+## Same-PC Windows pilot upgrade on 21 November 2026
+
+Use `Stockbridge-Pilot-0.1.0-2026-11-21T11-44-26-307Z-55c24ec5-dirty-win-x64.zip` for the supervised pilot. It supersedes the earlier upgrade ZIP below. All 433 application tests and 24 extracted-package checks passed. On an isolated Windows desktop, the shortcut reopened the saved workspace, updated a previously managed target, and preserved a customer-owned shortcut with the same name. After a simulated dashboard port conflict, Upgrade reported the verified safety copy and a retry reopened the workspace. The saved company sync setting, individual pause and remaining allowance survived migration. Customer-machine acceptance is pending.
+
+The ZIP SHA-256 is `497bb2045f8ae96c84e8a4fc57c419fb1de02f44b3f66172d6b26ccd1b61b56c`. The receipt is `releases/verify-pilot-gK577x/verification.json`.
+
+The pilot ZIP `Stockbridge-Pilot-0.1.0-2026-11-21T11-32-49-261Z-55c24ec5-dirty-win-x64.zip` includes **Upgrade Stockbridge.cmd**. All 433 application tests and 22 extracted-package checks passed. The upgrade checks covered an absent workspace, a running workspace, and migration of a populated schema 10 database with a verified pre-upgrade copy and preserved protected seller access. A separate check started the previous packaged build `020f0e0e` and upgraded it with eight synthetic stock mappings and their settings intact. These checks used isolated data on the development Windows PC. Customer-machine acceptance is pending.
+
+The ZIP SHA-256 is `cfaebd269e5de50b26e5796375bdeb0c6a216d8bcce9d1ee3b9223a78b2cd03a`. The extracted-package receipt is `releases/verify-pilot-hz6Tvs/verification.json`.
+
 ## Customer walkthrough on 20 November 2026
 
 **Verified Windows x64 pilot.** The candidate `Stockbridge-Pilot-0.1.0-2026-11-20T13-07-52-325Z-5e1002e4-dirty-win-x64.zip` passed formatting, lint, all 408 tests, the production build and all 19 checks on the extracted ZIP. Its SHA-256 is `89bdc83d3306f644b522325e9ede94a28f4dafafa33640087625cc2ffb2b0ae3`. The receipt is `releases/verify-pilot-xjoZbp/verification.json`. Its 300 files include just the current dashboard script, stylesheet and logo under the web assets directory. The ZIP includes the local changes on `dahinger-customer-pilot-verification` based on `5e1002e4`. This audit entry was recorded after packaging.

@@ -265,14 +265,15 @@ A fresh installation starts with an empty live inventory workspace. Your company
 
 ## 10. Updates, recovery and removing the pilot
 
-Arrange updates with the provider during the pilot:
+1. On the same PC, sign in with the Windows account you normally use for Stockbridge. Extract the provider's new ZIP into a new application folder. If support configured a custom data folder, use the same setting for the upgrade.
+2. Double-click **Upgrade Stockbridge.cmd** in the **new** folder. It stops the running copy, verifies a safety copy of the existing database in `migration-backups`, upgrades the database if needed, and opens the new dashboard. Keep the window open until the dashboard is ready. Existing seller credentials stay in the same Windows data folder.
+3. Check your company, seller account and a familiar stock mapping. For daily use, open **Stockbridge** on your desktop. A successful upgrade creates this shortcut or updates the one Stockbridge created previously. If a personal shortcut already uses that name, or Windows restricts desktop changes, use **Start Stockbridge.cmd** in the new folder.
 
-1. Create a verified backup and retain its information file.
-2. Use **Stop Stockbridge.cmd** and confirm it has stopped.
-3. Keep the current application folder and the customer data folder. Extract the new, provider-verified package into a new application folder.
-4. Have the provider confirm that the version supports your database and backup. Do not open a newer database with an older application to attempt a rollback.
-5. Start the new version, check Status, company counts, saved settings and Tally observations, then take a fresh backup.
-6. Keep the old package and safety backup until the provider confirms the update worked. Replace any desktop shortcut so it points to the new Start file.
+Your saved company sync settings, individual listing pauses and remaining sales allowances carry forward. Automatic updates for eligible listings resume after the usual checks. A paused listing stays paused.
+
+If the workspace upgrade completes and the dashboard fails to start, run **Upgrade Stockbridge.cmd** again from the new folder. If the problem continues, give support the displayed safety-copy and startup-log locations. Keep the original safety copy. Support handles backup restoration separately when needed.
+
+If Upgrade cannot find your workspace, use **Stockbridge Status.cmd** in the old folder to check its data path. Contact support if the upgrade reports an error. Keep the old application folder and the safety copy. Opening an upgraded database with the old application is unsupported.
 
 There is no automatic updater or uninstall wizard. To remove application files, stop the app first and remove only its extracted application folder. The separate data folder remains. Deleting the data folder or backups is a separate decision and can permanently remove saved work; do it only after arranging a verified retained backup with the data owner.
 

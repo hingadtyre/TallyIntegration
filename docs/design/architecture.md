@@ -157,6 +157,8 @@ Save jobs before sending. Serialize publication per destination, supersede obsol
 
 ## Backups, restoration and history
 
+A same-PC application upgrade continues the existing workspace, including its company sync settings, listing pauses and remaining allowances. Eligible automatic publication follows the ordinary fresh-stock and order checks. If dashboard startup fails after migration, retry startup through the new package and retain the pre-upgrade safety copy. Restoring earlier stock state requires a separate support decision because marketplace orders and stock may have changed since that copy was made.
+
 Create consistent SQLite snapshots daily, before upgrades and on Back up now. Initially retain seven daily and four weekly backups. Verify the completed snapshot and manifest before declaring success or rotating older backups. Include settings, mappings, observations, policies/allowances, durable recovery records and retained business history. Exclude credentials from portable backups by default; protect them separately and reconnect accounts when needed. Export raw diagnostic logs separately.
 
 Settings shows the backup folder, schedule/retention, last/next backup, failures and restore/import actions. Validate background-process write access when changing the folder; future backups use it immediately without restart. Existing files stay put unless the user explicitly requests a move/export. Keep manual and pre-upgrade/pre-restore safety backups distinguishable; their exact retention is an implementation choice.

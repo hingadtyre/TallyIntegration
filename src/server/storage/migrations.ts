@@ -53,6 +53,7 @@ export function prepareDatabase(
   database: DatabaseSync,
   file: string,
   mode: Snapshot['mode'],
+  upgradingExisting = false,
 ): string | null {
   const version = schemaVersion(database);
   if (version > CURRENT_SCHEMA_VERSION) throw new Error('This database needs a newer application.');
@@ -61,9 +62,10 @@ export function prepareDatabase(
     readMarketplace(database);
     readBilling(database);
     verifyStockCoverage(database);
-    return null;
+    return upgradingExisting ? migrationBackup(database, file) : null;
   }
   if (version === 0) {
+    if (upgradingExisting) throw new Error('Choose an existing, versioned Stockbridge workspace.');
     const tables = database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
       .all();
@@ -86,13 +88,7 @@ export function prepareDatabase(
   requireMode(state, mode);
   const originalMarket = version >= 3 ? JSON.stringify(readMarketplace(database)) : null;
   const originalBilling = version >= 5 ? JSON.stringify(readBilling(database)) : null;
-  const stamp = new Date().toISOString().replaceAll(':', '-');
-  const backupPath = join(
-    dirname(file),
-    'migration-backups',
-    `before-schema-v${CURRENT_SCHEMA_VERSION}-${stamp}-${randomUUID().slice(0, 8)}.sqlite`,
-  );
-  backupDatabase(database, backupPath);
+  const backupPath = migrationBackup(database, file);
   inTransaction(database, () => {
     if (
       schemaVersion(database) !== version ||
@@ -125,4 +121,15 @@ export function prepareDatabase(
     writeSnapshot(database, state);
   });
   return backupPath;
+}
+
+function migrationBackup(database: DatabaseSync, file: string): string {
+  const stamp = new Date().toISOString().replaceAll(':', '-');
+  const path = join(
+    dirname(file),
+    'migration-backups',
+    `before-schema-v${CURRENT_SCHEMA_VERSION}-${stamp}-${randomUUID().slice(0, 8)}.sqlite`,
+  );
+  backupDatabase(database, path);
+  return path;
 }

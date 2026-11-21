@@ -164,6 +164,8 @@ This runs the full verification and build before producing a new timestamped fol
 
 Run the extracted-package verification in PowerShell, replacing the example with the absolute ZIP path printed by the builder:
 
+Packages with **Upgrade Stockbridge.cmd** also exercise same-PC upgrade of a running workspace and a stopped, populated older database. The check verifies the pre-upgrade safety copy, retained stock, settings and protected seller access, and refusal to create a workspace during upgrade. For packages that manage the desktop shortcut, it uses an isolated desktop to check the saved launch destination and protection of customer shortcuts. It also occupies the test dashboard port to exercise the post-migration error and retry, and checks a company with sync enabled and a paused listing with a remaining sales allowance.
+
 ```powershell
 npm run test:pilot -- 'C:\path\to\Stockbridge-Pilot-<build>.zip'
 ```

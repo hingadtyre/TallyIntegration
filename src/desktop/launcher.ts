@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { liveDashboardPort } from '../shared/dashboard-port.js';
+import { installDesktopShortcut } from './shortcut.js';
 
 const dashboardUrl = `http://127.0.0.1:${liveDashboardPort()}`;
 
@@ -85,9 +86,9 @@ export async function runLauncher(
     throw new Error('Use a local Windows data folder. Contact support to check the installation.');
   }
   const dataDirectory = resolve(configured);
-  if (!['start', 'stop', 'status', 'data'].includes(action)) {
+  if (!['start', 'upgrade', 'stop', 'status', 'data'].includes(action)) {
     throw new Error(
-      'Choose Start Stockbridge, Stop Stockbridge, Stockbridge Status or Open Data Folder.',
+      'Choose Start Stockbridge, Upgrade Stockbridge, Stop Stockbridge, Stockbridge Status or Open Data Folder.',
     );
   }
   if (action === 'data') {
@@ -98,6 +99,23 @@ export async function runLauncher(
 
   const record = readRecord(dataDirectory);
   const running = record !== null && (await instanceResponds(record));
+  const executable = join(options.packageRoot, 'runtime', 'node.exe');
+  const entry = join(options.packageRoot, 'dist', 'src', 'server', 'main.js');
+  if (
+    (action === 'upgrade' || (action === 'start' && !running)) &&
+    (!existsSync(executable) ||
+      !existsSync(entry) ||
+      !existsSync(join(options.packageRoot, 'dist/web/index.html')))
+  ) {
+    throw new Error(
+      'Application files are missing. Extract the entire ZIP before starting Stockbridge.',
+    );
+  }
+  const file = join(dataDirectory, 'live.sqlite');
+  if (action === 'upgrade' && !statSync(file, { throwIfNoEntry: false })?.isFile())
+    throw new Error(
+      `No existing Stockbridge workspace found in ${dataDirectory}. Check the Windows login and the data folder shown by the old Stockbridge Status command.`,
+    );
   if (action === 'status') {
     console.log(
       running
@@ -112,7 +130,7 @@ export async function runLauncher(
     );
     return;
   }
-  if (action === 'stop') {
+  if (action === 'stop' || (action === 'upgrade' && running)) {
     if (!record) {
       console.log('Stockbridge is already stopped.');
       return;
@@ -139,54 +157,85 @@ export async function runLauncher(
       const current = readRecord(dataDirectory);
       if (!current || current.instanceId !== record.instanceId) {
         console.log('Stockbridge stopped. Saved data was retained.');
-        return;
-      }
-    }
-    throw new Error(
-      'Stockbridge is still finishing a task. Wait and check Status before updating files.',
-    );
-  }
-
-  if (!running) {
-    const executable = join(options.packageRoot, 'runtime', 'node.exe');
-    const entry = join(options.packageRoot, 'dist', 'src', 'server', 'main.js');
-    if (!existsSync(executable) || !existsSync(entry)) {
-      throw new Error(
-        'Application files are missing. Extract the entire ZIP before starting Stockbridge.',
-      );
-    }
-    mkdirSync(dataDirectory, { recursive: true });
-    const logFile = join(dataDirectory, 'startup.log');
-    const log = openSync(logFile, 'a');
-    try {
-      const child = spawn(executable, [entry], {
-        cwd: options.packageRoot,
-        env: { ...process.env, STOCKBRIDGE_DATA_DIR: dataDirectory },
-        detached: true,
-        windowsHide: true,
-        stdio: ['ignore', log, log],
-      });
-      await new Promise<void>((accept, reject) => {
-        child.once('spawn', accept);
-        child.once('error', reject);
-      });
-      child.unref();
-    } finally {
-      closeSync(log);
-    }
-    let ready = false;
-    const deadline = Date.now() + 20_000;
-    while (Date.now() < deadline) {
-      await delay(250);
-      const current = readRecord(dataDirectory);
-      if (current && (await instanceResponds(current))) {
-        ready = true;
         break;
       }
     }
-    if (!ready) {
-      throw new Error(`Stockbridge could not start. Share the error in ${logFile} with support.`);
+    if (readRecord(dataDirectory)?.instanceId === record.instanceId)
+      throw new Error(
+        'Stockbridge is still finishing a task. Wait and check Status before updating files.',
+      );
+    if (action === 'stop') return;
+  }
+
+  if (!running || action === 'upgrade') {
+    let safetyCopy: string | null = null;
+    if (action === 'upgrade') {
+      const { DatabaseSync } = await import('node:sqlite');
+      const { acquireWorkspaceOwnership } = await import('../server/runtime.js');
+      const { prepareDatabase } = await import('../server/storage/migrations.js');
+      const owner = await acquireWorkspaceOwnership(dataDirectory, 'live');
+      try {
+        const database = new DatabaseSync(file);
+        try {
+          database.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+          safetyCopy = prepareDatabase(database, file, 'live', true);
+          console.log(
+            `Verified safety copy: ${safetyCopy}\nExisting workspace is ready: ${dataDirectory}`,
+          );
+        } finally {
+          database.close();
+        }
+      } finally {
+        await owner.release();
+      }
     }
+    try {
+      mkdirSync(dataDirectory, { recursive: true });
+      const logFile = join(dataDirectory, 'startup.log');
+      const log = openSync(logFile, 'a');
+      let startedPid: number | undefined;
+      try {
+        const child = spawn(executable, [entry], {
+          cwd: options.packageRoot,
+          env: { ...process.env, STOCKBRIDGE_DATA_DIR: dataDirectory },
+          detached: true,
+          windowsHide: true,
+          stdio: ['ignore', log, log],
+        });
+        await new Promise<void>((accept, reject) => {
+          child.once('spawn', accept);
+          child.once('error', reject);
+        });
+        startedPid = child.pid;
+        child.unref();
+      } finally {
+        closeSync(log);
+      }
+      let ready = false;
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        await delay(250);
+        const current = readRecord(dataDirectory);
+        if (
+          current &&
+          (action !== 'upgrade' || current.pid === startedPid) &&
+          (await instanceResponds(current))
+        ) {
+          ready = true;
+          break;
+        }
+      }
+      if (!ready) {
+        throw new Error(`Stockbridge could not start. Share the error in ${logFile} with support.`);
+      }
+    } catch (failure) {
+      if (!safetyCopy) throw failure;
+      throw new Error(
+        `The workspace upgrade completed, but startup of the new dashboard could not be confirmed. Run Upgrade Stockbridge.cmd again from the new folder. If this persists, contact support.\nVerified safety copy: ${safetyCopy}\nStartup log: ${join(dataDirectory, 'startup.log')}`,
+        { cause: failure },
+      );
+    }
+    if (action === 'upgrade') installDesktopShortcut(options.packageRoot, dataDirectory);
   }
   console.log(`Stockbridge is running at ${dashboardUrl}. Closing the browser keeps it running.`);
   if (options.openBrowser !== false) {

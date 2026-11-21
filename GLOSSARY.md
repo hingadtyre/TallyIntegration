@@ -11,6 +11,9 @@ _Avoid_: Marketplace buyer
 **Stockbridge provider**:
 The operator offering and maintaining Stockbridge for customers.
 
+**Stockbridge workspace**:
+A customer's saved Stockbridge data, including Tally company connections, seller accounts, stock mappings and stock publication settings. A software upgrade continues using the same workspace.
+
 **Customer authorization**:
 A customer's permission for a registered application to access a particular marketplace seller account. This permission is separate from approval to publish a stock change.
 

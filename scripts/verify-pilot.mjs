@@ -17,7 +17,7 @@ import { createServer } from 'node:http';
 import { createServer as createPortProbe } from 'node:net';
 import { basename, dirname, isAbsolute, join, posix, resolve, sep } from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { JSDOM } from 'jsdom';
 
@@ -384,6 +384,9 @@ async function verifyPilot(zip) {
         'manifest.json',
         'Read Me.html',
         'Start Stockbridge.cmd',
+        ...(existsSync(join(packageRoot, 'Upgrade Stockbridge.cmd'))
+          ? ['Upgrade Stockbridge.cmd']
+          : []),
         'Stop Stockbridge.cmd',
         'Stockbridge Status.cmd',
         'Open Data Folder.cmd',
@@ -402,6 +405,11 @@ async function verifyPilot(zip) {
       const guide = new JSDOM(readFileSync(join(packageRoot, 'Read Me.html'), 'utf8')).window
         .document;
       assert.match(guide.querySelector('h1')?.textContent ?? '', /Stockbridge/i);
+      if (guide.body.textContent.includes('Upgrade Stockbridge.cmd'))
+        assert.match(
+          readFileSync(join(packageRoot, 'Upgrade Stockbridge.cmd'), 'utf8'),
+          /windows-launcher\.mjs" upgrade/,
+        );
       assert.match(guide.body.textContent, /approved actions can change stock or prices/i);
       assert.doesNotMatch(
         guide.body.textContent,
@@ -453,8 +461,20 @@ async function verifyPilot(zip) {
     const api = requestApi.bind(null, dashboard);
     options = { cwd: workingDirectory, env: runtimeEnvironment(system32, dataDirectory) };
     options.env.STOCKBRIDGE_DASHBOARD_PORT = String(port);
+    const desktop = join(verification, 'isolated desktop');
+    mkdirSync(desktop);
+    options.env.STOCKBRIDGE_DESKTOP_DIR = desktop;
+    const managedShortcut = existsSync(join(packageRoot, 'dist/src/desktop/shortcut.js'));
     runtimeFile = join(dataDirectory, 'live.runtime.json');
     const launch = (action) => command(node, [launcher, action, '--no-browser'], options);
+    const hasUpgrade = existsSync(join(packageRoot, 'Upgrade Stockbridge.cmd'));
+    if (hasUpgrade)
+      await check('upgrade_requires_existing_workspace', async () => {
+        const result = await command(node, [launcher, 'upgrade', '--no-browser'], options, true);
+        assert.notEqual(result.code, 0);
+        assert.match(result.stderr, /No existing Stockbridge workspace/);
+        assert.ok(!existsSync(join(dataDirectory, 'live.sqlite')));
+      });
     await check('bundled_node_without_development_toolchain', async () => {
       for (const tool of ['node', 'npm']) {
         const found = await command(join(system32, 'where.exe'), [tool], options, true);
@@ -768,6 +788,132 @@ async function verifyPilot(zip) {
         publishingEnabled: true,
       };
     });
+    if (hasUpgrade) {
+      await check('upgrade_restarts_running_workspace_with_saved_data', async () => {
+        const previous = readRuntimeRecord(runtimeFile);
+        const result = await launch('upgrade');
+        assert.match(result.stdout, /Verified safety copy:/);
+        assert.notEqual(readRuntimeRecord(runtimeFile).instanceId, previous.instanceId);
+        assert.equal((await api('/api/state')).items[0].id, fixture.itemId);
+      });
+      await check('upgrade_migrates_existing_schema_ten_and_keeps_credentials', async () => {
+        await launch('stop');
+        // Recreate the previous format on the isolated, populated test database.
+        const preparePrevious = `
+          import { DatabaseSync } from 'node:sqlite';
+          import { join } from 'node:path';
+          const db = new DatabaseSync(join(process.env.STOCKBRIDGE_DATA_DIR, 'live.sqlite'));
+          db.exec('UPDATE companies SET automation = 1');
+          db.prepare("INSERT INTO listings (id,account_id,sku,title,location,item_id,pack_size,pack_evidence,verified,policy,remaining,paused,version,sort_order) SELECT 'paused-pilot',?,'pilot-sku','Pilot tyre','test location',id,1,'test fixture',1,'limited',2,1,1,0 FROM stock_items LIMIT 1").run(process.argv[1]);
+          db.exec('DROP TABLE sku_mappings; PRAGMA user_version = 10');
+          db.close();
+        `;
+        await command(
+          node,
+          ['--input-type=module', '-e', preparePrevious, marketplaceAccounts[0].id],
+          options,
+        );
+        const result = await launch('upgrade');
+        const path = result.stdout.match(/Verified safety copy: ([^\r\n]+)/)?.[1];
+        assert.ok(path && existsSync(path));
+        const readVersion =
+          "const db = new (require('node:sqlite').DatabaseSync)(process.argv[1], {readOnly:true}); console.log(db.prepare('PRAGMA user_version').get().user_version); db.close();";
+        assert.equal((await command(node, ['-e', readVersion, path], options)).stdout.trim(), '10');
+        assert.equal(
+          (
+            await command(node, ['-e', readVersion, join(dataDirectory, 'live.sqlite')], options)
+          ).stdout.trim(),
+          '11',
+        );
+        const state = await api('/api/state');
+        assert.equal(state.items[0].id, fixture.itemId);
+        assert.equal(state.settings.tallySeconds, 45);
+        assert.equal(state.companies[0].automation, true);
+        const paused = state.listings.find((row) => row.id === 'paused-pilot');
+        assert.equal(paused.paused, true);
+        assert.equal(paused.policy, 'limited');
+        assert.equal(paused.remaining, 2);
+        const { accounts } = await api('/api/marketplaces', undefined, 200, 30_000);
+        assert.equal(accounts[1].id, marketplaceAccounts[1].id);
+        assert.equal(accounts[1].connection.applicationIdHint, '***0002');
+      });
+    }
+    if (managedShortcut) {
+      const powershell = join(system32, 'WindowsPowerShell/v1.0/powershell.exe');
+      const inspectLink = async (script) =>
+        command(
+          powershell,
+          [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            "$ErrorActionPreference='Stop'; $path = Join-Path $env:STOCKBRIDGE_DESKTOP_DIR 'Stockbridge.lnk'; $link = (New-Object -ComObject WScript.Shell).CreateShortcut($path); " +
+              script,
+          ],
+          options,
+        );
+      await check('shortcut_targets_new_package_and_preserves_custom_links', async () => {
+        const { stdout } = await inspectLink('$link.TargetPath; $link.Arguments');
+        assert.ok(stdout.includes(node));
+        assert.ok(stdout.includes(launcher));
+        assert.ok(stdout.includes(pathToFileURL(dataDirectory).href));
+        assert.ok(stdout.includes('--port ' + port));
+        // Follow the shortcut's saved destination in a fresh process without
+        // inheriting the upgrade command's workspace or dashboard port.
+        const args = stdout
+          .trim()
+          .split(/\r?\n/)[1]
+          .match(/^"([^"]+)" start --workspace "([^"]+)" --port (\d+)$/);
+        assert.ok(args);
+        await launch('stop');
+        const freshEnv = { ...options.env };
+        delete freshEnv.STOCKBRIDGE_DATA_DIR;
+        delete freshEnv.STOCKBRIDGE_DASHBOARD_PORT;
+        await command(
+          node,
+          [args[1], 'start', '--workspace', args[2], '--port', args[3], '--no-browser'],
+          { ...options, env: freshEnv },
+        );
+        assert.equal((await api('/api/state')).items[0].id, fixture.itemId);
+        // Simulate a managed shortcut from a previous package, then a customer-owned one.
+        await inspectLink(
+          "$link.TargetPath = Join-Path $env:SystemRoot 'explorer.exe'; $link.Save()",
+        );
+        const updated = await launch('upgrade');
+        assert.match(updated.stdout, /desktop shortcut is ready/, updated.stderr || updated.stdout);
+        assert.ok((await inspectLink('$link.TargetPath')).stdout.includes(node));
+        await inspectLink("$link.Description = 'Customer shortcut'; $link.Save()");
+        const customHash = sha256(join(desktop, 'Stockbridge.lnk'));
+        assert.match((await launch('upgrade')).stdout, /already in use/);
+        assert.equal(sha256(join(desktop, 'Stockbridge.lnk')), customHash);
+      });
+      await check('dashboard_failure_shows_safety_copy_and_retry_reopens_workspace', async () => {
+        await launch('stop');
+        const occupied = createPortProbe();
+        await new Promise((accept, reject) => {
+          occupied.once('error', reject);
+          occupied.listen(port, '127.0.0.1', accept);
+        });
+        let copy;
+        let digest;
+        try {
+          const result = await command(node, [launcher, 'upgrade', '--no-browser'], options, true);
+          assert.notEqual(result.code, 0);
+          assert.match(result.stderr, /Run Upgrade Stockbridge.cmd again from the new folder/);
+          copy = result.stderr.match(/Verified safety copy: ([^\r\n]+)/)?.[1];
+          assert.ok(copy && existsSync(copy));
+          digest = sha256(copy);
+        } finally {
+          await new Promise((accept) => occupied.close(accept));
+        }
+        await launch('upgrade');
+        assert.equal(sha256(copy), digest);
+        assert.equal(
+          (await api('/api/state')).listings.find((row) => row.id === 'paused-pilot').paused,
+          true,
+        );
+      });
+    }
     await check('final_stop_and_status', async () => {
       await launch('stop');
       assert.ok(!existsSync(runtimeFile));
