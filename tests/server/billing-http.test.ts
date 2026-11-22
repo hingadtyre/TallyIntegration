@@ -5,7 +5,12 @@ import { MarketplaceService } from '../../src/server/marketplace-service.js';
 import { BillingService } from '../../src/server/billing-service.js';
 import { saleDay } from '../../src/server/billing-matcher.js';
 import { marketplaceData } from '../support/marketplace-fixture.js';
-import type { BillingReport, BillingWorkspace } from '../../src/shared/billing-contracts.js';
+import type {
+  BillingReport,
+  BillingWorkspace,
+  PendingListingCheck,
+  PendingListingGroup,
+} from '../../src/shared/billing-contracts.js';
 import { close, listen, serverFixture } from '../support/server-fixture.js';
 
 test('seller selects a ledger, previews, confirms and corrects a bill without publishing stock', async (t) => {
@@ -226,4 +231,95 @@ test('live review reads the configured books and seller, and a ledger bill alone
   const unbilled = await preview();
   assert.equal(unbilled.stock[0].previewAvailable, 4);
   assert.equal(f.store.read().items[0].physical, 99);
+});
+
+test('Order matching finds tracked listings outside the preview and rechecks the saved orders after mapping with sync off', async (t) => {
+  const f = serverFixture(t);
+  const markets = new MarketplaceService(f.store, f.folder);
+  const app = createApp(f.service, f.folder, undefined, undefined, markets);
+  const address = await listen(app);
+  t.after(async () => {
+    await close(app);
+    markets.stop();
+    await markets.idle();
+  });
+  const scope = { companyId: 'demo-a', accountId: 'flipkart-primary' };
+  const post = (action: string, data: Record<string, unknown> = {}) =>
+    fetch(address + '/api/billing/' + action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Stockbridge-Request': '1' },
+      body: JSON.stringify({ ...scope, ...data }),
+    });
+  const earlier = new Date(Date.now() - 12 * 86_400_000).toISOString();
+  f.store.update((state) => {
+    state.companies.find((row) => row.id === scope.companyId)!.automation = false;
+    state.listings.find((row) => row.id === 'listing-1')!.itemId = null;
+    state.items.find((row) => row.id === 'item-a')!.observedAt = earlier;
+  });
+  const rule = {
+    ledgerId: 'sample-sales-demo-a',
+    field: 'reference',
+    reference: 'orderId',
+    days: 7,
+  };
+  const preview = (await (await post('preview', rule)).json()) as BillingReport;
+  assert.deepEqual(preview.rows, []);
+  assert.equal((await post('confirm', { previewId: preview.previewId })).status, 200);
+  assert.deepEqual(await (await post('pending')).json(), { trackingStarted: false, listings: [] });
+  const fromDate = saleDay(earlier);
+  assert.equal((await post('coverage/start', { fromDate, confirmed: true })).status, 200);
+  assert.deepEqual(await (await post('pending', { savedOnly: true })).json(), {
+    trackingStarted: true,
+    listings: [],
+  });
+  const { listings } = (await (await post('pending')).json()) as {
+    listings: PendingListingGroup[];
+  };
+  assert.deepEqual(listings, [
+    {
+      listingId: 'sample-listing-1',
+      sku: 'SAMPLE-CEAT-1-1',
+      location: 'Sample warehouse',
+      mapped: false,
+      orderItemIds: ['SAMPLE-LINE-1', 'SAMPLE-LINE-2'],
+    },
+  ]);
+  const [group] = listings;
+  assert.deepEqual(await (await post('pending', { savedOnly: true })).json(), {
+    trackingStarted: true,
+    listings,
+  });
+  assert.equal((await post('pending/recheck', { ...group, location: 'Other' })).status, 409);
+  assert.equal(
+    (await post('pending/recheck', { ...group, orderItemIds: ['another-sale'] })).status,
+    409,
+  );
+  assert.deepEqual(await (await post('pending', { companyId: 'demo-b' })).json(), {
+    trackingStarted: false,
+    listings: [],
+  });
+  f.service.mapping({
+    listingId: 'listing-1',
+    listingVersion: f.store.read().listings.find((r) => r.id === 'listing-1')!.version,
+    itemId: 'item-a',
+    packSource: 'manual',
+    packSize: 1,
+    sourceScope: 'company',
+    tyreFloor: false,
+    confirmPackEvidence: true,
+    keepPaused: true,
+  });
+  const check = await post('pending/recheck', { ...group });
+  assert.equal(check.status, 200);
+  const { rows } = (await check.json()) as PendingListingCheck;
+  assert.deepEqual(
+    rows.map(({ orderItemId, status, baseUnits }) => [orderItemId, status, baseUnits]),
+    [
+      ['SAMPLE-LINE-1', 'matched', 1],
+      ['SAMPLE-LINE-2', 'reserved', 1],
+    ],
+  );
+  assert.equal(f.store.read().listings.find((r) => r.id === 'listing-1')!.paused, true);
+  assert.equal(f.store.readMarketplace().changes.length, 0);
+  assert.equal(saleDay(f.store.readStockCoverage(scope.companyId)!.from), fromDate);
 });

@@ -129,4 +129,7 @@ A seller instruction in Marketplaces to set the stock quantity for a specified l
 A Tally stock item with no associated listing in the marketplace account currently being viewed.
 
 **Unmapped marketplace listing**:
-A marketplace listing with no association to a Tally stock item. It still belongs to its seller account and can exist independently of Tally synchronization.
+A seller’s marketplace listing whose stock source at a particular pickup location has yet to be linked to a Tally stock item. Several orders for that listing and location can wait for one stock mapping.
+
+**Order tracking start date**:
+The Indian calendar day from which a Tally company begins accounting for orders from its participating Flipkart sellers. The seller confirms that all earlier relevant sales have already been recorded in Tally.

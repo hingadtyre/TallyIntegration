@@ -117,6 +117,7 @@ export function matchBills(
     const row: BillingRow = {
       orderItemId: order.orderItemId,
       orderId: order.orderId,
+      listingId: order.listingId,
       orderDate: order.orderDate,
       referenceValue: rule.field === 'manual' ? null : order[rule.reference],
       sku: order.sku,
@@ -124,7 +125,8 @@ export function matchBills(
       quantity: order.quantity,
       baseUnits: null,
       status: 'unmapped',
-      reason: 'Verify the listing, location and Set of in Inventory.',
+      reason:
+        'This preview needs a verified Tally item, pickup location and Set of to match the sale.',
       bill: null,
       candidates: [],
     };

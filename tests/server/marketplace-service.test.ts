@@ -482,7 +482,7 @@ test('Inventory and Marketplaces report the same automatic stock state as setup 
   };
   assert.equal(status(), 'Company updates off');
   s.service.automation(s.item.companyId, true);
-  assert.match(status(), /Confirm the starting stock/);
+  assert.match(status(), /Order matching, choose Set starting stock/);
   await s.service.pause(s.item.companyId, [s.listing.id], true);
   assert.equal(status(), 'Paused');
   await s.enableCoverage();
@@ -490,6 +490,13 @@ test('Inventory and Marketplaces report the same automatic stock state as setup 
   assert.equal(status(), 'Queued for a stock check');
   await s.service.refresh(s.item.companyId);
   assert.equal(status(), 'Ready for the next Tally change or verified sale');
+  const coverage = s.f.store.readStockCoverage(s.item.companyId)!;
+  const lastCheck = new Date(Date.parse(coverage.from) - 31 * 86_400_000).toISOString();
+  s.f.store.saveStockCoverage({ ...coverage, from: lastCheck, checkedThrough: lastCheck });
+  assert.match(status(), /gap in order coverage.*Review starting stock/);
+  s.f.store.saveStockCoverage({ ...coverage, signature: 'previous-stock-setup' });
+  assert.match(status(), /setup changed.*Review starting stock/);
+  s.f.store.saveStockCoverage(coverage);
   s.f.store.updateMarketplace((market) => {
     market.changes[0].state = 'uncertain';
   });
@@ -1030,6 +1037,68 @@ test('an unchanged Tally poll drains a saved sale, and Calculate wakes automatio
     await running.idle();
   }
 });
+
+for (const keepPaused of [false, true]) {
+  test(`a new order mapping counts the sale and ${keepPaused ? 'keeps its location paused' : 'follows company sync'}`, async (t) => {
+    const s = await mappedInventory(t, 'manual', { physical: 6, packSize: 1, tyreFloor: false });
+    const dest = s.service.snapshot().listings.find((l) => l.location === 'warehouse-b')!;
+    const orderSource = {
+      companyId: s.item.companyId,
+      accountId: s.account.id,
+      listingId: s.remote.id,
+      locationId: dest.location,
+    };
+    s.orders.push({
+      orderItemId: 'pair-order-item',
+      orderId: 'pair-order',
+      invoiceNumber: null,
+      listingId: s.remote.id,
+      sku: dest.sku,
+      locationId: dest.location,
+      quantity: 1,
+      orderDate: new Date().toISOString(),
+    });
+    await s.service.refresh();
+    const coverage = () => s.f.store.readStockCoverage(s.item.companyId)!;
+    const start = coverage().from;
+    assert.equal(coverage().orders.length, 1, 'tracking remembers the sale with company sync off');
+    assert.equal(s.f.writes.length, 0);
+    s.service.automation(s.item.companyId, true);
+    const input = {
+      listingId: dest.id,
+      itemId: s.item.id,
+      listingVersion: dest.version,
+      confirmPackEvidence: true,
+      packSize: 2,
+      packSource: 'manual',
+      sourceScope: 'company',
+      tyreFloor: false,
+      orderSource,
+      ...(keepPaused && { keepPaused: true }),
+    };
+    for (const changed of [
+      { listingId: 'replaced-listing' },
+      { accountId: 'other-seller' },
+      { locationId: s.listing.location },
+      { companyId: 'other-company' },
+    ]) {
+      assert.throws(
+        () => s.service.mapping({ ...input, orderSource: { ...orderSource, ...changed } }),
+        /order listing/,
+      );
+      assert.equal(s.f.store.read().listings.find((l) => l.id === dest.id)!.itemId, null);
+    }
+    s.service.mapping(input);
+    assert.equal(coverage().from, start);
+    assert.equal(s.f.store.read().listings.find((l) => l.id === dest.id)!.paused, keepPaused);
+    await s.service.refresh();
+    assert.equal(s.remote.locations.find((l) => l.id === s.listing.location)!.quantity, 4);
+    assert.equal(
+      s.remote.locations.find((l) => l.id === dest.location)!.quantity,
+      keepPaused ? 3 : 2,
+    );
+  });
+}
 
 test('Calculate with automation off reviews and publishes five, then catches another order before Apply', async (t) => {
   const s = await mappedInventory(t, 'manual', { physical: 6, packSize: 1, tyreFloor: false });

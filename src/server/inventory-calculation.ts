@@ -1,4 +1,5 @@
 import type { CalculationRow, Listing, Snapshot } from '../shared/contracts.js';
+import { startTrackingMessage } from '../shared/stock-coverage.js';
 import { recordActivity } from './activity.js';
 import type { MarketplaceService } from './marketplace-service.js';
 import { desiredStock, isStaleProposal, prepareProposal, requireStockSource } from './proposals.js';
@@ -100,7 +101,7 @@ export function saveCalculation(
           listing.proposalIssue &&
           desiredStock(state, listing) > 0
         )
-          throw new InputError('Confirm the starting stock in Order matching.', 409);
+          throw new InputError(startTrackingMessage, 409);
         let available: number | undefined;
         if (options.sources && desiredStock(state, listing) > 0) {
           const source = options.sources.get(listing.itemId!);

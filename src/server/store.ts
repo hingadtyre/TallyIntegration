@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { randomUUID } from 'node:crypto';
 import type { Snapshot } from '../shared/contracts.js';
 import type { StockSyncCoverage } from '../shared/stock-coverage.js';
 import { backupDatabase } from './storage/backup.js';
@@ -14,6 +15,7 @@ import {
 import { readSnapshot, writeSnapshot } from './storage/records.js';
 import { CURRENT_SCHEMA_VERSION } from './storage/schema.js';
 import { readStockCoverage, writeStockCoverage } from './storage/stock-coverage.js';
+import { mappedSaleItem, stockConfiguration } from './stock-configuration.js';
 
 /** SQLite owns records and transactions; callers receive a detached read model. */
 export class Store {
@@ -108,6 +110,77 @@ export class Store {
 
   backup(target: string): void {
     backupDatabase(this.database, target);
+  }
+
+  /** Extend an already confirmed company's evidence only for a first mapping.
+   * The mapping, original baseline, retained orders and pending sibling checks
+   * commit together. Existing conversions and stale baselines require review. */
+  updateMapping(
+    listingId: unknown,
+    change: (market: MarketplaceData, state: Snapshot) => void,
+  ): void {
+    this.updateMarketplace((market, state) => {
+      const listing = state.listings.find((row) => row.id === listingId);
+      if (!listing || (listing.itemId && listing.location)) return change(market, state);
+      const previous = { ...listing };
+      const billing = readBilling(this.database);
+      const baselines: StockSyncCoverage[] = [];
+      for (const rule of billing.rules.filter((r) => r.accountId === listing.accountId)) {
+        const coverage = readStockCoverage(this.database, rule.companyId);
+        if (
+          coverage &&
+          coverage.signature ===
+            stockConfiguration(state, market, billing, rule.companyId).signature
+        )
+          baselines.push(coverage);
+      }
+      change(market, state);
+      if (
+        !listing.itemId ||
+        (previous.itemId &&
+          (previous.itemId !== listing.itemId ||
+            previous.packSize !== listing.packSize ||
+            previous.packSource !== listing.packSource ||
+            previous.sourceScope !== listing.sourceScope))
+      )
+        return;
+      for (const coverage of baselines) {
+        const ctx = stockConfiguration(state, market, billing, coverage.companyId);
+        coverage.signature = ctx.signature;
+        let newlyBound = false;
+        for (const entry of coverage.orders) {
+          const o = entry.order;
+          if (
+            entry.accountId !== listing.accountId ||
+            o.sku !== listing.sku ||
+            o.locationId !== listing.location ||
+            mappedSaleItem(ctx, entry.accountId, o) !== listing.itemId
+          )
+            continue;
+          o.firstSeenUnmapped = true;
+          if (
+            o.stockDisposition ||
+            o.stockIdentityConflict ||
+            o.eligibilityUnverified ||
+            o.stockReconciliationRequired
+          )
+            continue;
+          o.stockSyncQueued = true;
+          newlyBound = true;
+        }
+        if (
+          newlyBound &&
+          ctx.company.automation &&
+          ctx.items.get(listing.itemId)?.companyId === coverage.companyId
+        ) {
+          const token = randomUUID();
+          for (const sibling of state.listings)
+            if (sibling.itemId === listing.itemId && sibling.verified && !sibling.paused)
+              sibling.orderSyncPending = token;
+        }
+        writeStockCoverage(this.database, coverage);
+      }
+    });
   }
 
   readBilling(): BillingData {

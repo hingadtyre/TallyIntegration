@@ -138,6 +138,7 @@ test('mapping requires a selected seller before showing inventory destinations',
 
 test('possible matches keep both warehouses distinct and require a confirmed destination before manual save', async () => {
   const state = initialState('demo', 'unused');
+  state.companies[0].automation = true;
   const item = state.items[2];
   const destination = {
     ...state.listings[8],
@@ -162,6 +163,7 @@ test('possible matches keep both warehouses distinct and require a confirmed des
       busy={false}
       onClose={() => {}}
       onSave={async (input) => {
+        assert.equal(input.keepPaused, true);
         savedId = input.listingId;
         return { ok: true, value: state };
       }}
@@ -189,6 +191,10 @@ test('possible matches keep both warehouses distinct and require a confirmed des
   );
   assert.equal(document.activeElement, screen.getByRole('button', { name: 'Change listing' }));
   assert.ok((screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled);
+  assert.ok(screen.getByText(/Company sync is on/));
+  const pause = screen.getByLabelText('Keep this listing paused') as HTMLInputElement;
+  assert.equal(pause.checked, false);
+  fireEvent.click(pause);
   fireEvent.click(screen.getByRole('checkbox', { name: /I confirm/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Save mapping' }));
   await waitFor(() => assert.equal(savedId, 'south-destination'));

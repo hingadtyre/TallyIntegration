@@ -166,24 +166,27 @@ Before first live publication, arrange a controlled, seller-authorized stock upd
 
 ### Match recent Flipkart orders to Tally sales bills
 
-An order exists when Flipkart reports it. A matching sales bill shows that you recorded that order in Tally. Set up matching separately for each Tally company and Flipkart seller account.
+Stockbridge can reserve a verified seller-fulfilled order as soon as Flipkart reports it as approved, before you pack or dispatch it. An **Upcoming** label in Seller Hub alone does not establish that the order qualifies. If Flipkart reports a hold or leaves its status unclear, Stockbridge keeps it for review. A matching sales bill shows that you recorded the sale in Tally. Set up matching separately for each Tally company and Flipkart seller account.
 
 1. Open **Order matching**, select your Tally company at the top and choose the **Flipkart seller account**. Load the company in Tally and verify the account and its listings before the first live preview.
 2. Select the dedicated Flipkart ledger used for the party on the sales bill or for sales on the bill’s stock lines. Choose the bill field where you enter the Flipkart reference and the type of reference you enter. Choose **I match bills manually** if you keep the reference elsewhere or omit it.
 3. Choose **Today in India**, **Last 7 days** or **Last 30 days**, then **Preview matches**. The dates use the Indian calendar. Check a known Flipkart order item against its Tally bill, mapped item and units. **Confirm billing setup** saves your choices. An empty preview can still be saved for future use.
 4. In later sessions choose **Refresh preview** to check the period again. **Show unresolved only** lists order items needing attention. When several bills are possible, verify the order, item, bill number and date before choosing **Confirm bill match**. **Release manual match** removes your confirmation if you chose the wrong bill.
 
-**Available stock preview** shows the selected seller and period. Automatic stock updates use the company’s confirmed start date and check all covered sellers.
+**Available stock preview** shows the selected seller and period. Once tracking starts, **Listings from orders** uses saved orders from the confirmed date. An older sale can still appear in the billing preview without needing a mapping. Matching a saved order can find an exact bill outside the preview period. To confirm an ambiguous bill manually, the order must still be within the 30-day preview. Automatic stock updates check all covered sellers.
 
 ### Set the starting stock for automatic updates
 
-1. In **Order matching**, confirm bill matching for each Flipkart seller account that uses this company’s stock. Map every shared-stock listing and location to its Tally item in **Inventory**.
-2. Under **Order coverage for automatic stock updates**, choose **Set starting stock**. Select an Indian calendar date within the last 30 days. Stockbridge starts counting orders at midnight on that date. Every earlier Flipkart sale must already be recorded in Tally. For example, if you still have an unbilled sale from Monday, choose Monday or an earlier day.
-3. Confirm that only seller-fulfilled standard and self-ship orders draw on this stock and that every listing’s **Set of** has matched the Tally units consumed by a sale since the chosen date. If Smart, Express or Fulfilment by Flipkart orders use the same stock, leave the setup unconfirmed. Choose **Confirm starting stock** once you have checked the statements.
+1. In **Order matching**, confirm the billing setup for each participating Flipkart seller account. You can map a few listings in **Inventory** now and map others from their orders later.
+2. Choose **Set starting stock** and select **Track Flipkart orders from (India)**. Choose an Indian calendar date within the last 30 days. Tracking starts at midnight on that day and continues even with company sync off. Every earlier Flipkart sale must already be recorded in Tally. If your oldest unbilled sale is from Monday, choose Monday or earlier.
+3. Confirm the stock source and Set of for the listings already mapped. Only standard and self-ship seller-fulfilled orders are covered. If Smart, Express or Fulfilment by Flipkart orders draw on the same stock, leave the setup unconfirmed. Choose **Confirm starting stock** after checking the statements.
+4. When an unmapped order arrives, open **Order matching** for its seller and choose **Map listing**. Select the Tally stock item and the **Set of** that applied to the waiting orders. One mapping covers that seller’s listing at that pickup location, including future orders. With company sync on, choose **Keep this listing paused** if you only want to count its orders. After saving, check the result for the waiting orders. A matching bill in the selected ledger settles its order. An unbilled sale reserves the units, including when a bill was mistakenly posted to another ledger.
+
+While an order waits for its first mapping, existing mapped listings keep syncing. For example, an unmapped pair may draw from the same tyres as a mapped single. The singles calculation can then show two extra tyres until you record the bill or identify the pair’s source. Review waiting orders promptly.
 
 For a single-tyre listing with the tyre minimum switched off, 4 in Tally and one unbilled order leave 3 available. Receiving two more tyres brings Tally to 6 and available stock to 5. When you bill that same sale, Tally falls to 5 and Stockbridge releases the one reserved tyre. Available stock stays at 5. Pack sizes and any selected tyre minimum apply after the deduction.
 
-Automatic increases wait when the setup or order evidence is incomplete. A restart preserves the company’s start date and observed orders. After a database restore, reconcile the company’s earlier sales and set its starting stock again. If your stock mappings or seller setup change, check the affected orders before using **Review starting stock**. Only move the date forward once every earlier sale has been accounted for in Tally.
+Adding a first mapping for a tracked seller keeps the company’s original start date and saved orders. Changing an established stock source, Set of or billing rule can require **Review starting stock**. A restart preserves tracking. After a database restore, reconcile earlier sales and set the company’s starting stock again. Only move the date forward once every earlier sale has been accounted for in Tally.
 
 For a large order history, a full check may repeatedly take longer than the two-minute freshness limit. Reconcile the older sales against Tally, then choose **Review starting stock** and confirm a more recent start date. Keep any unbilled sale within the tracked period.
 

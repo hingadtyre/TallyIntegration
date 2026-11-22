@@ -230,7 +230,10 @@ export function App() {
             <BillingScreen
               companyId={companyId}
               accountId={accountId}
-              accounts={state.accounts}
+              inventory={state}
+              onSaveMapping={(input) =>
+                workspace.mutate('/mappings', input, 'Saving mapping', 'Mapping and Set of saved.')
+              }
               onAccountChange={changeAccount}
               onConnect={() => selectScreen(companyId ? 'marketplaces' : 'connections')}
             />

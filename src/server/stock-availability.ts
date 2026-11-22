@@ -1,99 +1,74 @@
 import { randomUUID } from 'node:crypto';
 import { FlipkartBillingClient, type FlipkartBillingOrder } from '../adapters/flipkart-billing.js';
 import { TallyClient, type TallySalesBill, type TallyStockItem } from '../adapters/tally.js';
-import type { StockSyncCoverage } from '../shared/stock-coverage.js';
+import type { PendingOrderResult } from '../shared/billing-contracts.js';
+import {
+  isVerifiedCancellation,
+  startTrackingMessage,
+  type StockCoverageOrder,
+  type StockSyncCoverage,
+} from '../shared/stock-coverage.js';
 import { fingerprint, matchBills, saleDay } from './billing-matcher.js';
 import { sampleBills } from './billing-sample.js';
-import { hasConfirmedPickup } from './marketplace-catalog.js';
+import { mappedSaleItem, stockConfiguration } from './stock-configuration.js';
 import type { BillingSources } from './billing-service.js';
 import type { Store } from './store.js';
-import { InputError, requireCompany, requireText } from './validation.js';
+import { InputError, requireText } from './validation.js';
 
 const day = 86_400_000;
 const nowIso = () => new Date().toISOString();
 const hold = (reason: string) => new InputError(reason, 409);
+
+function coverageIssue(coverage: StockSyncCoverage, signature: string, now: number) {
+  if (coverage.signature !== signature)
+    return 'This company’s stock or billing setup changed. In Order matching, choose Review starting stock and check the affected sales.';
+  const lastCheck = Date.parse(coverage.checkedThrough ?? coverage.from);
+  if (!Number.isFinite(lastCheck) || lastCheck > now || now - lastCheck > 30 * day)
+    return 'Stockbridge has a gap in order coverage. In Order matching, choose Review starting stock after reconciling earlier sales.';
+  return null;
+}
 type Access = (accountId: string) => Promise<{ token: string | null; verify: () => void }>;
 type CheckedStock = { available: number; verify: () => void };
-type CompanyCheck = { forItem: (id: string) => Promise<CheckedStock> };
+type ReviewedOrder = { order: StockCoverageOrder; result: PendingOrderResult };
+type CompanyCheck = {
+  forItem: (id: string) => Promise<CheckedStock>;
+  review: (accountId: string, orderItemIds?: string[]) => Promise<ReviewedOrder[]>;
+};
+type CheckMode = 'publish' | 'preview' | 'review';
+type ReviewScope = { accountId: string; orderItemIds?: string[] | 'all' };
 
 function configuration(store: Store, companyId: string) {
-  const state = store.read();
-  const company = requireCompany(state, companyId);
-  const market = store.readMarketplace();
-  const billing = store.readBilling();
-  const items = new Map(state.items.map((item) => [item.id, item]));
-  const rules = billing.rules.filter((r) => r.companyId === companyId);
-  const accounts = [
-    ...new Set([
-      ...rules.map((r) => r.accountId),
-      ...state.listings
-        .filter((l) => items.get(l.itemId ?? '')?.companyId === companyId)
-        .map((l) => l.accountId),
-    ]),
-  ].sort();
-  const bindings = state.listings.filter((l) => l.itemId && accounts.includes(l.accountId));
-  const catalogue = new Map<string, typeof market.listings>();
-  for (const remote of market.listings) {
-    const key = JSON.stringify([remote.accountId, remote.sku]);
-    const entries = catalogue.get(key) ?? [];
-    entries.push(remote);
-    catalogue.set(key, entries);
+  return stockConfiguration(store.read(), store.readMarketplace(), store.readBilling(), companyId);
+}
+
+function rulesForCheck(
+  ctx: ReturnType<typeof configuration>,
+  coverage: StockSyncCoverage,
+  scope?: ReviewScope,
+) {
+  if (!scope) return ctx.rules;
+  const seller = ctx.rules.find((rule) => rule.accountId === scope.accountId);
+  if (!seller) throw hold('Confirm bill matching for this seller in Order matching.');
+  if (!scope.orderItemIds) return [seller];
+
+  const requested = scope.orderItemIds === 'all' ? null : new Set(scope.orderItemIds);
+  const stockItems = new Set<string>();
+  for (const { accountId, order } of coverage.orders) {
+    if (accountId !== seller.accountId || (requested && !requested.has(order.orderItemId)))
+      continue;
+    const itemId = mappedSaleItem(ctx, accountId, order);
+    if (itemId) stockItems.add(itemId);
   }
-  // Only source identities and conversion rules belong in the baseline. Ordinary
-  // stock, listing metadata and refresh times can change on every poll.
-  const mappingKeys = bindings
-    .map((l) => {
-      const item = items.get(l.itemId!)!;
-      const remote = (catalogue.get(JSON.stringify([l.accountId, l.sku])) ?? []).filter((r) =>
-        l.skuMappingId ? r.id === l.skuMappingId : r.locations.some((loc) => loc.id === l.location),
-      );
-      return JSON.stringify([
-        l.id,
-        l.accountId,
-        l.sku,
-        l.location,
-        l.itemId,
-        item?.companyId,
-        item?.externalId,
-        item?.unit,
-        l.packSize,
-        l.packSource,
-        l.packConfirmedAt,
-        l.sourceScope,
-        l.verified,
-        remote.map((r) => JSON.stringify([r.id, r.productId, r.sellerId])).sort(),
-      ]);
-    })
-    .sort();
-  const signature = fingerprint([
-    company.id,
-    state.settings.tallyUrl,
-    accounts.map((id) => [id, market.accounts.find((a) => a.id === id)?.sellerId]),
-    rules.map((r) => JSON.stringify([r.accountId, r.ledgerId, r.field, r.reference])).sort(),
-    mappingKeys,
-  ]);
-  const reviewState = fingerprint([
-    billing.links
-      .filter((link) => link.companyId === companyId || accounts.includes(link.accountId))
-      .map((link) => JSON.stringify(link))
-      .sort(),
-    bindings
-      .filter((l) => l.packSource === 'packages')
-      .map((l) => JSON.stringify([l.id, l.packageAvailable, l.packageCount]))
-      .sort(),
-  ]);
-  return {
-    state,
-    company,
-    market,
-    billing,
-    accounts,
-    rules,
-    items,
-    bindings,
-    signature,
-    reviewState,
-  };
+  // A voucher can appear through its party ledger or an inventory line's sales
+  // ledger. Keep competing claims for the same stock item even across ledgers.
+  const accounts = new Set(
+    ctx.bindings
+      .filter((row) => row.itemId && stockItems.has(row.itemId))
+      .map((row) => row.accountId),
+  );
+  return ctx.rules.filter(
+    (rule) => rule.ledgerId === seller.ledgerId || accounts.has(rule.accountId),
+  );
 }
 
 function confirmedStart(value: unknown) {
@@ -128,6 +103,7 @@ function mergeOrders(
   coverage: StockSyncCoverage,
   accountId: string,
   observed: FlipkartBillingOrder[],
+  ctx: ReturnType<typeof configuration>,
 ) {
   const journal = new Map(
     coverage.orders.map((entry) => [
@@ -168,6 +144,9 @@ function mergeOrders(
         accountId,
         order: {
           ...order,
+          ...((prior?.firstSeenUnmapped || (!prior && !mappedSaleItem(ctx, accountId, order))) && {
+            firstSeenUnmapped: true,
+          }),
           ...(scopedReturnConflict && { stockReturnConflict: true }),
           ...(prior?.stockSyncQueued && { stockSyncQueued: true }),
           ...(prior?.stockDispatchObserved && { stockDispatchObserved: true }),
@@ -203,38 +182,12 @@ function journalVersion(c: StockSyncCoverage | null) {
             o.stockReconciliationRequired ?? false,
             o.stockShipmentId ?? null,
             o.stockReturnConflict ?? false,
+            o.firstSeenUnmapped ?? false,
           ]),
         )
         .sort(),
     ])
   );
-}
-
-function mappedSaleItem(
-  ctx: ReturnType<typeof configuration>,
-  accountId: string,
-  order: FlipkartBillingOrder,
-) {
-  const destinations = ctx.bindings.filter(
-    (l) => l.accountId === accountId && l.sku === order.sku && l.location === order.locationId,
-  );
-  if (destinations.length !== 1) return null;
-  const [destination] = destinations;
-  const remote = ctx.market.listings.filter(
-    (l) =>
-      l.accountId === accountId &&
-      l.sku === order.sku &&
-      (!destination.skuMappingId || destination.skuMappingId === l.id) &&
-      (l.locations.some((loc) => loc.id === order.locationId) ||
-        hasConfirmedPickup(destination, l)),
-  );
-  return destination.verified &&
-    (ctx.state.mode !== 'live' || destination.sourceScope === 'company') &&
-    remote.length === 1 &&
-    remote[0].observedAt &&
-    remote[0].id === order.listingId
-    ? destination.itemId
-    : null;
 }
 
 /** Record the accepted sale and its affected listings in one transaction. The
@@ -279,62 +232,145 @@ function saveOrderReceipts(
   return queued;
 }
 
-function unbilledUnits(
+type ReconciledOrder = ReviewedOrder & {
+  accountId: string;
+  itemId: string | null;
+  // Null covers the company when the order itself changed identity.
+  affectedItems: string[] | null;
+};
+
+function unresolvedDestinations(
   ctx: ReturnType<typeof configuration>,
-  itemId: string,
+  accountId: string,
+  order: StockCoverageOrder,
+) {
+  const catalogueSku = ctx.market.listings.find(
+    (l) => l.accountId === accountId && l.id === order.listingId,
+  )?.sku;
+  return ctx.bindings
+    .filter(
+      (l) =>
+        l.accountId === accountId &&
+        l.location === order.locationId &&
+        (l.sku === order.sku || l.sku === catalogueSku),
+    )
+    .map((l) => l.itemId!);
+}
+
+function reconcileOrders(
+  ctx: ReturnType<typeof configuration>,
   coverage: StockSyncCoverage,
   vouchers: Map<string, TallySalesBill[]>,
 ) {
-  let heldUnits = 0;
-  const claims = new Set<string>();
+  const reconciled: ReconciledOrder[] = [];
+  const claims = new Map<string, PendingOrderResult>();
   for (const rule of ctx.rules) {
     const orders = coverage.orders
-      .filter((e) => e.accountId === rule.accountId && e.order.stockDisposition !== 'cancelled')
+      .filter((e) => e.accountId === rule.accountId)
       .map((e) => e.order);
     const { rows } = matchBills(
       rule,
       rule,
-      { orders, bills: vouchers.get(rule.accountId) ?? [] },
+      {
+        orders: orders.filter((o) => o.stockDisposition !== 'cancelled'),
+        bills: vouchers.get(rule.accountId) ?? [],
+      },
       ctx.billing,
       ctx.state,
       ctx.market.listings,
     );
-    const targetByLine = new Map<string, string>();
+    const byId = new Map(rows.map((row) => [row.orderItemId, row]));
     for (const order of orders) {
-      if (order.stockIdentityConflict)
-        throw hold(
-          'A recorded order changed its identity, quantity or dispatch history. Settle the sale and confirm a new starting date.',
-        );
-      const mappedId = mappedSaleItem(ctx, rule.accountId, order);
-      if (!mappedId)
-        throw hold(
-          'An order has no unique verified stock mapping. Check its listing and location in Inventory.',
-        );
+      const itemId = mappedSaleItem(ctx, rule.accountId, order);
+      const result: PendingOrderResult = {
+        orderItemId: order.orderItemId,
+        status: 'unmapped',
+        reason: 'This order is waiting for its listing and location to be mapped.',
+        baseUnits: null,
+      };
+      const entry: ReconciledOrder = {
+        accountId: rule.accountId,
+        order,
+        itemId,
+        result,
+        affectedItems: itemId ? [itemId] : unresolvedDestinations(ctx, rule.accountId, order),
+      };
+      reconciled.push(entry);
+      if (order.stockIdentityConflict) {
+        entry.affectedItems = null;
+        result.status = 'review';
+        result.reason =
+          'A recorded order changed its identity, quantity or dispatch history. Settle the sale and confirm a new starting date.';
+        continue;
+      }
+      if (isVerifiedCancellation(order)) {
+        result.status = 'cancelled';
+        result.reason = 'The verified cancellation releases this order’s reservation.';
+        continue;
+      }
+      if (!itemId) {
+        if (entry.affectedItems?.length) {
+          result.status = 'review';
+          result.reason =
+            'An order has no unique verified stock mapping. Check its listing and location in Inventory.';
+        }
+        continue;
+      }
+      if (ctx.items.get(itemId)?.companyId !== ctx.company.id) continue;
       if (
-        mappedId === itemId &&
-        (order.stockDisposition === 'uncertain' || order.eligibilityUnverified)
-      )
-        throw hold(
-          'A Flipkart order for this item has an unresolved sale, return or cancellation status. Check the order before increasing stock.',
-        );
-      targetByLine.set(order.orderItemId, mappedId);
-    }
-    for (const row of rows) {
-      if (targetByLine.get(row.orderItemId) !== itemId) continue;
-      if (row.baseUnits === null || row.status === 'review' || row.status === 'unmapped')
-        throw hold(
-          'An order needs billing or pack review. Check Order matching and Inventory before increasing stock.',
-        );
+        order.stockDisposition ||
+        order.eligibilityUnverified ||
+        order.stockReconciliationRequired
+      ) {
+        result.status = 'review';
+        result.reason =
+          'A Flipkart order for this item has an unresolved sale, return or cancellation status. Check the order before increasing stock.';
+        continue;
+      }
+      const row = byId.get(order.orderItemId);
+      result.baseUnits = row?.baseUnits ?? null;
+      if (!row || row.baseUnits === null || row.status === 'review' || row.status === 'unmapped') {
+        result.status = 'review';
+        result.reason =
+          'An order needs billing or pack review. ' +
+          (row?.reason ?? 'Check Order matching and Inventory.');
+        continue;
+      }
       if (row.status === 'matched' && row.bill) {
-        // A single posting can be returned by more than one ledger query.
-        if (claims.has(row.bill.id))
-          throw hold(
-            'Two seller orders claim the same Tally bill and stock item. Review their bill matches.',
-          );
-        claims.add(row.bill.id);
-      } else heldUnits += row.baseUnits;
+        const key = JSON.stringify([itemId, row.bill.id]);
+        const claimed = claims.get(key);
+        if (claimed) {
+          claimed.status = result.status = 'review';
+          claimed.reason = result.reason =
+            'Two seller orders claim the same Tally bill and stock item. Review their bill matches.';
+        } else {
+          result.status = 'matched';
+          result.reason = row.reason;
+          claims.set(key, result);
+        }
+      } else {
+        result.status = 'reserved';
+        result.reason =
+          'The units are reserved until a matching Tally stock deduction is verified.';
+      }
     }
   }
+  return reconciled;
+}
+
+function unbilledUnits(orders: ReconciledOrder[], itemId: string) {
+  let heldUnits = 0;
+  let billingIssue: string | undefined;
+  for (const entry of orders) {
+    const { affectedItems, result } = entry;
+    if (affectedItems && !affectedItems.includes(itemId)) continue;
+    if (result.status === 'review') {
+      if (!entry.itemId || !affectedItems) throw hold(result.reason);
+      billingIssue ??= result.reason;
+    }
+    if (result.status === 'reserved') heldUnits += result.baseUnits!;
+  }
+  if (billingIssue) throw hold(billingIssue);
   if (!Number.isSafeInteger(heldUnits))
     throw hold('The unbilled order quantity could not be verified.');
   return heldUnits;
@@ -377,8 +413,6 @@ export class StockAvailabilityService {
         throw hold(
           'Confirm a billing rule in Order matching for every seller account mapped to this company.',
         );
-      if (!ctx.bindings.some((l) => ctx.items.get(l.itemId!)?.companyId === companyId))
-        throw hold('Verify a stock mapping for this company in Inventory first.');
       if (
         saved &&
         saved.signature !== ctx.signature &&
@@ -397,16 +431,12 @@ export class StockAvailabilityService {
       this.store.saveStockCoverage(saved);
     } else if (path !== '/api/billing/coverage')
       throw new InputError('Unknown stock coverage action.', 404);
-    const lastCheck = saved && Date.parse(saved.checkedThrough ?? saved.from);
-    const current =
-      saved?.signature === ctx.signature &&
-      lastCheck !== null &&
-      lastCheck <= Date.now() &&
-      Date.now() - lastCheck <= 30 * day;
+    const issue = saved ? coverageIssue(saved, ctx.signature, Date.now()) : startTrackingMessage;
     return {
       from: saved?.from ?? null,
-      current,
-      checkedThrough: current ? (saved?.checkedThrough ?? null) : null,
+      current: issue === null,
+      checkedThrough: issue ? null : (saved?.checkedThrough ?? null),
+      ...(issue && { issue }),
     };
   }
 
@@ -416,24 +446,59 @@ export class StockAvailabilityService {
     batch?: object,
     readOnly = false,
   ): Promise<CheckedStock> {
-    return (await this.companyCheck(companyId, batch, readOnly)).forItem(itemId);
+    return (await this.companyCheck(companyId, batch, readOnly ? 'preview' : 'publish')).forItem(
+      itemId,
+    );
   }
 
   async checkOrders(companyId: string, batch: object): Promise<void> {
     await this.companyCheck(companyId, batch);
   }
 
+  async refreshPendingOrders(companyId: string, accountId?: string): Promise<void> {
+    await this.companyCheck(companyId, undefined, 'review', accountId ? { accountId } : undefined);
+  }
+
+  pendingHistory(companyId: string, accountId: string) {
+    const ctx = configuration(this.store, companyId);
+    const coverage = this.store.readStockCoverage(companyId);
+    const orders = (coverage?.orders ?? []).flatMap(({ accountId: seller, order }) => {
+      if (seller !== accountId) return [];
+      const itemId = mappedSaleItem(ctx, seller, order);
+      if (itemId && (ctx.items.get(itemId)?.companyId !== companyId || !order.firstSeenUnmapped))
+        return [];
+      return [{ order, mapped: !!itemId }];
+    });
+    return {
+      orders,
+      trackingStarted: !!coverage && ctx.rules.some((rule) => rule.accountId === accountId),
+    };
+  }
+
+  async reviewOrders(
+    companyId: string,
+    accountId: string,
+    orderItemIds?: string[],
+  ): Promise<ReviewedOrder[]> {
+    const check = await this.companyCheck(companyId, undefined, 'review', {
+      accountId,
+      orderItemIds: orderItemIds ?? 'all',
+    });
+    return check.review(accountId, orderItemIds);
+  }
+
   private async companyCheck(
     companyId: string,
     batch?: object,
-    readOnly = false,
+    mode: CheckMode = 'publish',
+    scope?: ReviewScope,
   ): Promise<CompanyCheck> {
     let checks = batch && this.batches.get(batch);
     if (batch && !checks) {
       checks = new Map();
       this.batches.set(batch, checks);
     }
-    const cacheKey = JSON.stringify([companyId, readOnly]);
+    const cacheKey = JSON.stringify([companyId, mode]);
     const recent = checks?.get(cacheKey);
     if (recent && Date.now() <= recent.until) return recent.read;
     // Each reader merges an entire company journal. Serialize local readers so
@@ -441,7 +506,7 @@ export class StockAvailabilityService {
     const previous = this.pending.get(companyId);
     const result = (previous ?? Promise.resolve())
       .catch(() => {})
-      .then(() => this.capture(companyId, batch, readOnly));
+      .then(() => this.capture(companyId, batch, mode, scope));
     this.pending.set(companyId, result);
     if (checks) {
       const entry = { until: Infinity, read: result };
@@ -464,21 +529,17 @@ export class StockAvailabilityService {
   private async capture(
     companyId: string,
     batch?: object,
-    readOnly = false,
+    mode: CheckMode = 'publish',
+    scope?: ReviewScope,
   ): Promise<CompanyCheck> {
     const ctx = configuration(this.store, companyId);
     const coverage = this.store.readStockCoverage(companyId);
-    if (!coverage || coverage.signature !== ctx.signature)
-      throw hold(
-        'Confirm the current stock coverage in Order matching before publishing calculated stock.',
-      );
+    if (!coverage) throw hold(startTrackingMessage);
     const to = nowIso();
-    const since = Date.parse(coverage.checkedThrough ?? coverage.from);
-    if (since > Date.parse(to) || Date.parse(to) - since > 30 * day)
-      throw hold(
-        'Stockbridge has a gap in order coverage. Reconcile earlier sales and confirm a recent starting date.',
-      );
+    const issue = coverageIssue(coverage, ctx.signature, Date.parse(to));
+    if (issue) throw hold(issue);
     const demo = ctx.state.mode === 'demo';
+    const rules = rulesForCheck(ctx, coverage, scope);
     const tally = this.sources.tally(ctx.state.settings.tallyUrl);
     const identity = { externalId: companyId.slice('tally:'.length), name: ctx.company.name };
     const guards: Array<() => void> = [];
@@ -508,7 +569,7 @@ export class StockAvailabilityService {
     };
     const sampleVouchers = new Map<string, TallySalesBill[]>();
     try {
-      for (const rule of ctx.rules) {
+      for (const rule of rules) {
         let orders: FlipkartBillingOrder[];
         if (demo) {
           const sampleAt =
@@ -532,8 +593,13 @@ export class StockAvailabilityService {
           );
         }
         verify();
-        coverage.orders = mergeOrders(coverage, rule.accountId, orders);
-        if (!readOnly) {
+        coverage.orders = mergeOrders(coverage, rule.accountId, orders, ctx);
+        if (mode === 'review') {
+          // A seller opening the order history reads and remembers orders. The
+          // ordinary automation pass can enqueue any eligible receipts later.
+          this.store.saveStockCoverage(coverage);
+          expected = journalVersion(coverage);
+        } else if (mode === 'publish') {
           const queued = saveOrderReceipts(this.store, ctx, coverage, rule.accountId);
           expected = journalVersion(coverage);
           if (queued) this.onPending?.(companyId, batch);
@@ -542,14 +608,16 @@ export class StockAvailabilityService {
       verify();
       // This watermark describes a complete order scan. Publication additionally
       // checks the bills and balances below even if every receipt is familiar.
-      coverage.checkedThrough = to;
-      if (!readOnly) this.store.saveStockCoverage(coverage);
+      if (rules.length === ctx.rules.length) {
+        coverage.checkedThrough = to;
+        if (mode !== 'preview') this.store.saveStockCoverage(coverage);
+      }
       const readBooks = async () => {
         try {
           const before = await balances();
           const vouchers = new Map(sampleVouchers);
           if (!demo)
-            for (const rule of ctx.rules) {
+            for (const rule of rules) {
               vouchers.set(
                 rule.accountId,
                 await tally.readSalesBills(
@@ -562,7 +630,7 @@ export class StockAvailabilityService {
             }
           const after = await balances();
           verify();
-          return { before, after, vouchers };
+          return { before, after, orders: reconcileOrders({ ...ctx, rules }, coverage, vouchers) };
         } catch (error) {
           if (error instanceof InputError) throw error;
           throw hold(
@@ -572,6 +640,48 @@ export class StockAvailabilityService {
       };
       let books: ReturnType<typeof readBooks> | undefined;
       const checked = new Map<string, CheckedStock>();
+      const checkBalance = async (itemId: string) => {
+        const item = ctx.items.get(itemId);
+        if (!item || item.companyId !== companyId)
+          throw hold('Refresh the current Tally stock item before publishing.');
+        const { before, after, orders } = await (books ??= readBooks());
+        // A bill can reach Tally before Inventory's next stock poll. Order
+        // matching can use the live balance. Publishing must also match Inventory.
+        const physical =
+          mode === 'review' && !demo
+            ? (before.get(item.externalId)?.physical ?? null)
+            : item.physical;
+        if (physical === null)
+          throw hold('Refresh the current Tally stock item before checking its available units.');
+        if (
+          !demo &&
+          [before, after].some((values) => {
+            const value = values.get(item.externalId);
+            return !value || value.unit !== item.unit || value.physical !== physical;
+          })
+        )
+          throw hold(
+            'The Tally balance changed while checking bills. Refresh Tally stock and retry.',
+          );
+        const verifyItem = () => {
+          if (saleDay(nowIso()) !== saleDay(to))
+            throw hold(
+              'The Tally business date changed during the order check. Refresh the company and retry.',
+            );
+          if (Date.now() - Date.parse(to) > 120_000)
+            throw hold(
+              'The order check is over two minutes old. Retry, or reconcile older sales and confirm a more recent starting date in Order matching.',
+            );
+          const current = verify().items.get(itemId);
+          if (
+            mode !== 'review' &&
+            (current?.version !== item.version || current.physical !== item.physical)
+          )
+            throw hold('Tally stock changed during this check. Retry with the current balance.');
+        };
+        verifyItem();
+        return { physical, orders, verify: verifyItem };
+      };
       return {
         forItem: async (itemId: string) => {
           const previous = checked.get(itemId);
@@ -579,38 +689,32 @@ export class StockAvailabilityService {
             previous.verify();
             return previous;
           }
-          const item = ctx.items.get(itemId);
-          if (!item || item.companyId !== companyId || item.physical === null)
-            throw hold('Refresh the current Tally stock item before publishing.');
-          const { before, after, vouchers } = await (books ??= readBooks());
-          if (
-            !demo &&
-            [before, after].some((values) => {
-              const value = values.get(item.externalId);
-              return !value || value.unit !== item.unit || value.physical !== item.physical;
-            })
-          )
-            throw hold(
-              'The Tally balance changed while checking bills. Refresh Tally stock and retry.',
-            );
-          const verifyItem = () => {
-            if (saleDay(nowIso()) !== saleDay(to))
-              throw hold(
-                'The Tally business date changed during the order check. Refresh the company and retry.',
-              );
-            if (Date.now() - Date.parse(to) > 120_000)
-              throw hold(
-                'The order check is over two minutes old. Retry, or reconcile older sales and confirm a more recent starting date in Order matching.',
-              );
-            const current = verify().items.get(itemId);
-            if (current?.version !== item.version || current.physical !== item.physical)
-              throw hold('Tally stock changed during this check. Retry with the current balance.');
+          const evidence = await checkBalance(itemId);
+          const reserved = unbilledUnits(evidence.orders, itemId);
+          const value = {
+            available: Math.max(0, evidence.physical - reserved),
+            verify: evidence.verify,
           };
-          verifyItem();
-          const reserved = unbilledUnits(ctx, itemId, coverage, vouchers);
-          const value = { available: Math.max(0, item.physical - reserved), verify: verifyItem };
           checked.set(itemId, value);
           return value;
+        },
+        review: async (accountId, orderItemIds) => {
+          const { orders } = await (books ??= readBooks());
+          const requested = orderItemIds && new Set(orderItemIds);
+          const selected = orders.filter(
+            (e) =>
+              e.accountId === accountId &&
+              (!requested || requested.has(e.order.orderItemId)) &&
+              (!e.itemId ||
+                (e.order.firstSeenUnmapped && ctx.items.get(e.itemId)?.companyId === companyId)),
+          );
+          const guards = [];
+          for (const itemId of new Set(selected.map((e) => e.itemId))) {
+            if (itemId) guards.push((await checkBalance(itemId)).verify);
+          }
+          verify();
+          for (const guard of guards) guard();
+          return selected.map(({ order, result }) => ({ order, result }));
         },
       };
     } catch (error) {

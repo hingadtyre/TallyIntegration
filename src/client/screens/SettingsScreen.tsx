@@ -81,8 +81,8 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
                 <span>seconds</span>
               </div>
               <small>
-                Checks Flipkart orders for companies with automatic updates and order coverage. A
-                new sale can reduce stock on other listings that share the item.
+                Checks Flipkart orders from each company’s confirmed tracking date. When company
+                sync is on, a sale can lower stock on other listings that share the item.
               </small>
             </label>
             <label className="field">

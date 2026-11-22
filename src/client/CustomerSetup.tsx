@@ -123,10 +123,13 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           To see which recent Flipkart orders you have billed, open Order matching. Select the Tally
           company and Flipkart account, choose your Flipkart sales bill ledger, and select the bill
           field where you record an order or invoice number. You can also match manually. Preview
-          the matches and confirm the setup for each seller using this company’s stock. Under Order
-          coverage for automatic stock updates, set a start date after checking all earlier sales
-          are in Tally. Automatic stock increases wait for this setup. Stockbridge deducts unbilled
-          order units before calculating how many sets to publish.
+          the matches and confirm the setup for each participating seller. Choose the tracking start
+          date after checking that earlier sales are in Tally. When an order needs a mapping, choose
+          Map listing and confirm the Tally item and Set of at that pickup location. Stockbridge
+          checks saved orders from your tracking date against the ledger and reserves unbilled
+          units. A verified seller-fulfilled order can reserve stock before packing. Held orders
+          need review. Existing listings keep syncing while a sale waits for its mapping, even if
+          they share the same tyres.
         </p>
       </details>
       <details className="guide-topic">

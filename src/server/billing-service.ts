@@ -1,8 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { FlipkartBillingClient, FlipkartBillingError } from '../adapters/flipkart-billing.js';
 import { TallyClient } from '../adapters/tally.js';
-import type { BillingReport, BillingRule, BillingWorkspace } from '../shared/billing-contracts.js';
+import type {
+  BillingReport,
+  BillingRule,
+  BillingWorkspace,
+  PendingListingCheck,
+  PendingListingGroup,
+  PendingListings,
+} from '../shared/billing-contracts.js';
 import type { Company, Snapshot } from '../shared/contracts.js';
+import { isVerifiedCancellation } from '../shared/stock-coverage.js';
 import {
   fingerprint,
   matchBills,
@@ -12,6 +20,7 @@ import {
 } from './billing-matcher.js';
 import { sampleBills, sampleLedger } from './billing-sample.js';
 import type { BillingData } from './storage/billing-records.js';
+import type { StockAvailabilityService } from './stock-availability.js';
 import type { Store } from './store.js';
 import { InputError, requireCompany, requireText } from './validation.js';
 
@@ -165,6 +174,93 @@ export class BillingService {
   invalidate(accountId: string): void {
     for (const [key, session] of this.sessions)
       if (session.accountId === accountId) this.sessions.delete(key);
+  }
+
+  async pendingOrders(
+    availability: StockAvailabilityService,
+    input: Record<string, unknown>,
+    accountId: string,
+    recheck: boolean,
+  ) {
+    const { id: companyId } = requireCompany(this.store.read(), input.companyId);
+    let refreshIssue: string | undefined;
+    if (
+      !recheck &&
+      input.savedOnly !== true &&
+      configuredRule(this.store.readBilling(), { companyId, accountId })
+    ) {
+      const coverage = availability.coverageCommand('/api/billing/coverage', {
+        companyId,
+        accountId,
+      });
+      if (coverage.current) {
+        try {
+          await availability.refreshPendingOrders(companyId, accountId);
+        } catch (error) {
+          refreshIssue =
+            error instanceof InputError ? error.message : 'Could not refresh tracked orders.';
+        }
+      } else if (coverage.from) {
+        refreshIssue = coverage.issue;
+      }
+    }
+    const { orders, trackingStarted } = availability.pendingHistory(companyId, accountId);
+    const groups = new Map<string, PendingListingGroup>();
+    const visible = new Set<PendingListingGroup>();
+    for (const { order, mapped } of orders) {
+      const { listingId, sku, locationId: location } = order;
+      const key = JSON.stringify([listingId, sku, location]);
+      const group = groups.get(key) ?? { listingId, sku, location, mapped, orderItemIds: [] };
+      group.orderItemIds.push(order.orderItemId);
+      groups.set(key, group);
+      if (mapped || !isVerifiedCancellation(order)) visible.add(group);
+    }
+    if (!recheck)
+      return {
+        trackingStarted,
+        listings: [...visible],
+        ...(refreshIssue && { refreshIssue }),
+      } satisfies PendingListings;
+
+    const listingId = requireText(input.listingId, 'Flipkart listing');
+    const sku = requireText(input.sku, 'Seller SKU');
+    const location = requireText(input.location, 'Seller location');
+    const group = groups.get(JSON.stringify([listingId, sku, location]));
+    if (!group)
+      throw new InputError(
+        'This listing has no saved orders for this company and seller location.',
+        409,
+      );
+    if (input.orderItemIds !== undefined) {
+      const identifiers = new Set(group.orderItemIds);
+      if (
+        !Array.isArray(input.orderItemIds) ||
+        !input.orderItemIds.length ||
+        input.orderItemIds.some((id) => typeof id !== 'string' || !identifiers.has(id))
+      ) {
+        throw new InputError(
+          'The requested orders do not belong to this saved listing and location.',
+          409,
+        );
+      }
+    }
+
+    // A receipt can disappear from the latest provider page or a scope can
+    // change during the read. Only explicit results from the journal count.
+    const checked = await availability.reviewOrders(companyId, accountId, group.orderItemIds);
+    const rows = checked
+      .filter(
+        ({ order }) =>
+          order.listingId === listingId && order.sku === sku && order.locationId === location,
+      )
+      .map(({ result }) => result);
+    const returned = new Set(rows.map((row) => row.orderItemId));
+    if (group.orderItemIds.some((id) => !returned.has(id)))
+      throw new InputError(
+        'The saved orders changed during the check. Refresh Order matching and retry.',
+        409,
+      );
+    return { listingId, sku, location, rows } satisfies PendingListingCheck;
   }
 
   private async listLedgers(state: Snapshot, company: Company) {

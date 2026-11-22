@@ -13,9 +13,11 @@ const indiaDay = new Intl.DateTimeFormat('en-CA', {
 export function StockCoverageSetup({
   companyId,
   accountId,
+  onStart,
 }: {
   companyId: string;
   accountId: string;
+  onStart: () => void;
 }) {
   const [status, setStatus] = useState<StockCoverageStatus | null>(null);
   const [editing, setEditing] = useState(false);
@@ -58,6 +60,7 @@ export function StockCoverageSetup({
       setEditing(false);
       setConfirmed(false);
       setFromDate('');
+      onStart();
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -66,16 +69,17 @@ export function StockCoverageSetup({
   }
   return (
     <section className="panel settings-panel billing-panel">
-      <h2>Order coverage for automatic stock updates</h2>
+      <h2>Order tracking for calculated stock</h2>
       {!status && !error && <p role="status">Checking order coverage…</p>}
       {status && (
         <>
           <p role="status">
             {status.current && status.from
               ? `Stockbridge checks orders for this company from ${indiaDay.format(new Date(status.from))} (India).`
-              : status.from
-                ? 'Live calculated stock above zero is waiting. Review the company’s setup and confirm the stock again.'
-                : 'Before Stockbridge can publish a calculated stock quantity above zero to Flipkart, confirm the starting stock for this company.'}
+              : (status.issue ??
+                (status.from
+                  ? 'Review the starting stock for this company.'
+                  : 'Choose the date to start tracking this company’s Flipkart orders.'))}
           </p>
           {status.current && status.checkedThrough && (
             <p>Last order check through {formatDateTime(status.checkedThrough)}.</p>
@@ -117,13 +121,13 @@ export function StockCoverageSetup({
                   previously outstanding sales before moving the date forward.
                 </li>
                 <li>
-                  Every Flipkart seller account and location using this company’s stock is mapped.
-                  Only standard and self-ship seller-fulfilled orders use this stock. Smart, Express
-                  and Fulfilment by Flipkart orders use separate stock.
+                  Every seller account sharing this stock has bill matching set up. Only standard
+                  and self-ship seller-fulfilled orders use this stock. Smart, Express and
+                  Fulfilment by Flipkart orders use separate stock.
                 </li>
                 <li>
-                  Each listing’s confirmed Set of matches the Tally units used per sale throughout
-                  this period.
+                  Each mapped listing’s Set of matches the Tally units used per sale throughout this
+                  period. I can map other listings as their orders appear.
                 </li>
               </ul>
               <label>

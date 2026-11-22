@@ -4,25 +4,30 @@ import type {
   BillingRule,
   BillingWorkspace,
 } from '../../shared/billing-contracts.js';
-import type { SellerAccount } from '../../shared/contracts.js';
+import type { Snapshot } from '../../shared/contracts.js';
 import { errorMessage, requestJson } from '../api.js';
 import { BillingResults } from './BillingResults.js';
 import { StockCoverageSetup } from './StockCoverageSetup.js';
 import { BillingSetup, fieldLabels, referenceLabels } from './BillingSetup.js';
+import { BillingListingMappings } from './BillingListingMappings.js';
+import type { SaveMapping } from './MappingDialog.js';
 
 type Scope = { companyId: string; accountId: string };
+type MappingAccess = { inventory: Snapshot; onSaveMapping: SaveMapping };
 
 export function BillingScreen({
   companyId,
   accountId,
-  accounts,
+  inventory,
+  onSaveMapping,
   onAccountChange,
   onConnect,
-}: Scope & {
-  accounts: SellerAccount[];
-  onAccountChange: (id: string) => void;
-  onConnect: () => void;
-}) {
+}: Scope &
+  MappingAccess & {
+    onAccountChange: (id: string) => void;
+    onConnect: () => void;
+  }) {
+  const accounts = inventory.accounts;
   return (
     <>
       <div className="page-heading">
@@ -51,6 +56,8 @@ export function BillingScreen({
           key={JSON.stringify([companyId, accountId])}
           companyId={companyId}
           accountId={accountId}
+          inventory={inventory}
+          onSaveMapping={onSaveMapping}
         />
       ) : (
         <section className="panel empty-state">
@@ -68,7 +75,7 @@ export function BillingScreen({
   );
 }
 
-function LoadWorkspace({ companyId, accountId }: Scope) {
+function LoadWorkspace({ companyId, accountId, ...mapping }: Scope & MappingAccess) {
   const [workspace, setWorkspace] = useState<BillingWorkspace | null>(null);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
@@ -99,7 +106,9 @@ function LoadWorkspace({ companyId, accountId }: Scope) {
       </div>
     );
   if (!workspace) return <p role="status">Loading billing setup…</p>;
-  return <BillingReview companyId={companyId} accountId={accountId} initial={workspace} />;
+  return (
+    <BillingReview companyId={companyId} accountId={accountId} initial={workspace} {...mapping} />
+  );
 }
 
 type RuleInput = Pick<BillingRule, 'ledgerId' | 'reference' | 'field'>;
@@ -110,7 +119,13 @@ function orderPeriod(report: BillingReport): 1 | 7 | 30 {
   return elapsed >= 86_400_000 ? 7 : 1;
 }
 
-function BillingReview({ companyId, accountId, initial }: Scope & { initial: BillingWorkspace }) {
+function BillingReview({
+  companyId,
+  accountId,
+  initial,
+  inventory,
+  onSaveMapping,
+}: Scope & MappingAccess & { initial: BillingWorkspace }) {
   const [workspace, setWorkspace] = useState(initial);
   const [editing, setEditing] = useState(!initial.rule && !initial.report);
   const [days, setDays] = useState<number>(initial.report ? orderPeriod(initial.report) : 7);
@@ -118,6 +133,7 @@ function BillingReview({ companyId, accountId, initial }: Scope & { initial: Bil
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [requiresRefresh, setRequiresRefresh] = useState(false);
+  const [trackingRevision, setTrackingRevision] = useState(0);
   const { rule, report } = workspace;
   const periodChanged = !!report && days !== orderPeriod(report);
   const confirmed = !!(
@@ -312,11 +328,26 @@ function BillingReview({ companyId, accountId, initial }: Scope & { initial: Bil
           </p>
         )}
       </section>
+      {!editing && (report || rule) && (
+        <BillingListingMappings
+          companyId={companyId}
+          accountId={accountId}
+          inventory={inventory}
+          report={requiresRefresh || periodChanged ? null : report}
+          trackingRevision={trackingRevision}
+          busy={!!busy}
+          onSaveMapping={onSaveMapping}
+          onRefreshPreview={async () => {
+            if (report) await preview(report.rule);
+          }}
+        />
+      )}
       {rule && !editing && (
         <StockCoverageSetup
           key={JSON.stringify(rule)}
           companyId={companyId}
           accountId={accountId}
+          onStart={() => setTrackingRevision((value) => value + 1)}
         />
       )}
       {!rule && (

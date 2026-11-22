@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
 import type { FlipkartBillingOrder } from '../../src/adapters/flipkart-billing.js';
 import type { TallySalesBill, TallyStockItem } from '../../src/adapters/tally.js';
+import { BillingService } from '../../src/server/billing-service.js';
 import { saleDay } from '../../src/server/billing-matcher.js';
 import { StockAvailabilityService } from '../../src/server/stock-availability.js';
 import { marketplaceData } from '../support/marketplace-fixture.js';
@@ -17,7 +18,13 @@ function setup(t: TestContext, sellerPacks = [1]) {
   const bills = new Map<string, TallySalesBill[]>();
   let physical = 6;
   const dates: (string | undefined)[] = [];
-  const source = { unavailable: '', revoked: '', dates, stockRead: () => physical };
+  const source = {
+    unavailable: '',
+    unavailableLedger: '',
+    revoked: '',
+    dates,
+    stockRead: () => physical,
+  };
   const otherStock: TallyStockItem[] = [];
   f.store.updateMarketplace((market, state) => {
     state.companies.push({
@@ -117,6 +124,7 @@ function setup(t: TestContext, sellerPacks = [1]) {
             ];
           },
           async readSalesBills(_company, ledger) {
+            if (source.unavailableLedger === ledger) throw new Error('Ledger offline');
             return structuredClone(bills.get(ledger) ?? []);
           },
         }),
@@ -146,6 +154,23 @@ function setup(t: TestContext, sellerPacks = [1]) {
     itemId,
     confirm,
     available: (batch?: object, target = itemId) => service.forItem(companyId, target, batch),
+    review: () => service.reviewOrders(companyId, 'seller-0'),
+    pendingGroups: () =>
+      new BillingService(f.store).pendingOrders(
+        service,
+        { companyId, savedOnly: true },
+        'seller-0',
+        false,
+      ),
+    pending: () => service.pendingHistory(companyId, 'seller-0').orders,
+    listingCheck: (input: Record<string, unknown>, recheck: boolean) =>
+      new BillingService(f.store).pendingOrders(
+        service,
+        { companyId, ...input },
+        'seller-0',
+        recheck,
+      ),
+    refreshHistory: () => service.refreshPendingOrders(companyId),
     scan: () => service.checkOrders(companyId, {}),
     restoreService() {
       f.reopen();
@@ -173,7 +198,7 @@ function setup(t: TestContext, sellerPacks = [1]) {
 
 test('a restock can publish five and the matching Tally sale leaves five available', async (t) => {
   const s = setup(t);
-  await assert.rejects(s.available(), /coverage/);
+  await assert.rejects(s.available(), /Order matching, choose Set starting stock/);
   s.confirm();
   s.setStock(4);
   assert.equal((await s.available()).available, 3);
@@ -303,7 +328,10 @@ for (const cleanFirst of [false, true]) {
       s.f.store.update((state) => {
         state.listings[0].itemId = wheelId;
       });
-      await assert.rejects(s.available({}, wheelId), /coverage/);
+      await assert.rejects(
+        s.available({}, wheelId),
+        /Order matching, choose Review starting stock/,
+      );
     } else {
       s.orders.set('seller-0', [{ ...cancelled, quantity: 2 }]);
       await assert.rejects(s.available({}, wheelId), /recorded order changed/);
@@ -333,6 +361,69 @@ test('a single bill/item cannot discharge orders from two accounts', async (t) =
   s.bills.set('seller-1', [s.bill(1)]);
   await assert.rejects(s.available(), /same Tally bill/);
 });
+
+for (const dependency of ['independent', 'shared item', 'shared ledger']) {
+  test(`a seller's saved order recheck includes the other account only when needed: ${dependency}`, async (t) => {
+    const s = setup(t, [1, 1]);
+    s.f.store.update((state) => {
+      state.listings[0].itemId = null;
+      if (dependency !== 'shared item') {
+        state.items.push({ ...state.items[0], id: 'another-item', externalId: 'another-product' });
+        state.listings[1].itemId = 'another-item';
+      }
+    });
+    if (dependency === 'shared ledger') {
+      s.f.store.updateBilling((data) => {
+        data.rules.find((rule) => rule.accountId === 'seller-1')!.ledgerId = 'seller-0';
+      });
+    }
+    s.confirm();
+    s.source.unavailable = 'seller-1';
+    const list = await s.listingCheck({}, false);
+    assert.ok('listings' in list);
+    assert.ok(!list.refreshIssue);
+    const [group] = list.listings;
+    assert.deepEqual(group.orderItemIds, ['line']);
+    assert.equal(s.f.store.readStockCoverage(s.companyId)!.checkedThrough, null);
+
+    const row = s.f.store.read().listings[0];
+    s.f.service.mapping({
+      listingId: row.id,
+      listingVersion: row.version,
+      itemId: s.itemId,
+      packSize: 1,
+      packSource: 'manual',
+      sourceScope: 'company',
+      confirmPackEvidence: true,
+      tyreFloor: false,
+    });
+    const check = () => s.listingCheck({ ...group }, true);
+    s.bills.set('seller-0', [s.bill()]);
+    if (dependency === 'independent') {
+      assert.deepEqual(
+        (await check()).rows?.map((r) => r.status),
+        ['matched'],
+      );
+      s.bills.set('seller-0', []);
+      s.source.unavailable = '';
+      s.source.unavailableLedger = 'seller-1';
+      assert.deepEqual(
+        (await check()).rows?.map((r) => r.status),
+        ['reserved'],
+      );
+      assert.equal(s.f.store.readStockCoverage(s.companyId)!.checkedThrough, null);
+      await assert.rejects(s.available(), /Could not verify/);
+    } else {
+      await assert.rejects(check(), /Could not verify/);
+      s.source.unavailable = '';
+      if (dependency === 'shared item') s.bills.set('seller-1', [s.bill(1)]);
+      assert.deepEqual(
+        (await check()).rows?.map((r) => r.status),
+        ['review'],
+      );
+    }
+  });
+}
 
 test('a partially billed pack waits for reconciliation before setting stock', async (t) => {
   const s = setup(t, [2]);
@@ -422,7 +513,7 @@ test('source balance, changed conversions, baseline dates and changed order iden
     state.listings[0].packSize = 2;
   });
   assert.throws(check.verify, /changed/);
-  await assert.rejects(s.available(), /coverage/);
+  await assert.rejects(s.available(), /Order matching, choose Review starting stock/);
   assert.throws(() => s.confirm(), /after those sales/);
   s.f.store.update((state) => {
     state.listings[0].packSize = 1;
@@ -431,5 +522,165 @@ test('source balance, changed conversions, baseline dates and changed order iden
   await assert.rejects(s.available(), /recorded order changed/);
   s.orders.set('seller-0', []);
   s.restoreService();
+  await assert.rejects(s.available(), /recorded order changed/);
+});
+
+test('an unmapped order is retained, then reserved across sibling listings and matched once after late mapping', async (t) => {
+  const s = setup(t);
+  const sale = {
+    ...s.orders.get('seller-0')![0],
+    orderItemId: 'late-line',
+    orderId: 'late-sale',
+    listingId: 'late-listing',
+    sku: 'NEW-PAIR',
+  };
+  s.f.store.updateMarketplace((market, state) => {
+    market.listings.push({ ...market.listings[0], id: sale.listingId, sku: sale.sku });
+    state.listings.push({
+      ...state.listings[0],
+      id: 'pair-mapping',
+      itemId: null,
+      sku: sale.sku,
+      paused: true,
+    });
+  });
+  s.orders.set('seller-0', [sale]);
+  s.confirm();
+  await s.refreshHistory();
+  assert.ok(s.f.store.read().listings.every((l) => !l.orderSyncPending));
+  assert.equal((await s.available()).available, 6);
+  assert.deepEqual(
+    s.pending().map((e) => [e.order.orderItemId, e.mapped]),
+    [['late-line', false]],
+  );
+  const from = s.f.store.readStockCoverage(s.companyId)!.from;
+  s.orders.set('seller-0', []); // A short later read cannot erase the sale.
+  s.restoreService();
+  const previous = await s.available();
+  const row = s.f.store.read().listings.find((l) => l.id === 'pair-mapping')!;
+  s.f.service.mapping({
+    listingId: row.id,
+    listingVersion: row.version,
+    itemId: s.itemId,
+    packSize: 2,
+    packSource: 'manual',
+    sourceScope: 'company',
+    confirmPackEvidence: true,
+    tyreFloor: false,
+  });
+  assert.throws(previous.verify, /changed/);
+  const coverage = s.f.store.readStockCoverage(s.companyId)!;
+  assert.equal(coverage.from, from);
+  assert.equal(coverage.orders.length, 1);
+  assert.deepEqual(
+    s.pending().map((e) => [e.order.orderItemId, e.mapped]),
+    [['late-line', true]],
+  );
+  const listings = s.f.store.read().listings;
+  const pending = listings.find((l) => l.id === 'map-0')!.orderSyncPending;
+  assert.ok(pending);
+  assert.ok(!listings.find((l) => l.id === row.id)!.orderSyncPending);
+  assert.equal((await s.available()).available, 4);
+  assert.equal((await s.review())[0].result.status, 'reserved');
+  assert.equal(s.f.store.read().listings.find((l) => l.id === 'map-0')!.orderSyncPending, pending);
+  const bill = {
+    ...s.bill(),
+    reference: sale.orderId,
+    lines: [{ itemExternalId: 'tyre', unit: 'ea', quantity: 2 }],
+  };
+  s.bills.set('shop-ledger', [bill]);
+  assert.equal((await s.review())[0].result.status, 'reserved');
+  s.setStock(4);
+  s.bills.set('seller-0', [bill]);
+  assert.equal((await s.review())[0].result.status, 'matched');
+  assert.equal((await s.available()).available, 4);
+  s.f.store.update((state) => {
+    state.listings.find((l) => l.id === row.id)!.packSize = 3;
+  });
+  await assert.rejects(s.available(), /Order matching, choose Review starting stock/);
+});
+
+test('a sale billed before the first mapping is matched on the first recheck with sync off', async (t) => {
+  const s = setup(t);
+  s.f.store.update((state) => {
+    state.companies.find((c) => c.id === s.companyId)!.automation = false;
+    state.listings[0].itemId = null;
+  });
+  s.confirm();
+  await s.scan();
+  s.restoreService();
+  assert.equal(s.pending().length, 1);
+  assert.equal(s.pending()[0].mapped, false);
+  s.bills.set('seller-0', [s.bill()]);
+  // The bill is already in Tally, but the next inventory stock poll has not run.
+  s.source.stockRead = () => 5;
+  const row = s.f.store.read().listings[0];
+  s.f.service.mapping({
+    listingId: row.id,
+    listingVersion: row.version,
+    itemId: s.itemId,
+    packSize: 1,
+    packSource: 'manual',
+    sourceScope: 'company',
+    confirmPackEvidence: true,
+    tyreFloor: false,
+  });
+  assert.equal((await s.review())[0].result.status, 'matched');
+  await assert.rejects(s.available(), /balance changed/);
+  let stockReads = 0;
+  s.source.stockRead = () => (++stockReads === 1 ? 5 : 4);
+  await assert.rejects(s.review(), /balance changed/);
+  s.source.stockRead = () => 5;
+  s.setStock(5);
+  assert.equal((await s.available()).available, 5);
+  assert.ok(s.f.store.read().listings.every((l) => !l.orderSyncPending));
+});
+
+test('a verified cancellation alone needs no mapping and remains in the journal and same-destination audit', async (t) => {
+  const s = setup(t);
+  const original = s.orders.get('seller-0')![0];
+  const clean = {
+    ...original,
+    sku: 'NEW',
+    listingId: 'NEW-LISTING',
+    stockDisposition: 'cancelled' as const,
+  };
+  s.orders.set('seller-0', [clean]);
+  s.confirm();
+  await s.scan();
+  assert.deepEqual(await s.pendingGroups(), { trackingStarted: true, listings: [] });
+  assert.equal(s.f.store.readStockCoverage(s.companyId)!.orders.length, 1);
+  assert.deepEqual(
+    (await s.review()).map((row) => row.result.status),
+    ['cancelled'],
+  );
+  const uncertain = {
+    ...clean,
+    orderItemId: 'return',
+    stockDisposition: 'uncertain' as const,
+    eligibilityUnverified: true as const,
+  };
+  s.orders.set('seller-0', [uncertain]);
+  await s.scan();
+  assert.deepEqual(await s.pendingGroups(), {
+    trackingStarted: true,
+    listings: [
+      {
+        listingId: clean.listingId,
+        sku: clean.sku,
+        location: clean.locationId,
+        orderItemIds: [clean.orderItemId, uncertain.orderItemId],
+        mapped: false,
+      },
+    ],
+  });
+  // A later contradiction on the original sale remains a stock reconciliation issue.
+  s.orders.set('seller-0', [{ ...clean, quantity: 2 }]);
+  await s.scan();
+  const journal = s.f.store.readStockCoverage(s.companyId)!;
+  assert.ok(
+    journal.orders.find((e) => e.order.orderItemId === clean.orderItemId)?.order
+      .stockIdentityConflict,
+  );
   await assert.rejects(s.available(), /recorded order changed/);
 });

@@ -10,7 +10,7 @@ import type {
   Snapshot,
 } from '../shared/contracts.js';
 import type { MarketplaceService } from './marketplace-service.js';
-import { pickupChoices } from './marketplace-catalog.js';
+import { pickupChoices, verifyOrderMapping } from './marketplace-catalog.js';
 import { checkCalculationStock, saveCalculation } from './inventory-calculation.js';
 import { inventoryTarget } from './inventory-publication.js';
 import { AutomationReviews, indexAutomationCatalog } from './automation-preview.js';
@@ -411,7 +411,7 @@ export class InventoryService {
   }
 
   mapping(input: Record<string, unknown>): Snapshot {
-    this.store.updateMarketplace((market, state) => {
+    this.store.updateMapping(input.listingId, (market, state) => {
       const listing = state.listings.find((row) => row.id === input.listingId);
       const item = state.items.find((row) => row.id === input.itemId);
       if (!listing || !item || (listing.itemId && listing.itemId !== item.id))
@@ -421,6 +421,20 @@ export class InventoryService {
       if (input.confirmPackEvidence !== true)
         throw new InputError('Verified pack evidence is required.');
       const editing = listing.itemId !== null;
+      if (
+        input.keepPaused !== undefined &&
+        (typeof input.keepPaused !== 'boolean' || (editing && listing.location))
+      )
+        throw new InputError('Choose the pause setting when adding a new listing mapping.');
+      if (input.orderSource !== undefined)
+        verifyOrderMapping(
+          market,
+          listing,
+          item.companyId,
+          listing.location || input.pickupLocation,
+          input.orderSource,
+        );
+      if (input.keepPaused === true) listing.paused = true;
       let pickupChanged = false;
       if (!listing.location || input.pickupLocation !== undefined) {
         const remote = market.listings.find(
@@ -616,11 +630,7 @@ export class InventoryService {
       await this.publishPending(companyId, batch, attempted, true);
       const state = this.store.read();
       for (const company of state.companies) {
-        if (
-          !company.automation ||
-          (companyId && companyId !== company.id) ||
-          !this.store.readStockCoverage(company.id)
-        )
+        if ((companyId && companyId !== company.id) || !this.store.readStockCoverage(company.id))
           continue;
         const key = 'orders:' + company.id;
         try {

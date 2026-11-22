@@ -208,6 +208,44 @@ export function hasConfirmedPickup(row: Listing, remote: MarketplaceListing): bo
   );
 }
 
+/** The order fixes the destination before the seller chooses a Tally item. */
+export function verifyOrderMapping(
+  market: MarketplaceData,
+  listing: Listing,
+  companyId: string,
+  location: unknown,
+  orderSource: unknown,
+): void {
+  if (!orderSource || typeof orderSource !== 'object')
+    throw new InputError('Choose an order from Order matching.');
+  const source = orderSource as Record<string, unknown>;
+  const matches = market.listings.filter(
+    (row) => row.accountId === listing.accountId && row.sku === listing.sku,
+  );
+  const [remote] = matches;
+  if (
+    (listing.itemId !== null && !!listing.location) ||
+    source.companyId !== companyId ||
+    source.accountId !== listing.accountId ||
+    typeof location !== 'string' ||
+    !location ||
+    source.locationId !== location ||
+    matches.length !== 1 ||
+    !remote.observedAt ||
+    source.listingId !== remote.id ||
+    (listing.skuMappingId && listing.skuMappingId !== remote.id) ||
+    !(
+      remote.locations.some((entry) => entry.id === location) ||
+      (listing.skuMappingId === remote.id &&
+        pickupChoices(market.listings, remote).includes(location))
+    )
+  )
+    throw new InputError(
+      'The order listing, seller, pickup location or Tally company changed. Reopen the order mapping.',
+      409,
+    );
+}
+
 export function seedSampleMarketplace(data: MarketplaceData, state: Snapshot): void {
   if (state.mode !== 'demo' || data.accounts.length) return;
   for (const account of state.accounts) {

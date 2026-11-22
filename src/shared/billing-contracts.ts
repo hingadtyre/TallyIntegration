@@ -17,6 +17,7 @@ export interface BillCandidate {
 export interface BillingRow {
   orderItemId: string;
   orderId: string;
+  listingId: string;
   orderDate?: string;
   referenceValue?: string | null;
   sku: string;
@@ -49,4 +50,32 @@ export interface BillingReport {
 export interface BillingWorkspace {
   rule: BillingRule | null;
   report: BillingReport | null;
+}
+
+export interface PendingListingGroup {
+  listingId: string;
+  sku: string;
+  location: string;
+  orderItemIds: string[];
+  mapped: boolean;
+}
+
+export interface PendingListings {
+  trackingStarted: boolean;
+  listings: PendingListingGroup[];
+  refreshIssue?: string;
+}
+
+export interface PendingOrderResult {
+  orderItemId: string;
+  status: 'matched' | 'reserved' | 'review' | 'cancelled' | 'unmapped';
+  reason: string;
+  baseUnits: number | null;
+}
+
+export interface PendingListingCheck {
+  listingId: string;
+  sku: string;
+  location: string;
+  rows: PendingOrderResult[];
 }

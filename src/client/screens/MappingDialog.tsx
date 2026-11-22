@@ -5,7 +5,7 @@ import { Icon, Modal } from '../components.js';
 import { formatDateTime } from '../format.js';
 import { MappingListingPicker } from './MappingListingPicker.js';
 
-type SaveMapping = (mapping: MappingInput) => Promise<ActionResult<Snapshot>>;
+export type SaveMapping = (mapping: MappingInput) => Promise<ActionResult<Snapshot>>;
 
 export function MappingDialog({
   item,
@@ -41,8 +41,8 @@ export function MappingDialog({
         (!skuMappings.has(listing.sku) || !!listing.marketplaceListingId),
   );
   const listing = listings.find((entry) => entry.id === selectedId);
-  const company =
-    state.companies.find((entry) => entry.id === item.companyId)?.name ?? item.companyId;
+  const company = state.companies.find((entry) => entry.id === item.companyId);
+  const companyName = company?.name ?? item.companyId;
   const title = editListingId ? 'Edit Set of' : 'Map an existing listing';
 
   return (
@@ -53,7 +53,7 @@ export function MappingDialog({
       }}
     >
       <p className="modal-intro">
-        {company} · <strong>{item.name}</strong> · {item.unit || 'base units'}
+        {companyName} · <strong>{item.name}</strong> · {item.unit || 'base units'}
       </p>
       {editListingId ? (
         listing && (
@@ -88,10 +88,17 @@ export function MappingDialog({
       )}
       {listing ? (
         <PackForm
-          key={JSON.stringify([listing.id, listing.version, item.id, item.unit])}
+          key={JSON.stringify([
+            listing.id,
+            listing.version,
+            item.id,
+            item.unit,
+            company?.automation,
+          ])}
           listing={listing}
           item={item}
-          company={company}
+          company={companyName}
+          companySync={!!company?.automation}
           busy={busy}
           onClose={onClose}
           onSave={onSave}
@@ -110,20 +117,28 @@ export function MappingDialog({
   );
 }
 
-function PackForm({
+export function PackForm({
   listing,
   item,
   company,
+  companySync,
   busy,
   onSave,
   onClose,
+  order,
 }: {
   listing: Listing;
   item: StockItem;
   company: string;
+  companySync: boolean;
   busy: boolean;
   onSave: SaveMapping;
   onClose: () => void;
+  order?: {
+    accountId: string;
+    marketplaceListingId: string;
+    location: string;
+  };
 }) {
   const packages = listing.packageAvailable ? (listing.packageCount ?? null) : null;
   const changed =
@@ -139,7 +154,8 @@ function PackForm({
   const [confirmedSize, setConfirmedSize] = useState<number | null>(null);
   const [error, setError] = useState('');
   const choices = listing.pickupChoices ?? [];
-  const [pickup, setPickup] = useState(choices.length === 1 ? choices[0] : '');
+  const [pickup, setPickup] = useState(order?.location ?? (choices.length === 1 ? choices[0] : ''));
+  const [keepPaused, setKeepPaused] = useState(listing.paused);
   const size = source === 'packages' ? packages : Number(customSize);
   const valid = size !== null && Number.isSafeInteger(size) && size > 0;
   const confirmed = valid && confirmedSize === size;
@@ -156,6 +172,15 @@ function PackForm({
       packSource: source,
       packSize: size,
       listingVersion: listing.version,
+      ...(order && {
+        orderSource: {
+          listingId: order.marketplaceListingId,
+          locationId: order.location,
+          companyId: item.companyId,
+          accountId: order.accountId,
+        },
+      }),
+      ...((order || !listing.itemId) && keepPaused && { keepPaused: true }),
       sourceScope: 'company',
       tyreFloor,
     });
@@ -167,7 +192,7 @@ function PackForm({
       <fieldset className="pack-fields" disabled={busy}>
         <legend>Set of</legend>
         <p>How many {item.unit || 'Tally units'} of this item does one sale consume?</p>
-        {!listing.location && (
+        {!listing.location && !order && (
           <label className="field">
             <span>Flipkart pickup location</span>
             <select
@@ -266,6 +291,29 @@ function PackForm({
             complete sets means zero stock.
           </span>
         </label>
+        {(order || !listing.itemId) && (
+          <>
+            {listing.paused ? (
+              <p>Stock updates are paused for this location. You can resume sync in Inventory.</p>
+            ) : (
+              <>
+                <p>
+                  {companySync
+                    ? 'Company sync is on. This location can receive stock updates once its orders and stock have been checked.'
+                    : 'Company sync is off. This location can join when you enable company sync.'}
+                </p>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={keepPaused}
+                    onChange={(event) => setKeepPaused(event.target.checked)}
+                  />
+                  <span>Keep this listing paused</span>
+                </label>
+              </>
+            )}
+          </>
+        )}
         <label className="checkbox-label mapping-confirmation">
           <input
             type="checkbox"
@@ -286,7 +334,7 @@ function PackForm({
                 for <strong>{company}</strong>. Stock updates will wait for a pickup location
               </>
             )}
-            .
+            .{order && ' This Set of applies to the orders being checked.'}
           </span>
         </label>
       </fieldset>
@@ -300,7 +348,11 @@ function PackForm({
           Cancel
         </button>
         <button className="button primary" disabled={busy || !confirmed || !valid}>
-          {listing.itemId ? 'Save Set of' : 'Save mapping'}
+          {order
+            ? 'Save mapping and check orders'
+            : listing.itemId
+              ? 'Save Set of'
+              : 'Save mapping'}
         </button>
       </div>
     </form>

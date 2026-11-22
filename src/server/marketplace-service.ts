@@ -650,7 +650,7 @@ export class MarketplaceService {
   ) {
     const companies = new Map(state.companies.map((company) => [company.id, company]));
     const items = new Map(state.items.map((item) => [item.id, item]));
-    const coverage = new Map<string, boolean>();
+    const trackingIssues = new Map<string, string | null>();
     for (const row of rows) {
       const item = items.get(row.itemId ?? '');
       const company = item && companies.get(item.companyId);
@@ -669,19 +669,17 @@ export class MarketplaceService {
           );
           const positive = desiredStock(state, row, 'current', undefined, item) > 0;
           if (state.mode === 'live') {
-            if (!coverage.has(company.id)) {
-              coverage.set(
+            if (!trackingIssues.has(company.id)) {
+              trackingIssues.set(
                 company.id,
                 this.availability.coverageCommand('/api/billing/coverage', {
                   companyId: company.id,
                   accountId: row.accountId,
-                }).current,
+                }).issue ?? null,
               );
             }
-            if (positive && !coverage.get(company.id))
-              throw new InputError(
-                'Confirm the starting stock in Order matching for this company.',
-              );
+            const issue = trackingIssues.get(company.id);
+            if (positive && issue) throw new InputError(issue);
             if (positive && row.policy === 'limited')
               throw new InputError('Positive Limited sales need verified allowance accounting.');
           }
@@ -693,8 +691,8 @@ export class MarketplaceService {
             ? 'Last check blocked. ' + lastBlocker
             : queued
               ? 'Queued for a stock check'
-              : coverage.get(company.id) === false
-                ? 'Ready for the next Tally change. Confirm starting stock in Order matching for sale checks.'
+              : trackingIssues.get(company.id)
+                ? 'Ready for the next Tally change. ' + trackingIssues.get(company.id)
                 : 'Ready for the next Tally change or verified sale';
         } catch (error) {
           if (!(error instanceof InputError)) throw error;
@@ -756,6 +754,11 @@ export class MarketplaceService {
     const account = this.account(input.accountId);
     if (path === '/api/billing/coverage' || path === '/api/billing/coverage/start')
       return this.availability.coverageCommand(path, input);
+    if (path === '/api/billing/pending' || path === '/api/billing/pending/recheck') {
+      return this.serial('stock-evidence:' + requireText(input.companyId, 'Tally company'), () =>
+        this.billing.pendingOrders(this.availability, input, account.id, path.endsWith('/recheck')),
+      );
+    }
     // A long period of order history must not delay an urgent stock correction.
     // Revalidate seller ownership if credentials or catalogue access change meanwhile.
     return this.serial('billing:' + account.id, () =>

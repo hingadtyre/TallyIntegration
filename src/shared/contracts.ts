@@ -161,6 +161,8 @@ export interface MappingInput {
   listingId: string;
   pickupLocation?: string;
   itemId: string;
+  orderSource?: { companyId: string; accountId: string; listingId: string; locationId: string };
+  keepPaused?: boolean;
   expectedUnit?: string;
   confirmPackEvidence: boolean;
   packSource?: 'packages' | 'manual';
