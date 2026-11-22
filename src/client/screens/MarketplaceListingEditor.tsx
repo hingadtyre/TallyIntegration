@@ -6,6 +6,7 @@ import type {
 } from '../../shared/marketplace-contracts.js';
 import { errorMessage, RequestError } from '../api.js';
 import { Icon, Modal } from '../components.js';
+import { formatRemainingSales } from '../format.js';
 import { marketplaceApi } from '../marketplace-api.js';
 import { StockRecoveryAction } from './MarketplaceStockRecovery.js';
 
@@ -223,7 +224,7 @@ export function MarketplaceListingEditor({
             <p>
               {policy.companyName}
               {!policy.paused && ` · ${policy.automationStatus ?? 'Status unavailable'}`}
-              {policy.policy === 'limited' && ` · ${policy.remaining ?? 'Unknown'} sales remaining`}
+              {policy.policy === 'limited' && ` · ${formatRemainingSales(policy.remaining)}`}
             </p>
             {policy.companyId && (
               <p>

@@ -18,10 +18,19 @@ export function formatQuantity(value: number | null): string {
   return value === null ? '-' : new Intl.NumberFormat().format(value);
 }
 
+export function formatUnits(quantity: number, source: 'listing' | 'Tally'): string {
+  return `${quantity} ${source} unit${quantity === 1 ? '' : 's'}`;
+}
+
+export function formatRemainingSales(remaining: number | null): string {
+  if (remaining === null) return 'Remaining allowance unknown';
+  return `${remaining} ${remaining === 1 ? 'sale' : 'sales'} remaining`;
+}
+
 export function formatPolicy(listing: Listing): string {
   if (listing.policy === 'limited') {
     if (listing.remaining === 0) return 'Allowance used up';
-    return `${listing.remaining} ${listing.remaining === 1 ? 'sale' : 'sales'} remaining`;
+    return formatRemainingSales(listing.remaining);
   }
   return 'Auto';
 }

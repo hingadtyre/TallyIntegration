@@ -9,6 +9,7 @@ import type {
 import type { Listing, Snapshot } from '../../shared/contracts.js';
 import { errorMessage, requestJson } from '../api.js';
 import { Modal } from '../components.js';
+import { formatUnits } from '../format.js';
 import { PackForm, type SaveMapping } from './MappingDialog.js';
 
 type Group = PendingListingGroup & { trackedIds: string[] };
@@ -275,7 +276,7 @@ export function BillingListingMappings({
     );
   }
   return (
-    <section className="panel billing-results">
+    <section className="panel billing-results billing-listing-mappings">
       <div className="panel-heading">
         <div>
           <h2>Listings from orders</h2>
@@ -330,14 +331,14 @@ export function BillingListingMappings({
             <p>{checkSummary(result.rows)}</p>
             <details>
               <summary>Order item details</summary>
-              <ul>
+              <ul className="billing-order-details">
                 {result.rows.map((row) => (
                   <li key={row.orderItemId}>
                     <strong>
                       {row.orderItemId} · {resultLabels[row.status]}
                     </strong>
-                    {row.baseUnits !== null && ` · ${tallyUnits(row.baseUnits)}`}
-                    <small>{row.reason}</small>
+                    {row.baseUnits !== null && ` · ${formatUnits(row.baseUnits, 'Tally')}`}
+                    <p>{row.reason}</p>
                   </li>
                 ))}
               </ul>
@@ -367,10 +368,6 @@ export function BillingListingMappings({
   );
 }
 
-function tallyUnits(quantity: number) {
-  return `${quantity} Tally unit${quantity === 1 ? '' : 's'}`;
-}
-
 function checkSummary(rows: PendingOrderResult[]) {
   const awaiting = rows.filter((row) => row.status === 'reserved');
   const count = (status: PendingOrderResult['status']) =>
@@ -378,13 +375,15 @@ function checkSummary(rows: PendingOrderResult[]) {
   const reserved = awaiting.every((row) => row.baseUnits !== null)
     ? awaiting.reduce((total, row) => total + row.baseUnits!, 0)
     : null;
-  const parts = [
-    `${count('matched')} billed`,
-    `${awaiting.length} awaiting a bill`,
-    reserved === null ? 'Reserved Tally units unknown' : `${tallyUnits(reserved)} reserved`,
-  ];
   const review = count('review') + count('unmapped');
-  if (review) parts.push(`${review} need review`);
+  const parts = [`${count('matched')} billed`, `${awaiting.length} awaiting a bill`];
+  if (reserved === null) {
+    parts.push('Reserved Tally units unknown');
+  } else if (!review || reserved > 0) {
+    const units = formatUnits(reserved, 'Tally');
+    parts.push(review ? `${units} in confirmed reservations` : `${units} reserved`);
+  }
+  if (review) parts.push(`${review} ${review === 1 ? 'needs' : 'need'} review`);
   if (count('cancelled')) parts.push(`${count('cancelled')} cancelled`);
   return parts.join(' · ');
 }

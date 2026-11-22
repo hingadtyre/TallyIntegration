@@ -4,9 +4,12 @@ import type {
   BillingReport,
   BillingRow,
   BillingRule,
+  PendingOrderResult,
 } from '../../../src/shared/billing-contracts.js';
 import { initialState } from '../../../src/server/seed.js';
 import { App } from '../../../src/client/App.js';
+import { BillingListingMappings } from '../../../src/client/screens/BillingListingMappings.js';
+import { BillingResults } from '../../../src/client/screens/BillingResults.js';
 import { BillingScreen } from '../../../src/client/screens/BillingScreen.js';
 import {
   act,
@@ -50,6 +53,29 @@ const report: BillingReport = {
     { name: 'Sample tyre', unit: 'tyres', physical: 6, unmatchedUnits: 2, previewAvailable: 4 },
   ],
 };
+
+test('the preview shows the listing and Tally quantities in their own units', () => {
+  const rows = [
+    { ...item, orderItemId: 'single', baseUnits: 1 },
+    { ...item, orderItemId: 'pair' },
+    { ...item, orderItemId: 'two-pairs', quantity: 2, baseUnits: 4 },
+    { ...item, orderItemId: 'unmapped', status: 'unmapped' as const, baseUnits: null },
+  ];
+  render(
+    <BillingResults
+      report={{ ...report, rows }}
+      confirmed={false}
+      busy={false}
+      onMatch={assert.fail}
+      onUnmatch={assert.fail}
+    />,
+  );
+  const table = within(screen.getByRole('table', { name: 'Order and bill matches' }));
+  assert.ok(table.getByText('1 listing unit · 1 Tally unit'));
+  assert.ok(table.getByText('1 listing unit · 2 Tally units'));
+  assert.ok(table.getByText('2 listing units · 4 Tally units'));
+  assert.ok(table.getByText('1 listing unit · Tally units unknown'));
+});
 
 test('seller selects their ledger, previews, confirms setup, and explicitly matches or releases a bill', async (t) => {
   const state = initialState('demo', 'unused');
@@ -349,10 +375,52 @@ test('maps a listing once and checks tracked orders outside the current billing 
   fireEvent.click(retry);
   await screen.findByText('1 billed · 1 awaiting a bill · 1 Tally unit reserved');
   fireEvent.click(screen.getByText('Order item details'));
-  assert.ok(screen.getByText('OI-earlier · Billed in Tally'));
-  assert.ok(screen.getByText('OI-later · Reserved for this order'));
+  const [billed, reserved] = screen.getAllByRole('listitem');
+  assert.ok(within(billed).getByText('OI-earlier · Billed in Tally'));
+  assert.equal(within(billed).getByRole('paragraph').textContent, 'Already billed on INV-2.');
+  assert.ok(within(reserved).getByText('OI-later · Reserved for this order'));
+  assert.equal(within(reserved).getByRole('paragraph').textContent, 'Awaiting a matching bill.');
   assert.equal(commands.filter((path) => path === '/api/mappings').length, 1);
   assert.ok(screen.getByText('No order items in this preview'));
+});
+
+test('the order check distinguishes confirmed reservations while another order needs review', async (t) => {
+  const state = initialState('demo', 'unused');
+  const listing = state.listings[0];
+  const source = { listingId: 'FK-71', sku: listing.sku, location: listing.location };
+  const rows: PendingOrderResult[] = [
+    { orderItemId: 'pair', status: 'reserved', baseUnits: 2, reason: 'Awaiting a matching bill.' },
+    { orderItemId: 'unknown', status: 'review', baseUnits: null, reason: 'Check the order.' },
+  ];
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    if (url === '/api/billing/pending/recheck') return response({ ...source, rows });
+    assert.equal(url, '/api/billing/pending');
+    return response({
+      trackingStarted: true,
+      listings: [{ ...source, mapped: true, orderItemIds: rows.map((row) => row.orderItemId) }],
+    });
+  });
+  render(
+    <BillingListingMappings
+      companyId={state.companies[0].id}
+      accountId={listing.accountId}
+      inventory={state}
+      report={report}
+      trackingRevision={0}
+      busy={false}
+      onSaveMapping={() => assert.fail('Checking saved orders must not change the mapping.')}
+      onRefreshPreview={async () => {}}
+    />,
+  );
+  fireEvent.click(await screen.findByText('Previously mapped listings (1)'));
+  const check = screen.getByRole('button', { name: 'Check orders' });
+  fireEvent.click(check);
+  await screen.findByText(
+    '0 billed · 1 awaiting a bill · 2 Tally units in confirmed reservations · 1 needs review',
+  );
+  rows[0] = { ...rows[0], status: 'matched', reason: 'Recorded in Tally.' };
+  fireEvent.click(check);
+  await screen.findByText('1 billed · 0 awaiting a bill · 1 needs review');
 });
 
 test('a preview-only order completes the exact pickup of a paused SKU mapping and refreshes bill matching', async (t) => {

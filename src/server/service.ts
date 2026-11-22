@@ -517,10 +517,11 @@ export class InventoryService {
         listing.packSource = input.packSource;
         listing.packSize = size;
         if (!sameConversion) listing.packConfirmedAt = new Date().toISOString();
+        const units = `${size} Tally ${size === 1 ? 'unit' : 'units'} per sale`;
         listing.packEvidence =
           input.packSource === 'packages'
-            ? `Confirmed ${size} Tally units per sale using Flipkart's package count.`
-            : `Seller confirmed ${size} Tally units per sale.`;
+            ? `Confirmed ${units} using Flipkart's package count.`
+            : `Seller confirmed ${units}.`;
         listing.verified = true;
         listing.sourceScope = input.sourceScope;
         listing.tyreFloor = input.tyreFloor;

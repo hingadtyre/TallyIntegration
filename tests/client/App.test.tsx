@@ -374,7 +374,13 @@ test('successful mapping closes the dialog and shows the listing under the chose
       state = {
         ...state,
         listings: state.listings.map((listing) =>
-          listing.id === 'listing-9' ? { ...listing, itemId: 'item-d' } : listing,
+          listing.id === 'listing-9'
+            ? {
+                ...listing,
+                itemId: 'item-d',
+                packEvidence: 'Seller confirmed 1 Tally units per sale.',
+              }
+            : listing,
         ),
       };
       return response(state);
@@ -396,6 +402,7 @@ test('successful mapping closes the dialog and shows the listing under the chose
   assert.ok(screen.getByText('SAMPLE-UNMAPPED-1'));
   assert.ok(screen.getByText('8 filtered listings'));
   assert.ok(screen.getByText('Mapping and Set of saved.'));
+  assert.ok(screen.getByTitle('Seller confirmed 1 Tally unit per sale.'));
 });
 
 test('selected listings keep priority through zero draft, review, publication and readback', async (t) => {

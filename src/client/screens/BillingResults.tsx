@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { BillingReport, BillingRow } from '../../shared/billing-contracts.js';
-import { formatDateTime } from '../format.js';
+import { formatDateTime, formatUnits } from '../format.js';
 
 const saleDate = new Intl.DateTimeFormat('en-IN', {
   dateStyle: 'medium',
@@ -180,8 +180,8 @@ function OrderRow({
       <td data-label="Item and stock">
         <strong>{row.sku}</strong>
         <small>
-          {row.quantity} listing units ·{' '}
-          {row.baseUnits === null ? 'Tally units unknown' : row.baseUnits + ' Tally units'}
+          {formatUnits(row.quantity, 'listing')} ·{' '}
+          {row.baseUnits === null ? 'Tally units unknown' : formatUnits(row.baseUnits, 'Tally')}
         </small>
         <small>{row.location}</small>
       </td>

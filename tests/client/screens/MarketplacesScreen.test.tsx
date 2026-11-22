@@ -171,6 +171,7 @@ test('a listing without a stock location still shows its shipping package count'
   assert.ok(screen.getByRole('columnheader', { name: 'Shipping packages' }));
   const row = screen.getByRole('row', { name: /Marketplace tyre/ });
   assert.ok(within(row).getByRole('cell', { name: '2' }));
+  assert.ok(screen.getByText('1 matching listing'));
   assert.ok(within(row).getByText('Flipkart supplied no stock location.'));
   assert.equal(within(row).queryByRole('button', { name: /Edit stock/ }), null);
 });
@@ -504,12 +505,15 @@ test('a live sales allowance permits zero while requiring a confirmed policy cha
   );
   render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
   await openListings();
+  const row = screen.getByRole('row', { name: /Marketplace tyre/ });
+  assert.ok(within(row).getByText(/1 sale remaining/));
   fireEvent.click(
     screen.getByRole('button', { name: 'Edit stock for SKU-seller-a at warehouse-1' }),
   );
   const dialog = screen.getByRole('dialog', { name: 'Edit stock' });
   const stock = within(dialog).getByLabelText('Stock');
   fireEvent.change(stock, { target: { value: '0' } });
+  assert.ok(within(dialog).getByText(/1 sale remaining/));
   assert.equal(
     (within(dialog).getByRole('button', { name: 'Apply and pause sync' }) as HTMLButtonElement)
       .disabled,

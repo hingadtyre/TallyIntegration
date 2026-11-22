@@ -10,7 +10,7 @@ import type {
 } from '../../shared/marketplace-contracts.js';
 import { errorMessage, requestJson } from '../api.js';
 import { Icon, ResumeSyncButton } from '../components.js';
-import { formatDateTime as time } from '../format.js';
+import { formatDateTime as time, formatRemainingSales } from '../format.js';
 import { marketplaceApi } from '../marketplace-api.js';
 import { MarketplaceAccountForm } from './MarketplaceAccountForm.js';
 import { MarketplaceStockRecovery, StockRecoveryAction } from './MarketplaceStockRecovery.js';
@@ -523,7 +523,11 @@ function MarketplaceListings({
           </div>
         )}
         <div className="table-footer">
-          <span>{data ? `${data.total} matching listings` : 'No observations loaded'}</span>
+          <span>
+            {data
+              ? `${data.total} matching listing${data.total === 1 ? '' : 's'}`
+              : 'No observations loaded'}
+          </span>
           <div className="marketplace-pagination">
             <button
               className="button secondary"
@@ -775,7 +779,7 @@ function MarketplaceListingRow({
                 </button>
                 <small>
                   {policy?.companyName ?? 'Not mapped to Tally'}
-                  {policy?.policy === 'limited' && ` · ${policy.remaining ?? '?'} sales remaining`}
+                  {policy?.policy === 'limited' && ` · ${formatRemainingSales(policy.remaining)}`}
                 </small>
                 {policy?.paused && policy.companyId ? (
                   <ResumeSyncButton

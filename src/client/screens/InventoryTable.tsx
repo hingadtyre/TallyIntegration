@@ -121,7 +121,10 @@ export function ItemRows({
             <td data-label="Set of">
               <button
                 className={`pack-tag ${listing.verified ? '' : 'unverified'}`}
-                title={listing.packEvidence}
+                title={listing.packEvidence.replace(
+                  /\b1 Tally units per sale\b/,
+                  '1 Tally unit per sale',
+                )}
                 aria-label={`Edit Set of for ${listing.sku} at ${listing.location || 'pending pickup location'}`}
                 disabled={busy}
                 onClick={() => onEditPack(listing)}

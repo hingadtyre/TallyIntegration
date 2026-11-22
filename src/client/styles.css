@@ -28,6 +28,7 @@
   --font-caption: 0.75rem;
   --font-body: 0.875rem;
   --font-control: 0.8125rem;
+  --panel-inset: 21px;
 }
 
 * {
@@ -628,7 +629,7 @@ small {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px 21px;
+  padding: 20px var(--panel-inset);
   gap: 20px;
 }
 
@@ -1833,7 +1834,7 @@ small {
 }
 .billing-filters {
   justify-content: space-between;
-  padding: 12px 24px;
+  padding: 12px var(--panel-inset);
 }
 .billing-results .panel-heading p,
 .billing-results small,
@@ -1860,6 +1861,18 @@ small {
 }
 .billing-table small {
   display: block;
+}
+.billing-listing-mappings > p,
+.billing-listing-mappings > details > summary {
+  margin: 0 var(--panel-inset) 16px;
+  overflow-wrap: anywhere;
+}
+.billing-order-details {
+  padding-inline-start: 1.5rem;
+  overflow-wrap: anywhere;
+}
+.billing-order-details li + li {
+  margin-block-start: 0.75rem;
 }
 .billing-choice {
   margin-top: 8px;
@@ -2372,6 +2385,9 @@ small {
   }
 }
 @media (max-width: 720px) {
+  :root {
+    --panel-inset: 18px;
+  }
   .main-content {
     padding: 24px 18px 18px;
   }
@@ -2416,7 +2432,7 @@ small {
     align-items: flex-start;
     flex-direction: column;
     gap: 14px;
-    padding: 18px;
+    padding-block: 18px;
   }
   .account-select {
     width: 100%;
@@ -2498,6 +2514,9 @@ small {
   }
 }
 @media (max-width: 480px) {
+  :root {
+    --panel-inset: 13px;
+  }
   .app-shell {
     --sidebar-rail-width: 54px;
     --sidebar-rail-padding: 6px;
@@ -2532,8 +2551,7 @@ small {
     font-size: 25px;
   }
   .filters,
-  .scope-bar,
-  .panel-heading {
+  .scope-bar {
     padding-left: 13px;
     padding-right: 13px;
   }
@@ -2781,11 +2799,19 @@ small {
   border-bottom: 1px solid var(--line);
   font-size: 12px;
 }
-.marketplace-table th:first-child,
-.marketplace-table td:first-child {
-  padding-left: 24px;
-  width: 32%;
-  min-width: 260px;
+@media (min-width: 961px) {
+  .marketplace-table th:first-child,
+  .marketplace-table td:first-child {
+    padding-left: 24px;
+    width: 32%;
+    min-width: 260px;
+  }
+  .billing-table tr > :first-child {
+    padding-inline-start: var(--panel-inset);
+  }
+  .billing-table tr > :last-child {
+    padding-inline-end: var(--panel-inset);
+  }
 }
 .marketplace-product {
   display: flex;
@@ -3260,6 +3286,9 @@ small {
     gap: 12px 16px;
     padding: 16px;
     border-bottom: 1px solid var(--line);
+  }
+  .billing-table tbody tr {
+    padding-inline: var(--panel-inset);
   }
   .inventory-table .listing-row td,
   .marketplace-table tbody td,

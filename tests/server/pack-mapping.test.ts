@@ -87,6 +87,10 @@ test('package confirmation survives a restart, flags a changed count and preserv
   );
   assert.throws(() => confirm('packages', 1), /actual Flipkart package count/);
   confirm('packages', 2);
+  assert.equal(
+    current().packEvidence,
+    "Confirmed 2 Tally units per sale using Flipkart's package count.",
+  );
   const beforeRestart = current();
   f.reopen();
   assert.deepEqual(current(), beforeRestart);
@@ -117,6 +121,8 @@ test('package confirmation survives a restart, flags a changed count and preserv
   assert.equal(current().verified, true);
   assert.equal(current().packageCount, 5);
   assert.equal(current().packageAvailable, false);
+  confirm('manual', 1);
+  assert.equal(current().packEvidence, 'Seller confirmed 1 Tally unit per sale.');
   f.service.remove('demo-a', listingId, true);
   assert.equal(current().packSize, null);
   assert.equal(current().syncPendingItemVersion, null);
