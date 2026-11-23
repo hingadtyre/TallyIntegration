@@ -17,6 +17,65 @@ const proposal: Proposal = {
   stale: false,
 };
 
+test('a pending order calculation shows its automatic retry and then the verified proposal', () => {
+  const state = initialState('demo', 'unused');
+  const props = {
+    disabled: false,
+    onDirty: () => {},
+    onSave: async () => ({ ok: true as const, value: state }),
+  };
+  const pending = { ...state.listings[0], orderProposalPending: true };
+  const { rerender } = render(<QuantityEditor {...props} listing={pending} />);
+  const input = screen.getByRole('spinbutton') as HTMLInputElement;
+  assert.equal(input.value, '');
+  assert.ok(screen.getByText('Checking orders and Tally stock…'));
+  rerender(
+    <QuantityEditor {...props} listing={{ ...pending, proposalIssue: 'Tally is offline.' }} />,
+  );
+  assert.ok(screen.getByText('Tally is offline. Stockbridge will check again automatically.'));
+  rerender(
+    <QuantityEditor
+      {...props}
+      listing={state.listings[0]}
+      proposal={{ ...proposal, quantity: 1, calculated: 1 }}
+    />,
+  );
+  assert.equal(input.value, '1');
+  assert.ok(screen.getByText('Calculated draft'));
+});
+
+test('a seller draft shows its publication or stale status alongside the pending order check', () => {
+  const state = initialState('demo', 'unused');
+  const props = {
+    disabled: false,
+    onDirty: () => {},
+    onSave: async () => ({ ok: true as const, value: state }),
+  };
+  const pending = {
+    ...state.listings[0],
+    orderProposalPending: true,
+    proposalIssue: 'Tally is offline.',
+  };
+  const draft = { ...proposal, quantity: 0, edited: true };
+  const { rerender } = render(<QuantityEditor {...props} listing={pending} proposal={draft} />);
+  const retry = 'Tally is offline. Stockbridge will check again automatically.';
+  const input = screen.getByRole('spinbutton') as HTMLInputElement;
+  assert.equal(input.value, '0');
+  assert.ok(screen.getByText('Publishing pauses Tally sync'));
+  assert.ok(
+    input.getAttribute('aria-describedby')?.split(' ').includes(screen.getByText(retry).id),
+  );
+  rerender(<QuantityEditor {...props} listing={pending} proposal={{ ...draft, stale: true }} />);
+  assert.ok(screen.getByText('Save again to review'));
+  assert.ok(screen.getByText(retry));
+  fireEvent.change(input, { target: { value: '2' } });
+  assert.ok(screen.getByText('Unsaved draft'));
+  assert.ok(screen.getByText(retry));
+  rerender(<QuantityEditor {...props} listing={state.listings[0]} proposal={draft} />);
+  assert.equal(input.value, '2');
+  assert.equal(screen.queryByText(retry), null);
+});
+
 test('invalid quantities stay editable and never reach the save command', async () => {
   const state = initialState('demo', 'unused');
   let saves = 0;

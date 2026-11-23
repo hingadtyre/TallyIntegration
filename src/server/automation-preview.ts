@@ -156,6 +156,7 @@ export class AutomationReviews {
             listing.verified,
             listing.tyreFloor,
             listing.paused,
+            !!listing.orderProposalPending,
             listing.policy,
             listing.remaining,
             listing.packSource === 'packages' && [listing.packageAvailable, listing.packageCount],
@@ -237,7 +238,7 @@ export class AutomationReviews {
         const observed = checkLocation(listing, current);
         row.observed = observed;
         let quantity = desiredStock(input.state, listing, 'current', undefined, item);
-        if (quantity > 0 && checkOrders) {
+        if (checkOrders && (listing.orderProposalPending || quantity > 0)) {
           if (!availableReads.has(item.id))
             availableReads.set(
               item.id,

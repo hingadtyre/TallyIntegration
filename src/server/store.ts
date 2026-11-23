@@ -3,7 +3,11 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import type { Snapshot } from '../shared/contracts.js';
-import type { StockSyncCoverage } from '../shared/stock-coverage.js';
+import {
+  isVerifiedCancellation,
+  isVerifiedSale,
+  type StockSyncCoverage,
+} from '../shared/stock-coverage.js';
 import { backupDatabase } from './storage/backup.js';
 import { readBilling, writeBilling, type BillingData } from './storage/billing-records.js';
 import { prepareDatabase } from './storage/migrations.js';
@@ -125,15 +129,16 @@ export class Store {
       if (!listing || (listing.itemId && listing.location)) return change(market, state);
       const previous = { ...listing };
       const billing = readBilling(this.database);
-      const baselines: StockSyncCoverage[] = [];
+      const baselines: { coverage: StockSyncCoverage; current: boolean }[] = [];
       for (const rule of billing.rules.filter((r) => r.accountId === listing.accountId)) {
         const coverage = readStockCoverage(this.database, rule.companyId);
-        if (
-          coverage &&
-          coverage.signature ===
-            stockConfiguration(state, market, billing, rule.companyId).signature
-        )
-          baselines.push(coverage);
+        if (coverage)
+          baselines.push({
+            coverage,
+            current:
+              coverage.signature ===
+              stockConfiguration(state, market, billing, rule.companyId).signature,
+          });
       }
       change(market, state);
       if (
@@ -145,39 +150,33 @@ export class Store {
             previous.sourceScope !== listing.sourceScope))
       )
         return;
-      for (const coverage of baselines) {
+      for (const { coverage, current } of baselines) {
         const ctx = stockConfiguration(state, market, billing, coverage.companyId);
-        coverage.signature = ctx.signature;
         let newlyBound = false;
-        let hasOrders = false;
-        for (const entry of coverage.orders) {
-          const o = entry.order;
-          if (
-            entry.accountId !== listing.accountId ||
-            o.sku !== listing.sku ||
-            o.locationId !== listing.location ||
-            mappedSaleItem(ctx, entry.accountId, o) !== listing.itemId
-          )
-            continue;
+        const orders = coverage.orders.filter(
+          ({ accountId, order }) =>
+            accountId === listing.accountId &&
+            order.sku === listing.sku &&
+            order.locationId === listing.location &&
+            mappedSaleItem(ctx, accountId, order) === listing.itemId,
+        );
+        const inCompany = ctx.items.get(listing.itemId)?.companyId === coverage.companyId;
+        if (inCompany && orders.length) {
+          invalidateReservationDrafts(state, new Set([listing.itemId]));
+          if (orders.some(({ order }) => !isVerifiedCancellation(order)))
+            listing.orderProposalPending = true;
+        }
+        // A waiting order can request a local calculation, but only a current
+        // baseline can extend its mapping evidence or authorize order-based sync.
+        if (!current) continue;
+        coverage.signature = ctx.signature;
+        for (const { order: o } of orders) {
           o.firstSeenUnmapped = true;
-          hasOrders = true;
-          if (
-            o.stockDisposition ||
-            o.stockIdentityConflict ||
-            o.eligibilityUnverified ||
-            o.stockReconciliationRequired
-          )
-            continue;
+          if (!isVerifiedSale(o)) continue;
           o.stockSyncQueued = true;
           newlyBound = true;
         }
-        if (hasOrders && ctx.items.get(listing.itemId)?.companyId === coverage.companyId)
-          invalidateReservationDrafts(state, new Set([listing.itemId]));
-        if (
-          newlyBound &&
-          ctx.company.automation &&
-          ctx.items.get(listing.itemId)?.companyId === coverage.companyId
-        ) {
+        if (newlyBound && ctx.company.automation && inCompany) {
           const token = randomUUID();
           for (const sibling of state.listings)
             if (sibling.itemId === listing.itemId && sibling.verified && !sibling.paused)

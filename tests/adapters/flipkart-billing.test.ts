@@ -30,6 +30,212 @@ const shipment = {
 };
 const empty = () => Response.json({ hasMore: false, shipments: [] });
 
+test('verified pre-dispatch stock and billing orders accept an omitted or null courier return', async () => {
+  const client = new FlipkartBillingClient({
+    request: async (_url, options) => {
+      const { filter } = JSON.parse(String(options?.body));
+      if (filter.type !== 'preDispatch' || filter.hold === true) return empty();
+      const type = filter.shipmentTypes[0];
+      const items = [
+        'APPROVED',
+        'PACKING_IN_PROGRESS',
+        'FORM_FAILED',
+        'PACKED',
+        'READY_TO_DISPATCH',
+      ].map((status, index) => ({
+        ...baseItem,
+        orderItemId: type + '-' + status,
+        status,
+        is_replacement: type === 'NORMAL' ? false : undefined,
+        isReplacement: type === 'SELF' ? false : undefined,
+        serviceProfile: type === 'NORMAL' ? 'Seller_Fulfilment' : 'NON_FBF',
+        courierReturn: index % 2 ? undefined : null,
+      }));
+      return Response.json({
+        hasMore: false,
+        shipments: [{ ...shipment, shipmentType: type, orderItems: items }],
+      });
+    },
+  });
+  for (const orders of [
+    await client.readStockOrders(token, from, to),
+    await client.readOrders(token, from, to),
+  ]) {
+    assert.equal(orders.length, 10);
+    for (const order of orders) {
+      assert.equal(order.eligibilityUnverified, undefined, order.orderItemId);
+      assert.equal(order.stockDisposition, undefined, order.orderItemId);
+      assert.equal(order.stockReconciliationRequired, undefined, order.orderItemId);
+    }
+  }
+});
+
+test('a missing courier-return flag still requires an unheld forward sale in the matching search partition', async () => {
+  const missing = { ...baseItem, courierReturn: null };
+  const item = (id: string, overrides: Record<string, unknown> = {}) => ({
+    ...missing,
+    orderItemId: id,
+    ...overrides,
+  });
+  const client = new FlipkartBillingClient({
+    request: async (_url, options) => {
+      const { filter } = JSON.parse(String(options?.body));
+      if (filter.shipmentTypes[0] !== 'NORMAL') return empty();
+      let shipments;
+      if (filter.type === 'preDispatch' && filter.hold !== true) {
+        shipments = [
+          { ...shipment, hold: undefined, orderItems: [item('unknown-hold')] },
+          { ...shipment, shipmentType: undefined, orderItems: [item('unknown-type')] },
+          {
+            ...shipment,
+            orderItems: [
+              item('unknown-profile', { serviceProfile: null }),
+              item('malformed-profile', { serviceProfile: ['NON_FBF'] }),
+              item('unknown-replacement', { is_replacement: undefined }),
+              item('positive-replacement-alias', { isReplacement: true }),
+              item('malformed-flag', { courierReturn: 'false' }),
+              item('wrong-status', { status: 'SHIPPED' }),
+              item('unknown-status', { status: 'UNKNOWN' }),
+              item('return-addon', { add_ons: [{ is_rto: true }] }),
+              item('malformed-addon', { add_ons: [{ is_rto: 'true' }] }),
+              item('positive-courier-return', { courierReturn: true }),
+              item('cancel-date', { cancellationDate: to }),
+            ],
+          },
+        ];
+      } else if (filter.type === 'preDispatch')
+        shipments = [{ ...shipment, hold: true, orderItems: [item('held')] }];
+      else if (filter.type === 'postDispatch')
+        shipments = [
+          {
+            ...shipment,
+            orderItems: [item('wrong-partition'), item('shipped', { status: 'SHIPPED' })],
+          },
+        ];
+      else
+        shipments = [
+          {
+            ...shipment,
+            orderItems: [
+              item(filter.cancellationType, { status: 'CANCELLED', cancellationDate: to }),
+            ],
+          },
+        ];
+      return Response.json({ hasMore: false, shipments });
+    },
+  });
+  const stock = await client.readStockOrders(token, from, to);
+  assert.equal(stock.length, 19);
+  for (const row of stock) {
+    assert.equal(row.stockDisposition, 'uncertain', row.orderItemId);
+    assert.equal(row.eligibilityUnverified, true, row.orderItemId);
+  }
+  const preview = await client.readOrders(token, from, to);
+  assert.equal(preview.length, 11);
+  for (const row of preview) assert.equal(row.eligibilityUnverified, true, row.orderItemId);
+});
+
+test('a duplicate order observation cannot clear disputed eligibility within the same stock or billing read', async () => {
+  const clean = { ...baseItem, courierReturn: null };
+  for (const suspect of [
+    { ...clean, is_replacement: undefined },
+    { ...clean, add_ons: [{ is_rto: true }] },
+    { ...clean, isReplacement: true },
+    { ...clean, serviceProfile: 'FBF' },
+  ]) {
+    for (const orderItems of [
+      [suspect, clean],
+      [clean, suspect],
+    ]) {
+      const client = new FlipkartBillingClient({
+        request: async (_url, options) => {
+          const { filter } = JSON.parse(String(options?.body));
+          if (filter.type !== 'preDispatch' || filter.hold || filter.shipmentTypes[0] !== 'NORMAL')
+            return empty();
+          return Response.json({ hasMore: false, shipments: [{ ...shipment, orderItems }] });
+        },
+      });
+      if (suspect.serviceProfile === 'FBF')
+        await assert.rejects(client.readStockOrders(token, from, to), /incomplete or inconsistent/);
+      else {
+        const [stock] = await client.readStockOrders(token, from, to);
+        assert.equal(stock.stockDisposition, 'uncertain');
+      }
+      const preview = await client.readOrders(token, from, to);
+      if (suspect.is_replacement === undefined)
+        assert.equal(preview[0].eligibilityUnverified, true);
+      else assert.deepEqual(preview, []);
+    }
+  }
+});
+
+test('location recovery accepts confirming pre-dispatch details and rejects return, replacement or identity contradictions', async () => {
+  const sale = { ...baseItem, status: 'READY_TO_DISPATCH', courierReturn: null };
+  let detail: Record<string, unknown> = { ...sale, courierReturn: false };
+  const client = new FlipkartBillingClient({
+    request: async (_url, options) => {
+      if (options?.method === 'GET')
+        return Response.json({ shipments: [{ ...shipment, orderItems: [detail] }] });
+      const { filter } = JSON.parse(String(options?.body));
+      if (filter.type !== 'preDispatch' || filter.hold || filter.shipmentTypes[0] !== 'NORMAL')
+        return empty();
+      return Response.json({
+        hasMore: false,
+        shipments: [{ ...shipment, locationId: null, orderItems: [sale] }],
+      });
+    },
+  });
+  for (const method of ['readOrders', 'readStockOrders'] as const) {
+    for (const courierReturn of [false, null, undefined]) {
+      detail = { ...sale, courierReturn };
+      const [order] = await client[method](token, from, to);
+      assert.equal(order.locationId, shipment.locationId);
+      assert.equal(order.eligibilityUnverified, undefined);
+      assert.equal(order.stockDisposition, undefined);
+    }
+    for (const conflict of [
+      { courierReturn: true },
+      { add_ons: [{ is_rto: true }] },
+      { add_ons: { is_rto: true } },
+      { status: 'RETURNED' },
+      { isReplacement: true },
+      { orderItemId: 'other' },
+    ]) {
+      detail = { ...sale, ...conflict };
+      await assert.rejects(client[method](token, from, to), /incomplete or inconsistent/);
+    }
+  }
+});
+
+test('dispatch evidence prevents accepting a later pre-dispatch omission while normal forward progress counts once', async () => {
+  const ready = { ...baseItem, status: 'READY_TO_DISPATCH', courierReturn: null };
+  const shipped = { ...baseItem, status: 'SHIPPED' };
+  let orderItems = [ready, shipped];
+  const client = new FlipkartBillingClient({
+    request: async (_url, options) => {
+      const { filter } = JSON.parse(String(options?.body));
+      if (filter.type !== 'preDispatch' || filter.hold || filter.shipmentTypes[0] !== 'NORMAL')
+        return empty();
+      return Response.json({ hasMore: false, shipments: [{ ...shipment, orderItems }] });
+    },
+  });
+  for (const method of ['readOrders', 'readStockOrders'] as const) {
+    orderItems = [ready, shipped];
+    const forward = await client[method](token, from, to);
+    assert.equal(forward.length, 1);
+    assert.equal(forward[0].eligibilityUnverified, undefined);
+    assert.equal(forward[0].preDispatchWithoutCourierReturn, undefined);
+    orderItems = [shipped, ready];
+    const [regression] = await client[method](token, from, to);
+    assert.equal(regression.eligibilityUnverified, true);
+    if (method === 'readStockOrders') {
+      assert.equal(regression.stockDisposition, 'uncertain');
+      assert.equal(regression.stockReconciliationRequired, true);
+      assert.equal(regression.stockDispatchObserved, true);
+    }
+  }
+});
+
 test('optional classification fields leave an identified line visible for review, and unzoned seller timestamps use IST', async () => {
   let count = 0;
   const client = new FlipkartBillingClient({

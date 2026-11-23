@@ -150,7 +150,7 @@ async function runCommand(
     case '/api/settings':
       return service.settings(input.settings);
     case '/api/mappings':
-      return service.mapping(input);
+      return service.mapAndCalculate(input);
     case '/api/mappings/remove':
       return service.remove(input.companyId, input.listingId, input.leaveRemoteStock);
     case '/api/backup':

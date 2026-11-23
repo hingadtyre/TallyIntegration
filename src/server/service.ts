@@ -50,6 +50,7 @@ export class InventoryService {
   private readonly catalogPolling: PollingLoop;
   private readonly orderPolling: PollingLoop;
   private readonly draftPolling: PollingLoop;
+  private readonly draftClock: () => number;
   private readonly blockedDrafts = new Map<string, { inputs: string; retryAt: number }>();
   private readonly publishingBatches = new WeakSet<object>();
   private readonly pendingOrderWakes = new Map<string, object | undefined>();
@@ -73,6 +74,7 @@ export class InventoryService {
     this.diagnostics =
       dependencies.diagnostics ?? new Diagnostics(join(dirname(store.file), 'diagnostics.ndjson'));
     this.marketplaces = dependencies.marketplaces;
+    this.draftClock = () => dependencies.timers?.now() ?? Date.now();
     this.automationReviews = new AutomationReviews(store, this.marketplaces);
     const createReader =
       dependencies.createTallyReader ?? ((endpoint) => new TallyClient(endpoint));
@@ -105,7 +107,7 @@ export class InventoryService {
       timers: dependencies.timers,
     });
     this.draftPolling = new PollingLoop({
-      task: () => this.refreshStaleDrafts(dependencies.timers?.now() ?? Date.now()),
+      task: () => this.refreshStaleDrafts(this.draftClock()),
       intervalMilliseconds: () => 15_000,
       enabled: () => true,
       nextRunChanged: () => {},
@@ -221,6 +223,9 @@ export class InventoryService {
         .filter((draft) => !draft.edited && isStaleProposal(state, draft))
         .map((draft) => draft.listingId),
     );
+    for (const row of state.listings) {
+      if (row.orderProposalPending) stale.add(row.id);
+    }
     for (const id of this.blockedDrafts.keys()) {
       if (!stale.has(id)) this.blockedDrafts.delete(id);
     }
@@ -234,23 +239,32 @@ export class InventoryService {
         return !block || now >= block.retryAt || block.inputs !== proposalInputs(state, row);
       });
       if (!selected.length) continue;
-      const rows = await this.calculateListings(state, company.id, selected, {
-        readOnly: true,
-        refreshStale: true,
-      });
-      for (const row of rows) {
-        if (row.status === 'blocked') {
-          const listing = selected.find((listing) => listing.id === row.listingId)!;
-          this.blockedDrafts.set(row.listingId, {
-            inputs: proposalInputs(state, listing),
-            retryAt: now + 120_000,
-          });
-        } else {
-          this.blockedDrafts.delete(row.listingId);
-        }
-      }
+      await this.refreshListingDrafts(state, company.id, selected, now);
     }
     return true;
+  }
+
+  private async refreshListingDrafts(
+    state: Snapshot,
+    companyId: string,
+    selected: Listing[],
+    now: number,
+  ) {
+    const rows = await this.calculateListings(state, companyId, selected, {
+      readOnly: true,
+      refreshStale: true,
+    });
+    for (const row of rows) {
+      if (row.status === 'blocked') {
+        const listing = selected.find((listing) => listing.id === row.listingId)!;
+        this.blockedDrafts.set(row.listingId, {
+          inputs: proposalInputs(state, listing),
+          retryAt: now + 120_000,
+        });
+      } else {
+        this.blockedDrafts.delete(row.listingId);
+      }
+    }
   }
 
   edit(companyId: unknown, listingId: unknown, value: unknown): Snapshot {
@@ -263,7 +277,7 @@ export class InventoryService {
         );
       }
       const draft = prepareProposal(state, listing, quantity);
-      delete listing.proposalIssue;
+      if (!listing.orderProposalPending) delete listing.proposalIssue;
       state.proposals = [...state.proposals.filter((row) => row.listingId !== listing.id), draft];
       const intent =
         quantity === 0 ? 'review zero and pause Tally sync' : `review ${quantity} listing units`;
@@ -588,7 +602,7 @@ export class InventoryService {
     return { rows };
   }
 
-  mapping(input: Record<string, unknown>): Snapshot {
+  private saveMapping(input: Record<string, unknown>): void {
     this.store.updateMapping(input.listingId, (market, state) => {
       const listing = state.listings.find((row) => row.id === input.listingId);
       const item = state.items.find((row) => row.id === input.itemId);
@@ -725,6 +739,21 @@ export class InventoryService {
         { companyId: item.companyId, listingId: listing.id },
       );
     });
+  }
+
+  mapping(input: Record<string, unknown>): Snapshot {
+    this.saveMapping(input);
+    this.draftPolling.wake();
+    return this.snapshot();
+  }
+
+  async mapAndCalculate(input: Record<string, unknown>): Promise<Snapshot> {
+    this.saveMapping(input);
+    const state = this.store.read();
+    const listing = state.listings.find((row) => row.id === input.listingId);
+    const item = state.items.find((row) => row.id === listing?.itemId);
+    if (listing?.orderProposalPending && item)
+      await this.refreshListingDrafts(state, item.companyId, [listing], this.draftClock());
     this.draftPolling.wake();
     return this.snapshot();
   }
@@ -738,6 +767,7 @@ export class InventoryService {
       const listing = requireListings(state, companyId, [listingId])[0];
       listing.itemId = null;
       delete listing.proposalIssue;
+      delete listing.orderProposalPending;
       listing.orderSyncPending = null;
       listing.syncPendingItemVersion = null;
       if (listing.packSource) {

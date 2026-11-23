@@ -10,6 +10,15 @@ export type StockCoverageOrder = FlipkartBillingOrder & {
   firstSeenUnmapped?: true;
 };
 
+export function isVerifiedSale(order: StockCoverageOrder): boolean {
+  return !(
+    order.stockDisposition ||
+    order.eligibilityUnverified ||
+    order.stockIdentityConflict ||
+    order.stockReconciliationRequired
+  );
+}
+
 export function isVerifiedCancellation(order: StockCoverageOrder): boolean {
   return (
     order.stockDisposition === 'cancelled' &&

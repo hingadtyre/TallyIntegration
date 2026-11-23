@@ -137,10 +137,12 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           only to keep the remaining orders in view as you confirm each bill. Choose the tracking
           start date after checking that earlier sales are in Tally. When an order needs a mapping,
           choose Map listing and confirm the Tally item and Set of at that pickup location.
-          Stockbridge checks saved orders from your tracking date against the ledger and reserves
-          unbilled units. A verified seller-fulfilled order can reserve stock before packing. Held
-          orders need review. Existing listings keep syncing while a sale waits for its mapping,
-          even if they share the same tyres.
+          Stockbridge checks saved orders from your tracking date against the ledger. A verified
+          standard or self-ship sale can reserve unbilled units before dispatch. Stockbridge can
+          fill in the first proposed quantity whether the order arrives before or after mapping.
+          With company sync on, eligible listings sharing the Tally item can publish a lower
+          quantity. Held orders, returns and conflicting details need review. Existing listings keep
+          syncing while an order waits for its mapping, even if they share the same tyres.
         </p>
       </details>
       <details className="guide-topic">

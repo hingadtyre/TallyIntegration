@@ -182,6 +182,10 @@ function listing(value: unknown, field: string, legacyHolds?: Set<string>): List
     ...(row.proposalIssue != null && {
       proposalIssue: string(row.proposalIssue, `${field}.proposalIssue`),
     }),
+    ...(row.orderProposalPending != null &&
+      row.orderProposalPending !== false && {
+        orderProposalPending: boolean(row.orderProposalPending, `${field}.orderProposalPending`),
+      }),
     verified: boolean(row.verified, `${field}.verified`),
     observed: row.observed === null ? null : integer(row.observed, `${field}.observed`),
     observedAt: nullableTimestamp(row.observedAt, `${field}.observedAt`),

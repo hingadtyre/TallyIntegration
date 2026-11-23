@@ -255,6 +255,7 @@ function restoredSnapshot(
     if (!listing.paused) listing.version++;
     listing.paused = true;
     delete listing.proposalIssue;
+    delete listing.orderProposalPending;
     listing.observedAt = null;
     if (listing.packageAvailable !== undefined) listing.packageAvailable = false;
     if (listing.syncPendingItemVersion != null) listing.syncPendingItemVersion = null;

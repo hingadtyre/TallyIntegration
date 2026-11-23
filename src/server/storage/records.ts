@@ -83,6 +83,7 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
       pack_size AS packSize, pack_evidence AS packEvidence, verified, observed,
       observed_at AS observedAt, policy, remaining, paused, version
       ${version >= 10 ? ', proposal_issue AS proposalIssue' : ''}
+      ${version >= 13 ? ', order_proposal_pending AS orderProposalPending' : ''}
     FROM listings ORDER BY sort_order
   `,
     )
@@ -94,6 +95,7 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
         ...(skuMappings.has(row.id) && { skuMappingId: skuMappings.get(row.id) }),
         verified: row.verified === 1,
         paused: row.paused === 1,
+        orderProposalPending: row.orderProposalPending === 1,
         ...(pack && {
           packSource: pack.pack_source,
           packageCount: pack.package_count,
@@ -291,6 +293,7 @@ export function writeSnapshot(database: DatabaseSync, input: Snapshot): void {
       remaining: listing.remaining,
       paused: Number(listing.paused),
       ...(version >= 10 && { proposal_issue: listing.proposalIssue ?? null }),
+      ...(version >= 13 && { order_proposal_pending: Number(!!listing.orderProposalPending) }),
       version: listing.version,
       sort_order: index,
     })),

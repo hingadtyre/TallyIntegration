@@ -5,6 +5,7 @@ import { availableForMarketplaces } from '../domain/stock-policy.js';
 import type { PendingOrderResult } from '../shared/billing-contracts.js';
 import {
   isVerifiedCancellation,
+  isVerifiedSale,
   startTrackingMessage,
   type StockCoverageOrder,
   type StockSyncCoverage,
@@ -12,8 +13,8 @@ import {
 import { fingerprint, matchBills, saleDay } from './billing-matcher.js';
 import { sampleBills } from './billing-sample.js';
 import { checkCalculationStock, saveCalculation } from './inventory-calculation.js';
-import { invalidateReservationDrafts } from './proposals.js';
-import { mappedSaleItem, stockConfiguration } from './stock-configuration.js';
+import { invalidateReservationDrafts, queueOrderProposal } from './proposals.js';
+import { mappedSaleItem, mappedSaleListing, stockConfiguration } from './stock-configuration.js';
 import type { BillingSources } from './billing-service.js';
 import type { Store } from './store.js';
 import { InputError, requireText } from './validation.js';
@@ -119,6 +120,7 @@ function orderEvidence(o: StockCoverageOrder) {
     o.stockDispatchObserved ?? false,
     o.stockReconciliationRequired ?? false,
     o.stockShipmentId ?? null,
+    o.preDispatchWithoutCourierReturn ?? false,
     o.stockReturnConflict ?? false,
     o.firstSeenUnmapped ?? false,
   ]);
@@ -131,6 +133,7 @@ function mergeOrders(
   ctx: ReturnType<typeof configuration>,
 ) {
   const changedItems = new Set<string>();
+  const proposalListings = new Set<string>();
   const journal = new Map(
     coverage.orders.map((entry) => [
       JSON.stringify([entry.accountId, entry.order.orderItemId]),
@@ -141,11 +144,16 @@ function mergeOrders(
     const key = JSON.stringify([accountId, order.orderItemId]);
     const prior = journal.get(key)?.order;
     const scopedReturnConflict = prior?.stockReturnConflict || order.stockReturnConflict;
+    const shipmentChanged =
+      prior?.stockShipmentId &&
+      order.stockShipmentId &&
+      prior.stockShipmentId !== order.stockShipmentId;
     // A changed identity or quantity cannot safely be reinterpreted using an
     // older bill. Retain the original identity and the need for reconciliation.
     if (
       prior &&
       (prior.stockIdentityConflict ||
+        shipmentChanged ||
         (scopedReturnConflict
           ? !prior.stockShipmentId || prior.stockShipmentId !== order.stockShipmentId
           : (prior.stockDispatchObserved && order.stockDisposition === 'cancelled') ||
@@ -165,11 +173,16 @@ function mergeOrders(
         },
       });
     } else {
-      const needsReview = prior?.stockReconciliationRequired || order.stockReconciliationRequired;
+      const needsReview =
+        prior?.stockReconciliationRequired ||
+        order.stockReconciliationRequired ||
+        (order.preDispatchWithoutCourierReturn &&
+          (prior?.stockDispatchObserved || prior?.stockDisposition === 'cancelled'));
       journal.set(key, {
         accountId,
         order: {
           ...order,
+          ...(prior?.stockShipmentId && { stockShipmentId: prior.stockShipmentId }),
           ...((prior?.firstSeenUnmapped || (!prior && !mappedSaleItem(ctx, accountId, order))) && {
             firstSeenUnmapped: true,
           }),
@@ -185,11 +198,16 @@ function mergeOrders(
       });
     }
     const current = journal.get(key)!.order;
+    if (isVerifiedSale(current) && (!prior || !isVerifiedSale(prior))) {
+      const listing = mappedSaleListing(ctx, accountId, current);
+      if (listing?.itemId && ctx.items.get(listing.itemId)?.companyId === ctx.company.id)
+        proposalListings.add(listing.id);
+    }
     if (!prior || orderEvidence(current) !== orderEvidence(prior)) {
       for (const id of affectedStockItems(ctx, accountId, current)) changedItems.add(id);
     }
   }
-  return { orders: [...journal.values()], changedItems };
+  return { orders: [...journal.values()], changedItems, proposalListings };
 }
 
 function journalVersion(c: StockSyncCoverage | null) {
@@ -215,25 +233,20 @@ function saveOrderReceipts(
   coverage: StockSyncCoverage,
   accountId: string,
   changedItems: Set<string>,
+  proposalListings: Set<string>,
+  reviewOnly: boolean,
 ) {
   const affected = new Set<string>();
   for (const entry of coverage.orders) {
     const o = entry.order;
-    if (
-      entry.accountId !== accountId ||
-      o.stockSyncQueued ||
-      o.stockDisposition ||
-      o.eligibilityUnverified ||
-      o.stockIdentityConflict ||
-      o.stockReconciliationRequired
-    )
+    if (reviewOnly || entry.accountId !== accountId || o.stockSyncQueued || !isVerifiedSale(o))
       continue;
     const itemId = mappedSaleItem(ctx, accountId, o);
     if (!itemId || ctx.items.get(itemId)?.companyId !== ctx.company.id) continue;
     o.stockSyncQueued = true;
     affected.add(itemId);
   }
-  if (!affected.size && !changedItems.size) {
+  if (!affected.size && !changedItems.size && !proposalListings.size) {
     store.saveStockCoverage(coverage);
     return false;
   }
@@ -241,6 +254,8 @@ function saveOrderReceipts(
   let queued = false;
   store.saveStockCoverage(coverage, (state) => {
     invalidateReservationDrafts(state, changedItems);
+    for (const listing of state.listings)
+      if (proposalListings.has(listing.id)) queueOrderProposal(state, listing);
     if (!state.companies.some((c) => c.id === ctx.company.id && c.automation)) return;
     for (const listing of state.listings)
       if (listing.itemId && affected.has(listing.itemId) && listing.verified && !listing.paused) {
@@ -510,8 +525,9 @@ export class StockAvailabilityService {
       (row) =>
         row.itemId &&
         companyItems.has(row.itemId) &&
-        calculated.has(row.id) &&
-        (!reservations || reservations.has(row.itemId) || calculated.get(row.id)?.stale),
+        (row.orderProposalPending ||
+          (calculated.has(row.id) &&
+            (!reservations || reservations.has(row.itemId) || calculated.get(row.id)?.stale))),
     );
     if (selected.length) {
       // Bills can match or cease to match without changing a shipment, local Tally
@@ -665,23 +681,15 @@ export class StockAvailabilityService {
         verify();
         const merged = mergeOrders(coverage, rule.accountId, orders, ctx);
         coverage.orders = merged.orders;
-        if (mode === 'review') {
-          // A seller opening the order history reads and remembers orders. The
-          // ordinary automation pass can enqueue any eligible receipts later.
-          this.store.saveStockCoverage(
-            coverage,
-            merged.changedItems.size
-              ? (state) => invalidateReservationDrafts(state, merged.changedItems)
-              : undefined,
-          );
-          expected = journalVersion(coverage);
-        } else if (mode === 'publish') {
+        if (mode !== 'preview') {
           const queued = saveOrderReceipts(
             this.store,
             ctx,
             coverage,
             rule.accountId,
             merged.changedItems,
+            merged.proposalListings,
+            mode === 'review',
           );
           expected = journalVersion(coverage);
           if (queued) this.onPending?.(companyId, batch);

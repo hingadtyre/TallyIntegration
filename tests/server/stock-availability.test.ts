@@ -392,6 +392,93 @@ test('a later normal forward status cannot activate stock for a previously obser
   await assert.rejects(s.available(), /unresolved sale, return/);
 });
 
+test('a pre-dispatch courier omission after known dispatch stays under review across later reads and restart', async (t) => {
+  const s = setup(t);
+  s.confirm();
+  const sale = { ...s.orders.get('seller-0')![0], stockShipmentId: 'shipment-a' };
+  const shipped: FlipkartBillingOrder = { ...sale, stockDispatchObserved: true };
+  s.orders.set('seller-0', [
+    { ...shipped, eligibilityUnverified: true, stockDisposition: 'uncertain' },
+  ]);
+  await s.scan();
+  s.restoreService();
+  s.orders.set('seller-0', [{ ...sale, preDispatchWithoutCourierReturn: true }]);
+  await assert.rejects(s.available(), /unresolved sale/);
+  assert.ok(s.f.store.read().listings.every((row) => !row.orderSyncPending));
+  s.restoreService();
+  s.orders.set('seller-0', [shipped]);
+  await assert.rejects(s.available(), /unresolved sale/);
+});
+
+test('a pre-dispatch courier omission can progress to dispatch only for the same recorded shipment', async (t) => {
+  const s = setup(t);
+  s.confirm();
+  const sale = { ...s.orders.get('seller-0')![0], stockShipmentId: 'shipment-a' };
+  const ready: FlipkartBillingOrder = { ...sale, preDispatchWithoutCourierReturn: true };
+  s.orders.set('seller-0', [ready]);
+  const available = (await s.available()).available;
+  s.restoreService();
+  s.orders.set('seller-0', [{ ...sale, stockDispatchObserved: true }]);
+  assert.equal((await s.available()).available, available);
+  s.orders.set('seller-0', [{ ...ready, stockShipmentId: 'other-shipment' }]);
+  await assert.rejects(s.available(), /recorded order changed/);
+});
+
+test('a later explicit courier flag cannot release an order on a different shipment’s cancellation', async (t) => {
+  const s = setup(t);
+  s.confirm();
+  const sale = { ...s.orders.get('seller-0')![0], stockShipmentId: 'shipment-a' };
+  s.orders.set('seller-0', [{ ...sale, preDispatchWithoutCourierReturn: true }]);
+  assert.equal((await s.available()).reservedUnits, 1);
+  s.orders.set('seller-0', [sale]);
+  assert.equal((await s.available()).reservedUnits, 1);
+  s.restoreService();
+
+  s.orders.set('seller-0', [
+    { ...sale, stockShipmentId: 'shipment-b', stockDisposition: 'cancelled' },
+  ]);
+  await assert.rejects(s.available(), /recorded order changed/);
+  const recorded = s.f.store.readStockCoverage(s.companyId)!.orders[0].order;
+  assert.equal(recorded.stockShipmentId, 'shipment-a');
+  assert.equal(recorded.stockIdentityConflict, true);
+  s.orders.set('seller-0', [sale]);
+  await assert.rejects(s.available(), /recorded order changed/);
+});
+
+test('an older order without a shipment ID acquires and retains the first known shipment', async (t) => {
+  const s = setup(t);
+  s.confirm();
+  const legacy = s.orders.get('seller-0')![0];
+  assert.equal((await s.available()).reservedUnits, 1);
+  s.restoreService();
+  const identified = { ...legacy, stockShipmentId: 'shipment-a' };
+  s.orders.set('seller-0', [identified]);
+  assert.equal((await s.available()).reservedUnits, 1);
+  s.orders.set('seller-0', [legacy]);
+  assert.equal((await s.available()).reservedUnits, 1);
+  const recorded = s.f.store.readStockCoverage(s.companyId)!.orders[0].order;
+  assert.equal(recorded.stockShipmentId, 'shipment-a');
+  s.orders.set('seller-0', [{ ...identified, stockDisposition: 'cancelled' }]);
+  assert.equal((await s.available()).reservedUnits, 0);
+});
+
+test('a forward sale can be cancelled but a missing courier-return flag cannot reopen a verified cancellation', async (t) => {
+  const s = setup(t);
+  s.confirm();
+  const sale = { ...s.orders.get('seller-0')![0], stockShipmentId: 'shipment-a' };
+  const ready: FlipkartBillingOrder = { ...sale, preDispatchWithoutCourierReturn: true };
+  s.orders.set('seller-0', [ready]);
+  assert.equal((await s.available()).available, 5);
+  s.orders.set('seller-0', [{ ...sale, stockDisposition: 'cancelled' }]);
+  assert.equal((await s.available()).available, 6);
+  s.restoreService();
+  s.orders.set('seller-0', [ready]);
+  await assert.rejects(s.available(), /unresolved sale/);
+  const receipt = s.f.store.readStockCoverage(s.companyId)!.orders[0].order;
+  assert.equal(receipt.stockReconciliationRequired, true);
+  assert.equal(receipt.stockIdentityConflict, undefined);
+});
+
 for (const cleanFirst of [false, true]) {
   test(`an identified cancellation/return conflict stays with its item when a clean cancellation is seen ${cleanFirst ? 'first' : 'later'}`, async (t) => {
     const s = setup(t);
@@ -725,6 +812,150 @@ test('an unmapped order is retained, then reserved across sibling listings and m
     state.listings.find((l) => l.id === row.id)!.packSize = 3;
   });
   await assert.rejects(s.available(), /Order matching, choose Review starting stock/);
+});
+
+test('a paused first mapping retries its initial proposal after restart with sync off', async (t) => {
+  const s = setup(t);
+  s.setStock(8);
+  s.f.store.update((state) => {
+    state.companies[0].automation = false;
+    state.connection.tally = 'online';
+    state.listings[0].itemId = null;
+    state.listings[0].observed = 5;
+  });
+  s.confirm();
+  await s.refreshHistory();
+  const original = s.f.store.read().listings[0];
+  s.f.service.mapping({
+    listingId: original.id,
+    listingVersion: original.version,
+    itemId: s.itemId,
+    confirmPackEvidence: true,
+    packSource: 'manual',
+    packSize: 4,
+    sourceScope: 'company',
+    tyreFloor: false,
+    keepPaused: true,
+  });
+  s.source.unavailableLedger = 'seller-0';
+  await s.scan();
+  const waiting = s.f.store.read();
+  assert.equal(waiting.proposals.length, 0);
+  assert.equal(waiting.listings[0].orderProposalPending, true);
+  assert.match(waiting.listings[0].proposalIssue!, /Could not verify/);
+  s.restoreService();
+  s.f.store.update((state) => {
+    state.connection.tally = 'online';
+    delete state.companies[0].stockIssue;
+  });
+  s.source.unavailableLedger = '';
+  s.orders.set('seller-0', []);
+  await s.scan();
+  const checked = s.f.store.read();
+  assert.equal(checked.listings[0].observed, 5);
+  assert.equal(checked.items[0].physical, 8);
+  assert.equal((await s.available()).reservedUnits, 4);
+  assert.equal(checked.proposals[0].quantity, 1);
+  assert.equal(checked.listings[0].orderProposalPending, undefined);
+  assert.equal(checked.listings[0].proposalIssue, undefined);
+  assert.equal(checked.listings[0].paused, true);
+  assert.ok(!checked.listings[0].orderSyncPending && !checked.listings[0].syncPendingItemVersion);
+  s.f.store.update((state) => {
+    state.proposals = [];
+  });
+  await s.scan();
+  assert.equal(
+    s.f.store.read().proposals.length,
+    0,
+    'handled orders cannot recreate a completed draft',
+  );
+});
+
+test('a retained order verified for the first time in Order matching queues a draft and preserves a seller edit', async (t) => {
+  const s = setup(t);
+  const original = s.orders.get('seller-0')![0];
+  s.f.store.update((state) => {
+    state.connection.tally = 'online';
+  });
+  s.orders.set('seller-0', [
+    { ...original, eligibilityUnverified: true, stockDisposition: 'uncertain' },
+  ]);
+  s.confirm();
+  await s.refreshHistory();
+  s.orders.set('seller-0', [original]);
+  await s.preview();
+  assert.equal(
+    s.f.store.read().listings[0].orderProposalPending,
+    undefined,
+    'preview leaves the journal untouched',
+  );
+  await s.refreshHistory();
+  assert.equal(s.f.store.read().listings[0].orderProposalPending, true);
+  s.f.service.edit(s.companyId, 'map-0', 2);
+  await s.scan();
+  const done = s.f.store.read();
+  assert.equal(done.listings[0].orderProposalPending, undefined);
+  assert.equal(done.proposals[0].quantity, 2);
+  assert.equal(done.proposals[0].edited, true);
+});
+
+test('a pre-dispatch order discovered just after mapping prepares its first proposal only at its own destination', async (t) => {
+  const s = setup(t, [4, 1]);
+  s.setStock(8);
+  s.f.store.update((state) => {
+    state.connection.tally = 'online';
+  });
+  const sale = s.orders.get('seller-0')![0];
+  s.orders.set('seller-0', [
+    {
+      ...sale,
+      stockShipmentId: 'forward-shipment',
+      preDispatchWithoutCourierReturn: true,
+    },
+  ]);
+  s.orders.set('seller-1', []);
+  s.confirm();
+  await s.scan();
+  const drafts = s.f.store.read().proposals;
+  assert.deepEqual(
+    drafts.map((draft) => [draft.listingId, draft.quantity]),
+    [['map-0', 1]],
+  );
+  s.f.store.update((state) => {
+    state.proposals = [];
+  });
+  await s.scan();
+  assert.equal(s.f.store.read().proposals.length, 0);
+});
+
+test('a stale tracking baseline holds the initial order proposal even below one pack', async (t) => {
+  const s = setup(t);
+  s.setStock(3);
+  s.f.store.update((state) => {
+    state.connection.tally = 'online';
+    state.listings[0].itemId = null;
+  });
+  s.confirm();
+  await s.refreshHistory();
+  const coverage = s.f.store.readStockCoverage(s.companyId)!;
+  s.f.store.saveStockCoverage({ ...coverage, signature: 'previous-stock-setup' });
+  const row = s.f.store.read().listings[0];
+  s.f.service.mapping({
+    listingId: row.id,
+    listingVersion: row.version,
+    itemId: s.itemId,
+    confirmPackEvidence: true,
+    packSource: 'manual',
+    packSize: 4,
+    sourceScope: 'company',
+    tyreFloor: false,
+  });
+  await assert.rejects(s.scan(), /Review starting stock/);
+  const state = s.f.store.read();
+  assert.equal(state.proposals.length, 0);
+  assert.equal(state.listings[0].orderProposalPending, true);
+  assert.match(state.listings[0].proposalIssue!, /Review starting stock/);
+  assert.equal(s.f.store.readStockCoverage(s.companyId)?.signature, 'previous-stock-setup');
 });
 
 test('a sale billed before the first mapping is matched on the first recheck with sync off', async (t) => {

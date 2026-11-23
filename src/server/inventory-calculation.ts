@@ -30,11 +30,11 @@ export async function checkCalculationStock(
   const sources: ItemEvidence = new Map();
   for (const listing of listings) {
     const itemId = listing.itemId!;
-    if (sources.has(itemId) || state.proposals.some((p) => p.listingId === listing.id && p.edited))
-      continue;
+    const edited = state.proposals.some((p) => p.listingId === listing.id && p.edited);
+    if (sources.has(itemId) || (edited && !listing.orderProposalPending)) continue;
     // An invalid pack belongs to this listing. Another pack of the same item can still qualify.
     try {
-      if (desiredStock(state, listing) === 0) continue;
+      if (desiredStock(state, listing) === 0 && !listing.orderProposalPending) continue;
     } catch (error) {
       if (error instanceof InputError) continue;
       throw error;
@@ -49,20 +49,16 @@ export async function checkCalculationStock(
   return sources;
 }
 
-function calculatedDraft(
-  state: Snapshot,
-  listing: Listing,
-  sources?: ItemEvidence,
-  zero?: boolean,
-) {
-  let available: number | undefined;
-  if (sources && desiredStock(state, listing) > 0) {
-    const source = sources.get(listing.itemId!);
-    if (source instanceof InputError) throw source;
-    if (!source) throw new InputError('The available stock changed. Calculate again.', 409);
-    available = source.available;
+function calculationAvailability(state: Snapshot, listing: Listing, sources?: ItemEvidence) {
+  if (!sources) {
+    if (listing.orderProposalPending) throw new InputError(startTrackingMessage, 409);
+    return undefined;
   }
-  return prepareProposal(state, listing, zero ? 0 : undefined, available);
+  if (!listing.orderProposalPending && desiredStock(state, listing) === 0) return undefined;
+  const source = sources.get(listing.itemId!);
+  if (source instanceof InputError) throw source;
+  if (!source) throw new InputError('The available stock changed. Calculate again.', 409);
+  return source.available;
 }
 
 export function saveCalculation(
@@ -93,10 +89,13 @@ export function saveCalculation(
     // and outstanding reviews alone when no quantity or displayed status changed.
     selected = selected.filter((listing) => {
       const previous = initial.proposals.find((draft) => draft.listingId === listing.id);
-      if (!previous || previous.edited) return false;
+      if ((!previous || previous.edited) && !listing.orderProposalPending) return false;
       try {
-        const draft = calculatedDraft(initial, listing, options.sources);
+        const available = calculationAvailability(initial, listing, options.sources);
+        if (listing.orderProposalPending) return true;
+        const draft = prepareProposal(initial, listing, undefined, available);
         if (
+          !previous ||
           isStaleProposal(initial, previous) ||
           listing.proposalIssue ||
           draft.quantity !== previous.quantity ||
@@ -106,7 +105,11 @@ export function saveCalculation(
         unchanged.push({ listingId: listing.id, status: 'ready' });
       } catch (error) {
         if (!(error instanceof InputError)) throw error;
-        if (!previous.stale || listing.proposalIssue !== error.message) return true;
+        if (
+          (previous && !previous.edited && !previous.stale) ||
+          listing.proposalIssue !== error.message
+        )
+          return true;
         unchanged.push({ listingId: listing.id, status: 'blocked', reason: error.message });
       }
       return false;
@@ -118,7 +121,9 @@ export function saveCalculation(
     for (const original of selected) {
       const listing = state.listings.find((row) => row.id === original.id);
       const sameInputs =
-        listing && proposalInputs(initial, original) === proposalInputs(state, listing);
+        listing &&
+        (!options.refreshStale || !original.orderProposalPending || listing.orderProposalPending) &&
+        proposalInputs(initial, original) === proposalInputs(state, listing);
       try {
         if (!sameInputs) {
           // Another action owns the new draft or mapping. A later pass can inspect it.
@@ -132,6 +137,11 @@ export function saveCalculation(
           !options.zero && state.proposals.find((p) => p.listingId === listing.id && p.edited);
         if (edited) {
           requireStockSource(state, listing);
+          if (listing.orderProposalPending) {
+            calculationAvailability(state, listing, options.sources);
+            delete listing.orderProposalPending;
+            delete listing.proposalIssue;
+          }
           if (isStaleProposal(state, edited)) {
             rows.push({
               listingId: listing.id,
@@ -150,12 +160,15 @@ export function saveCalculation(
           !options.zero &&
           !options.sources &&
           state.mode === 'live' &&
-          listing.proposalIssue &&
           !state.proposals.some((draft) => draft.listingId === listing.id) &&
+          listing.proposalIssue &&
           desiredStock(state, listing) > 0
         )
           throw new InputError(startTrackingMessage, 409);
-        const draft = calculatedDraft(state, listing, options.sources, options.zero);
+        const available = options.zero
+          ? undefined
+          : calculationAvailability(state, listing, options.sources);
+        const draft = prepareProposal(state, listing, options.zero ? 0 : undefined, available);
         const previous = state.proposals.find((p) => p.listingId === listing.id);
         if (
           options.refreshStale &&
@@ -170,14 +183,16 @@ export function saveCalculation(
         } else {
           state.proposals = [...state.proposals.filter((p) => p.listingId !== listing.id), draft];
         }
-        delete listing.proposalIssue;
+        if (!options.zero) delete listing.orderProposalPending;
+        if (!listing.orderProposalPending) delete listing.proposalIssue;
         rows.push({ listingId: listing.id, status: 'ready' });
       } catch (error) {
         if (!(error instanceof InputError) || options.strict) throw error;
         if (sameInputs) {
           const draft = state.proposals.find((p) => p.listingId === listing.id);
           if (draft && !draft.edited) draft.stale = true;
-          if (draft?.stale || listing.proposalIssue) listing.proposalIssue = error.message;
+          if (draft?.stale || listing.proposalIssue || listing.orderProposalPending)
+            listing.proposalIssue = error.message;
         }
         const needsPack =
           listing &&

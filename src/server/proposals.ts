@@ -95,6 +95,11 @@ export function isStaleProposal(state: Snapshot, draft: Proposal): boolean {
 }
 
 /** Save the need for fresh order and bill evidence, including for paused listings. */
+export function queueOrderProposal(state: Snapshot, listing: Listing) {
+  if (state.proposals.some((draft) => draft.listingId === listing.id)) return;
+  listing.orderProposalPending = true;
+}
+
 export function invalidateReservationDrafts(state: Snapshot, itemIds: Set<string>): void {
   const destinations = new Set(
     state.listings.filter((row) => row.itemId && itemIds.has(row.itemId)).map((row) => row.id),

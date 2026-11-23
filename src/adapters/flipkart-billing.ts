@@ -9,13 +9,15 @@ export interface FlipkartBillingOrder {
   quantity: number;
   orderDate: string;
   eligibilityUnverified?: true;
+  /** This pre-dispatch observation qualified despite an absent courier-return flag. */
+  preDispatchWithoutCourierReturn?: true;
   /** Present on stock reads when the order is cancelled or needs stock review. */
   stockDisposition?: 'cancelled' | 'uncertain';
   /** Local reconciliation found conflicting identities on successive stock reads. */
   stockIdentityConflict?: true;
   /** Dispatch or return evidence conflicts with a later claim of an unshipped cancellation. */
   stockDispatchObserved?: true;
-  /** A physical return or seller cancellation needs the seller to reconcile available stock. */
+  /** A return, seller cancellation or contradictory dispatch history requires reconciliation. */
   stockReconciliationRequired?: true;
   /** Exact shipment returned by a stock search, when recorded by this reader. */
   stockShipmentId?: string;
@@ -27,6 +29,7 @@ interface ShipmentLine {
   order: FlipkartBillingOrder;
   shipmentId: string;
   invoiceEligible: boolean;
+  dispatchObserved: boolean;
 }
 
 const searchUrl = 'https://api.flipkart.net/sellers/v3/shipments/filter';
@@ -134,10 +137,34 @@ function sellerTimestamp(value: unknown): number {
   return date;
 }
 
-function hasReturnAddOn(item: Record<string, unknown>): boolean {
+function hasReturnAddOn(item: Record<string, unknown>): boolean | undefined {
+  if (item.add_ons == null) return false;
+  if (!Array.isArray(item.add_ons)) return undefined;
+  const flags = item.add_ons.map((addOn: unknown) => record(addOn).is_rto);
+  if (flags.includes(true)) return true;
+  return flags.every((flag) => flag == null || flag === false) ? false : undefined;
+}
+
+/** Before dispatch the courier-return flag can be absent on an otherwise identified forward sale. */
+function allowsMissingCourierReturn(
+  shipment: Record<string, unknown>,
+  item: Record<string, unknown>,
+  filter: ShipmentFilter,
+): boolean {
   return (
-    Array.isArray(item.add_ons) &&
-    item.add_ons.some((addOn: unknown) => record(addOn).is_rto === true)
+    item.courierReturn == null &&
+    filter.type === 'preDispatch' &&
+    typeof item.status === 'string' &&
+    filter.states.includes(item.status) &&
+    typeof shipment.shipmentType === 'string' &&
+    filter.shipmentTypes.includes(shipment.shipmentType) &&
+    typeof item.serviceProfile === 'string' &&
+    sellerProfiles.has(item.serviceProfile) &&
+    shipment.hold === false &&
+    (item.is_replacement ?? item.isReplacement) === false &&
+    (item.isReplacement == null || item.isReplacement === false) &&
+    item.cancellationDate == null &&
+    hasReturnAddOn(item) === false
   );
 }
 
@@ -146,6 +173,7 @@ function verifyLocationDetailLine(
   item: Record<string, unknown>,
   detail: Record<string, unknown>,
   cancellationScopeConfirmed: boolean,
+  missingCourierReturnAllowed: boolean,
 ): boolean {
   const returnConflict =
     cancellationScopeConfirmed &&
@@ -166,9 +194,15 @@ function verifyLocationDetailLine(
   )
     incomplete();
   if (!returnConflict && detail.status != null && detail.status !== item.status) incomplete();
-  for (const field of ['orderId', 'listingId', 'sku', 'quantity', 'courierReturn']) {
+  for (const field of ['orderId', 'listingId', 'sku', 'quantity']) {
     if (detail[field] != null && detail[field] !== item[field]) incomplete();
   }
+  if (
+    detail.courierReturn != null &&
+    detail.courierReturn !== item.courierReturn &&
+    !(missingCourierReturnAllowed && detail.courierReturn === false)
+  )
+    incomplete();
   for (const field of ['orderDate', 'cancellationDate']) {
     if (detail[field] != null && sellerTimestamp(detail[field]) !== sellerTimestamp(item[field]))
       incomplete();
@@ -186,7 +220,12 @@ function verifyLocationDetailLine(
     )
   )
     incomplete();
-  if (hasReturnAddOn(detail) && !hasReturnAddOn(item)) incomplete();
+  const detailReturn = hasReturnAddOn(detail);
+  if (
+    (detailReturn && !hasReturnAddOn(item)) ||
+    (missingCourierReturnAllowed && detailReturn !== false)
+  )
+    incomplete();
   return returnConflict;
 }
 
@@ -196,25 +235,24 @@ interface ShipmentEvidence {
 }
 
 function collectShipment(
-  value: unknown,
+  { shipment, returnConflicts }: ShipmentEvidence,
   earliest: number,
   latest: number,
   lines: Map<string, ShipmentLine>,
   excluded: Set<string>,
-  stockFilter?: ShipmentFilter,
-  returnConflicts?: Set<string>,
+  filter: ShipmentFilter,
+  mode: 'stock' | 'billing',
 ): void {
-  const shipment = record(value);
+  const forStock = mode === 'stock';
   const shipmentId = identifier(shipment.shipmentId);
   const locationId = identifier(shipment.locationId);
   if (!Array.isArray(shipment.orderItems) || !shipment.orderItems.length) incomplete();
   if (
-    stockFilter &&
-    ((shipment.shipmentType &&
-      !stockFilter.shipmentTypes.includes(String(shipment.shipmentType))) ||
-      (stockFilter.hold !== undefined &&
+    forStock &&
+    ((shipment.shipmentType && !filter.shipmentTypes.includes(String(shipment.shipmentType))) ||
+      (filter.hold !== undefined &&
         typeof shipment.hold === 'boolean' &&
-        shipment.hold !== stockFilter.hold))
+        shipment.hold !== filter.hold))
   )
     incomplete();
   for (const raw of shipment.orderItems) {
@@ -222,7 +260,7 @@ function collectShipment(
     const id = identifier(item.orderItemId);
     const status = typeof item.status === 'string' ? item.status : '';
     const replacement = item.is_replacement ?? item.isReplacement;
-    const returnAddOn = stockFilter && hasReturnAddOn(item);
+    const returnAddOn = hasReturnAddOn(item);
     const returnEvidence =
       returnConflicts?.has(id) ||
       status === 'RETURN_REQUESTED' ||
@@ -237,25 +275,22 @@ function collectShipment(
       item.isReplacement === true ||
       item.courierReturn === true ||
       returnAddOn;
-    if (!stockFilter && exceptional) {
+    const otherProfile = item.serviceProfile && !sellerProfiles.has(String(item.serviceProfile));
+    const otherType =
+      shipment.shipmentType && !['NORMAL', 'SELF'].includes(String(shipment.shipmentType));
+    if (!forStock && (exceptional || otherProfile || otherType)) {
       excluded.add(id);
       lines.delete(id);
       continue;
     }
-    // Optional flags in Flipkart's response have no documented false default.
-    // Keep otherwise identified lines visible for review if classification is incomplete.
+    const preDispatchWithoutCourierReturn = allowsMissingCourierReturn(shipment, item, filter);
     let eligibilityUnverified =
       shipment.hold !== false ||
       replacement !== false ||
-      item.courierReturn !== false ||
+      (item.courierReturn !== false && !preDispatchWithoutCourierReturn) ||
       !saleStatuses.has(status);
     if (excluded.has(id)) continue;
-    if (item.serviceProfile && !sellerProfiles.has(String(item.serviceProfile))) {
-      if (stockFilter) incomplete();
-      continue;
-    }
-    if (shipment.shipmentType && !['NORMAL', 'SELF'].includes(String(shipment.shipmentType)))
-      continue;
+    if (otherProfile) incomplete();
     const date = sellerTimestamp(item.orderDate);
     if (date < earliest || date > latest) continue;
     if (
@@ -265,14 +300,14 @@ function collectShipment(
     )
       incomplete();
     let disposition: FlipkartBillingOrder['stockDisposition'];
-    if (stockFilter) {
+    if (forStock) {
       const knownScope = Boolean(item.serviceProfile && shipment.shipmentType);
       // Cancellation in the forward fulfilment flow precedes shipping. In-transit
       // cancellations use the returns flow. Seller cancellations can indicate a shortage.
       if (
         knownScope &&
-        stockFilter.type === 'cancelled' &&
-        stockFilter.cancellationType !== 'sellerCancellation' &&
+        filter.type === 'cancelled' &&
+        filter.cancellationType !== 'sellerCancellation' &&
         status === 'CANCELLED' &&
         item.cancellationDate &&
         sellerTimestamp(item.cancellationDate) >= date &&
@@ -287,6 +322,7 @@ function collectShipment(
       else if (exceptional || eligibilityUnverified || !knownScope) disposition = 'uncertain';
       eligibilityUnverified = disposition === 'uncertain';
     }
+    const dispatchObserved = Boolean(postDispatch.includes(status) || returnEvidence);
     const order: FlipkartBillingOrder = {
       orderItemId: id,
       orderId: identifier(item.orderId),
@@ -296,22 +332,22 @@ function collectShipment(
       locationId,
       quantity: item.quantity,
       orderDate: new Date(date).toISOString(),
-      ...(stockFilter && { stockShipmentId: shipmentId }),
-      ...(stockFilter && returnConflicts?.has(id) && { stockReturnConflict: true }),
+      ...(preDispatchWithoutCourierReturn && { preDispatchWithoutCourierReturn: true }),
+      ...(forStock && { stockShipmentId: shipmentId }),
+      ...(forStock && returnConflicts?.has(id) && { stockReturnConflict: true }),
       ...(eligibilityUnverified && { eligibilityUnverified: true }),
       ...(disposition && { stockDisposition: disposition }),
-      ...(stockFilter &&
-        (postDispatch.includes(status) || returnEvidence) && { stockDispatchObserved: true }),
-      ...(stockFilter &&
+      ...(forStock && dispatchObserved && { stockDispatchObserved: true }),
+      ...(forStock &&
         (returnEvidence ||
-          (stockFilter.cancellationType === 'sellerCancellation' && status === 'CANCELLED')) && {
+          (filter.cancellationType === 'sellerCancellation' && status === 'CANCELLED')) && {
           stockReconciliationRequired: true,
         }),
     };
     rememberLine(
       lines,
-      { order, shipmentId, invoiceEligible: invoiceStatuses.has(status) },
-      Boolean(stockFilter),
+      { order, shipmentId, invoiceEligible: invoiceStatuses.has(status), dispatchObserved },
+      forStock,
     );
   }
 }
@@ -320,9 +356,9 @@ function rememberLine(
   lines: Map<string, ShipmentLine>,
   line: ShipmentLine,
   forStock: boolean,
+  previous = lines.get(line.order.orderItemId),
 ): void {
   const { order, shipmentId } = line;
-  const previous = lines.get(order.orderItemId);
   if (
     previous &&
     (previous.shipmentId !== shipmentId ||
@@ -334,10 +370,22 @@ function rememberLine(
       previous.order.orderDate !== order.orderDate)
   )
     incomplete();
+  if (
+    order.preDispatchWithoutCourierReturn &&
+    (previous?.dispatchObserved || previous?.order.stockDisposition === 'cancelled')
+  ) {
+    order.eligibilityUnverified = true;
+    if (forStock) {
+      order.stockDisposition = 'uncertain';
+      order.stockReconciliationRequired = true;
+    }
+  }
+  if (previous?.dispatchObserved) line.dispatchObserved = true;
   if (forStock && previous && previous.order.stockDisposition !== order.stockDisposition) {
     order.stockDisposition = 'uncertain';
     order.eligibilityUnverified = true;
   }
+  if (previous?.order.eligibilityUnverified) order.eligibilityUnverified = true;
   if (previous?.order.stockDispatchObserved) order.stockDispatchObserved = true;
   if (previous?.order.stockReconciliationRequired) order.stockReconciliationRequired = true;
   if (previous?.order.stockReturnConflict) order.stockReturnConflict = true;
@@ -375,8 +423,8 @@ export class FlipkartBillingClient {
     ] as const) {
       for (const shipmentType of ['NORMAL', 'SELF']) {
         const filter = { type, states, shipmentTypes: [shipmentType] };
-        for await (const { shipment } of this.search(token, filter, earliest, latest))
-          collectShipment(shipment, earliest, latest, lines, excluded);
+        for await (const evidence of this.search(token, filter, earliest, latest))
+          collectShipment(evidence, earliest, latest, lines, excluded, filter, 'billing');
       }
     }
     if (includeInvoices) await this.addInvoiceNumbers(token, lines);
@@ -440,13 +488,8 @@ export class FlipkartBillingClient {
     const lines = new Map<string, ShipmentLine>();
     const excluded = new Set<string>();
     try {
-      for await (const { shipment, returnConflicts } of this.search(
-        token,
-        filter,
-        earliest,
-        latest,
-      ))
-        collectShipment(shipment, earliest, latest, lines, excluded, filter, returnConflicts);
+      for await (const evidence of this.search(token, filter, earliest, latest))
+        collectShipment(evidence, earliest, latest, lines, excluded, filter, 'stock');
     } catch (error) {
       if (!(error instanceof ShipmentSearchLimit)) throw error;
       const middle = earliest + Math.floor((latest - earliest) / 2);
@@ -460,11 +503,14 @@ export class FlipkartBillingClient {
       // A change during pagination can remove a known order from a renewed search.
       // Preserve every positive observation and never accept a disappearing cancellation.
       for (const line of lines.values()) {
-        if (!recovered.has(line.order.orderItemId)) {
+        const later = recovered.get(line.order.orderItemId);
+        if (later) {
+          rememberLine(recovered, later, true, line);
+        } else {
           line.order.stockDisposition = 'uncertain';
           line.order.eligibilityUnverified = true;
+          rememberLine(recovered, line, true);
         }
-        rememberLine(recovered, line, true);
       }
       for (const line of recovered.values()) rememberLine(collected, line, true);
       return;
@@ -563,7 +609,14 @@ export class FlipkartBillingClient {
       const item = record(raw);
       const matching = detailsByLine.get(identifier(item.orderItemId));
       if (!matching) incomplete();
-      if (verifyLocationDetailLine(item, matching, cancellationScopeConfirmed))
+      if (
+        verifyLocationDetailLine(
+          item,
+          matching,
+          cancellationScopeConfirmed,
+          allowsMissingCourierReturn(shipment, item, filter),
+        )
+      )
         returnConflicts.add(identifier(item.orderItemId));
     }
     return {

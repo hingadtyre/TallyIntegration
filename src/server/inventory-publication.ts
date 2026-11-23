@@ -75,6 +75,8 @@ export function inventoryTarget(
       409,
     );
   const draft = intent.draft;
+  if (listing.orderProposalPending && !draft?.edited && availableUnits === undefined)
+    throw new InputError('Check the mapped order and Tally stock before publishing.', 409);
   if (intent.trial) {
     if (
       company.automation ||

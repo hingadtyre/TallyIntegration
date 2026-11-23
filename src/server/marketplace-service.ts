@@ -679,6 +679,7 @@ export class MarketplaceService {
             item,
           );
           const positive = desiredStock(state, row, 'current', undefined, item) > 0;
+          const needsOrderCheck = positive || row.orderProposalPending;
           if (state.mode === 'live') {
             if (!trackingIssues.has(company.id)) {
               trackingIssues.set(
@@ -690,14 +691,15 @@ export class MarketplaceService {
               );
             }
             const issue = trackingIssues.get(company.id);
-            if (positive && issue) throw new InputError(issue);
+            if (needsOrderCheck && issue) throw new InputError(issue);
             if (positive && row.policy === 'limited')
               throw new InputError('Positive Limited sales need verified allowance accounting.');
           }
           const queued = row.syncPendingItemVersion != null || !!row.orderSyncPending;
           const lastBlocker =
             (queued && this.blockedSyncReasons.get(row.id)) ||
-            (positive && this.blockedSyncReasons.get('orders:' + company.id));
+            (row.orderProposalPending && row.proposalIssue) ||
+            (needsOrderCheck && this.blockedSyncReasons.get('orders:' + company.id));
           row.automationStatus = lastBlocker
             ? 'Last check blocked. ' + lastBlocker
             : queued
@@ -909,7 +911,7 @@ export class MarketplaceService {
       const protectedStock =
         !intent.draft?.edited &&
         (this.mode === 'live' || this.store.readStockCoverage(intent.companyId)) &&
-        desiredStock(state, row) > 0;
+        (row.orderProposalPending || desiredStock(state, row) > 0);
       const evidence = protectedStock
         ? await this.availableStock(intent.companyId, row.itemId!, batch)
         : undefined;

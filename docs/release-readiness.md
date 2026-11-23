@@ -4,6 +4,12 @@
 
 This is the readiness checklist for the first customer delivery. The [approved architecture](design/architecture.md#customer-release-completion) defines the required behavior; [README](../README.md) describes the delivered build; [customer setup](customer-setup.md) describes the available operating steps. Test fixtures establish local behavior, not a live Tally or Flipkart connection.
 
+## Pre-dispatch reservation pilot on 23 November 2026
+
+Use `Stockbridge-Pilot-0.1.0-2026-11-23T13-08-16-490Z-a39a3c0c-dirty-win-x64.zip` for the supervised pilot. It contains the local feature changes based on `a39a3c0c`. All 510 application tests and 24 extracted-package checks passed. In the simulated seller workflow, one unbilled set of four against eight Tally tyres left one pack to propose with the tyre minimum off. Mapping after the order arrived reduced the marketplace quantity from five to one. An order first seen after mapping also created the missing proposal. A cancellation for another shipment stayed in review. Saving an individual or bulk zero draft during review preserved the pending order check and sent no stock. The package upgrade and restart checks used an isolated Windows workspace. Verification with the seller's Tally books and live automatic stock publication is still pending.
+
+The corrected ZIP SHA-256 is `498f85510aaa684b55d20b37a21332be875e60f146fb75237a93046658adf1b0`. The receipt is `releases/verify-pilot-7clr8G/verification.json`. It supersedes the earlier 12:44 UTC pilot from the same day, recorded in `releases/verify-pilot-JPOrQu/verification.json`.
+
 ## Same-PC Windows pilot upgrade on 21 November 2026
 
 Use `Stockbridge-Pilot-0.1.0-2026-11-21T11-44-26-307Z-55c24ec5-dirty-win-x64.zip` for the supervised pilot. It supersedes the earlier upgrade ZIP below. All 433 application tests and 24 extracted-package checks passed. On an isolated Windows desktop, the shortcut reopened the saved workspace, updated a previously managed target, and preserved a customer-owned shortcut with the same name. After a simulated dashboard port conflict, Upgrade reported the verified safety copy and a retry reopened the workspace. The saved company sync setting, individual pause and remaining allowance survived migration. Customer-machine acceptance is pending.
@@ -28,7 +34,9 @@ The ZIP SHA-256 is `cfaebd269e5de50b26e5796375bdeb0c6a216d8bcce9d1ee3b9223a78b2c
 
 Before enabling customer automation, compare stock, Set of, order references and billed quantities against the seller's actual books. Include the purchase-before-billing scenario and a second listing drawing on the same stock. Selling to independent customers also requires the appropriate Flipkart application and seller authorization.
 
-The live seven-day order check found one clear cancellation. The thirty-day check returned 12 lines across nine SKUs. Five cancellations were clear. Four orders had conflicting cancellation and return evidence, and three were seller cancellations. All seven were marked for reconciliation. When the product and location can be identified, Stockbridge holds that item's stock. Tests with two mapped items verified that the other item can still publish and that a later clean response or restart cannot clear the hold. Ambiguous identities still block the broader calculation. This account supplied no eligible ordinary sale in either window, so it could not verify a real sale-to-bill match.
+The live seven-day order check on 20 November found one clear cancellation. The thirty-day check returned 12 lines across nine SKUs. Five cancellations were clear. Four orders had conflicting cancellation and return evidence, and three were seller cancellations. All seven were marked for reconciliation. When the product and location can be identified, Stockbridge holds that item's stock. Tests with two mapped items verified that the other item can still publish and that a later clean response or restart cannot clear the hold. Ambiguous identities still block the broader calculation.
+
+On 23 November, Seller Hub and read-only production order searches confirmed a forward sale awaiting dispatch. Flipkart supplied its status, seller fulfilment, pickup location and explicit hold and replacement values, and returned no courier-return value. The updated reader recognized the same order as a forward sale on a fresh read-only production check. Customer acceptance still needs to follow the sale through the unbilled reservation, the mapped listing's proposed and published stock, and the matching Tally bill. [Live order evidence](integration/flipkart-validation.md#order-evidence-for-tally-billing-review)
 
 ## Current deliverable
 

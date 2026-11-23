@@ -43,7 +43,9 @@ export interface Listing {
   marketplaceListingId?: string;
   /** Read-only status of automatic publication for this destination. */
   automationStatus?: string;
-  /** Reason the last calculation after Resume could not supply a proposed quantity. */
+  /** A tracked order needs a stock check, even when the seller has saved a manual draft. */
+  orderProposalPending?: boolean;
+  /** Reason a verified proposed quantity is pending or unavailable. */
   proposalIssue?: string;
   /** A Tally balance change still awaiting dispatch for this destination. */
   syncPendingItemVersion?: number | null;

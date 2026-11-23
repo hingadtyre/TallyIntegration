@@ -57,9 +57,11 @@ export function QuantityEditor({
     else setError(result.error);
   }
 
-  let description = listing.proposalIssue
-    ? `Last calculation could not verify stock. ${listing.proposalIssue} Use Calculate to retry.`
-    : 'No draft';
+  const orderCheck = listing.proposalIssue
+    ? `${listing.proposalIssue} Stockbridge will check again automatically.`
+    : 'Checking orders and Tally stock…';
+  const showOrderCheckAlongsideDraft = proposal?.edited && listing.orderProposalPending;
+  let description = 'No draft';
   let descriptionClass = listing.proposalIssue && !proposal ? 'text-amber' : '';
   if (error) {
     description = error;
@@ -81,6 +83,10 @@ export function QuantityEditor({
     descriptionClass = 'text-teal';
   } else if (proposal) {
     description = 'Calculated draft';
+  } else if (listing.orderProposalPending) {
+    description = orderCheck;
+  } else if (listing.proposalIssue) {
+    description = `Last calculation could not verify stock. ${listing.proposalIssue} Use Calculate to retry.`;
   }
 
   return (
@@ -92,7 +98,9 @@ export function QuantityEditor({
           step="1"
           inputMode="numeric"
           aria-label={`Proposed stock for ${listing.sku}`}
-          aria-describedby={descriptionId}
+          aria-describedby={
+            showOrderCheckAlongsideDraft ? `${descriptionId} ${descriptionId}-order` : descriptionId
+          }
           data-unsaved={dirty || undefined}
           value={value}
           placeholder="-"
@@ -122,6 +130,11 @@ export function QuantityEditor({
       <small id={descriptionId} className={descriptionClass} role={error ? 'alert' : undefined}>
         {description}
       </small>
+      {showOrderCheckAlongsideDraft && (
+        <small id={`${descriptionId}-order`} className={listing.proposalIssue ? 'text-amber' : ''}>
+          {orderCheck}
+        </small>
+      )}
       {dirty && (
         <button
           type="button"

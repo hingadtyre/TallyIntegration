@@ -135,6 +135,33 @@ test('schema eleven items start with zero keep-back without changing drafts or q
   });
 });
 
+test('schema twelve preserves existing stock policy and saves a pending order calculation independently', (t) => {
+  const f = fixture(t);
+  const original = legacyState(f.directory);
+  original.items[0].keepBackUnits = 1.25;
+  original.listings[0].proposalIssue = 'Stock verification is incomplete.';
+  queryFile(f.file, (db) => {
+    createSchema(db, 12);
+    db.exec('PRAGMA user_version = 12');
+    writeSnapshot(db, original);
+  });
+  const store = f.open();
+  assert.deepEqual(store.read(), original);
+  assert.ok(store.migrationBackupPath);
+  queryFile(store.migrationBackupPath, (db) => {
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version, 12);
+    assert.deepEqual(readSnapshot(db), original);
+  });
+  store.update((state) => {
+    state.listings[1].orderProposalPending = true;
+    state.listings[1].proposalIssue = 'Could not verify Tally stock.';
+  });
+  const reopened = f.open();
+  assert.equal(reopened.migrationBackupPath, null);
+  assert.equal(reopened.read().listings[0].orderProposalPending, undefined);
+  assert.equal(reopened.read().listings[1].orderProposalPending, true);
+});
+
 test('schema four upgrades retain the stock mapping and start billing unconfigured', (t) => {
   const f = fixture(t);
   const original = legacyState(f.directory);

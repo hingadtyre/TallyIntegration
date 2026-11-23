@@ -809,6 +809,12 @@ async function verifyPilot(zip) {
       });
       await check('upgrade_migrates_existing_schema_ten_and_keeps_credentials', async () => {
         await launch('stop');
+        const readVersion =
+          "const db = new (require('node:sqlite').DatabaseSync)(process.argv[1], {readOnly:true}); console.log(db.prepare('PRAGMA user_version').get().user_version); db.close();";
+        const databaseFile = join(dataDirectory, 'live.sqlite');
+        const latestVersion = (
+          await command(node, ['-e', readVersion, databaseFile], options)
+        ).stdout.trim();
         // Recreate the previous format on the isolated, populated test database.
         const preparePrevious = `
           import { DatabaseSync } from 'node:sqlite';
@@ -817,6 +823,7 @@ async function verifyPilot(zip) {
           db.exec('UPDATE companies SET automation = 1');
           db.prepare("INSERT INTO listings (id,account_id,sku,title,location,item_id,pack_size,pack_evidence,verified,policy,remaining,paused,version,sort_order) SELECT 'paused-pilot',?,'pilot-sku','Pilot tyre','test location',id,1,'test fixture',1,'limited',2,1,1,0 FROM stock_items LIMIT 1").run(process.argv[1]);
           if (db.prepare('PRAGMA table_info(stock_items)').all().some(row => row.name === 'keep_back_units')) db.exec('ALTER TABLE stock_items DROP COLUMN keep_back_units');
+          if (db.prepare('PRAGMA table_info(listings)').all().some(row => row.name === 'order_proposal_pending')) db.exec('ALTER TABLE listings DROP COLUMN order_proposal_pending');
           db.exec('DROP TABLE sku_mappings; PRAGMA user_version = 10');
           db.close();
         `;
@@ -828,14 +835,10 @@ async function verifyPilot(zip) {
         const result = await launch('upgrade');
         const path = result.stdout.match(/Verified safety copy: ([^\r\n]+)/)?.[1];
         assert.ok(path && existsSync(path));
-        const readVersion =
-          "const db = new (require('node:sqlite').DatabaseSync)(process.argv[1], {readOnly:true}); console.log(db.prepare('PRAGMA user_version').get().user_version); db.close();";
         assert.equal((await command(node, ['-e', readVersion, path], options)).stdout.trim(), '10');
         assert.equal(
-          (
-            await command(node, ['-e', readVersion, join(dataDirectory, 'live.sqlite')], options)
-          ).stdout.trim(),
-          hasKeepBack ? '12' : '11',
+          (await command(node, ['-e', readVersion, databaseFile], options)).stdout.trim(),
+          latestVersion,
         );
         const state = await api('/api/state');
         assert.equal(state.items[0].id, fixture.itemId);

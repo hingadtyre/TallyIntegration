@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
 import { FlipkartListingError } from '../../src/adapters/flipkart-listings.js';
-import type { FlipkartBillingOrder } from '../../src/adapters/flipkart-billing.js';
+import {
+  FlipkartBillingClient,
+  type FlipkartBillingOrder,
+} from '../../src/adapters/flipkart-billing.js';
 import type { TallySalesBill } from '../../src/adapters/tally.js';
 import type { FlipkartConnectionStatus, Snapshot } from '../../src/shared/contracts.js';
 import type { MarketplaceListing } from '../../src/shared/marketplace-contracts.js';
@@ -365,7 +368,13 @@ test('authenticated catalogue ownership survives restarts, rejects duplicate acc
 async function mappedInventory(
   t: TestContext,
   packSource: 'manual' | 'packages' = 'manual',
-  options: { coverage?: boolean; packSize?: number; tyreFloor?: boolean; physical?: number } = {},
+  options: {
+    coverage?: boolean;
+    packSize?: number;
+    tyreFloor?: boolean;
+    physical?: number;
+    orderReader?: BillingSources['orders'];
+  } = {},
 ) {
   let physical = options.physical ?? 14;
   const readStock = async () => [{ externalId: 'item', name: 'Tyres', unit: 'pieces', physical }];
@@ -380,7 +389,7 @@ async function mappedInventory(
       readStock,
       readSalesBills: async () => structuredClone(bills),
     }),
-    orders: {
+    orders: options.orderReader ?? {
       readOrders: async () => structuredClone(orders),
       async readStockOrders(token) {
         if (failOrders) throw new Error('Order read unavailable');
@@ -629,6 +638,27 @@ test('Inventory and Marketplaces report the same automatic stock state as setup 
     market.changes[0].state = 'uncertain';
   });
   assert.match(status(), /previous update result/);
+});
+
+test('company preview waits for a mapped order to be verified even when Tally cannot fill one pack', async (t) => {
+  const { s, dest, sale, mapped } = await mapUnresolvedFourPack(t);
+  const { companyId } = s.item;
+  assert.match(mapped.listings.find((row) => row.id === dest.id)!.automationStatus!, /unresolved/);
+  s.service.automation(companyId, false);
+  const previewRow = async () =>
+    (await s.service.automationReviews.preview(companyId)).rows.find(
+      (row) => row.listingId === dest.id,
+    )!;
+  const waiting = await previewRow();
+  assert.equal(waiting.status, 'waiting');
+  assert.equal(waiting.proposed, null);
+  assert.match(waiting.reason!, /unresolved/);
+
+  s.orders[0] = sale;
+  const verified = await previewRow();
+  assert.equal(verified.status, 'ready');
+  assert.equal(verified.proposed, 0);
+  assert.equal(s.f.writes.length, 0);
 });
 
 test('company preview and trial use calculated stock, preserve drafts, and require fresh approval for each destination', async (t) => {
@@ -1343,6 +1373,213 @@ test('an unchanged Tally poll drains a saved sale, and Calculate wakes automatio
     await running.idle();
   }
 });
+
+function readyFourPackOrders(locationId: string, courierReturn?: false) {
+  const orderDate = new Date().toISOString();
+  return new FlipkartBillingClient({
+    request: async (_url, options) => {
+      const { filter } = JSON.parse(String(options?.body));
+      const include =
+        filter.type === 'preDispatch' && !filter.hold && filter.shipmentTypes[0] === 'NORMAL';
+      const shipment = {
+        shipmentId: 'four-pack-shipment',
+        locationId,
+        shipmentType: 'NORMAL',
+        hold: false,
+        orderItems: [
+          {
+            orderItemId: 'four-pack-line',
+            orderId: 'four-pack-order',
+            orderDate,
+            listingId: 'listing-one',
+            sku: 'SAME-SKU',
+            quantity: 1,
+            status: 'READY_TO_DISPATCH',
+            serviceProfile: 'Seller_Fulfilment',
+            is_replacement: false,
+            courierReturn,
+          },
+        ],
+      };
+      return Response.json({ hasMore: false, shipments: include ? [shipment] : [] });
+    },
+  });
+}
+
+test('a verified four-pack order observed after mapping creates the first draft with company sync off', async (t) => {
+  const s = await mappedInventory(t, 'manual', {
+    physical: 8,
+    packSize: 4,
+    tyreFloor: false,
+    orderReader: readyFourPackOrders('warehouse-a', false),
+  });
+  assert.deepEqual(s.service.snapshot().proposals, []);
+  await s.f.service.checkStockOrders(s.item.companyId, {});
+  const proposals = s.service.snapshot().proposals;
+  assert.deepEqual(
+    proposals.map((draft) => [draft.listingId, draft.quantity]),
+    [[s.listing.id, 1]],
+  );
+  assert.equal(s.f.writes.length, 0);
+});
+
+test('mapping a ready-to-dispatch four-pack with no courier-return flag reserves four tyres, shows one pack and automatically syncs', async (t) => {
+  const s = await mappedInventory(t, 'manual', {
+    physical: 8,
+    packSize: 1,
+    tyreFloor: false,
+    orderReader: readyFourPackOrders('warehouse-b'),
+  });
+  const { companyId } = s.item;
+  const dest = s.service.snapshot().listings.find((row) => row.location === 'warehouse-b')!;
+  s.remote.locations[1].quantity = 5;
+  await s.f.service.refresh(s.account.id);
+  await s.f.service.checkStockOrders(companyId, {});
+  const savedOrder = s.f.store.readStockCoverage(companyId)!.orders[0].order;
+  assert.equal(savedOrder.firstSeenUnmapped, true);
+  assert.equal(savedOrder.eligibilityUnverified, undefined);
+
+  s.service.automation(companyId, true);
+  const scheduled = new Map<number, () => void>();
+  const running = s.inventory({
+    now: Date.now,
+    schedule(callback, delay) {
+      scheduled.set(delay, callback);
+      return () => scheduled.delete(delay);
+    },
+  });
+  running.start();
+  const app = createApp(running, s.f.folder, undefined, undefined, s.f.service);
+  const address = await listen(app);
+  try {
+    await running.idle();
+    const row = running.snapshot().listings.find((entry) => entry.id === dest.id)!;
+    const response = await fetch(address + '/api/mappings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Stockbridge-Request': '1' },
+      body: JSON.stringify({
+        listingId: row.id,
+        listingVersion: row.version,
+        itemId: s.item.id,
+        confirmPackEvidence: true,
+        packSize: 4,
+        packSource: 'manual',
+        sourceScope: 'company',
+        tyreFloor: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const afterMapping = (await response.json()) as Snapshot;
+    assert.equal(afterMapping.proposals.find((draft) => draft.listingId === row.id)?.quantity, 1);
+    await running.idle();
+    scheduled.get(afterMapping.settings.tallySeconds * 1000)!();
+    await running.idle();
+    assert.equal(
+      s.remote.locations[1].quantity,
+      1,
+      'the newly mapped four-pack follows company sync',
+    );
+    assert.equal(
+      s.remote.locations[0].quantity,
+      4,
+      'the single-tyre listing shares the four remaining tyres',
+    );
+    assert.equal(
+      running.snapshot().proposals.find((draft) => draft.listingId === row.id)?.quantity,
+      1,
+    );
+  } finally {
+    running.stop();
+    await running.idle();
+    await close(app);
+  }
+});
+
+async function mapUnresolvedFourPack(t: TestContext) {
+  const s = await mappedInventory(t, 'manual', { physical: 3, packSize: 1, tyreFloor: false });
+  const dest = s.service.snapshot().listings.find((listing) => listing.location === 'warehouse-b')!;
+  const sale = {
+    orderItemId: 'held-line',
+    orderId: 'held-order',
+    invoiceNumber: null,
+    listingId: s.remote.id,
+    sku: dest.sku,
+    locationId: dest.location,
+    quantity: 1,
+    orderDate: new Date().toISOString(),
+  };
+  s.orders.push({ ...sale, stockDisposition: 'uncertain', eligibilityUnverified: true });
+  await s.f.service.checkStockOrders(s.item.companyId, {});
+  s.service.automation(s.item.companyId, true);
+  const mapped = await s.service.mapAndCalculate({
+    listingId: dest.id,
+    listingVersion: dest.version,
+    itemId: s.item.id,
+    packSize: 4,
+    packSource: 'manual',
+    sourceScope: 'company',
+    confirmPackEvidence: true,
+    tyreFloor: false,
+  });
+  return { s, dest, sale, mapped };
+}
+
+test('an unresolved late-mapped order cannot publish a zero calculated from raw Tally stock', async (t) => {
+  const { s, dest, sale, mapped } = await mapUnresolvedFourPack(t);
+  assert.match(mapped.listings.find((row) => row.id === dest.id)!.proposalIssue!, /unresolved/);
+  assert.ok(!mapped.proposals.some((draft) => draft.listingId === dest.id));
+  await s.service.refresh();
+  assert.equal(s.f.writes.length, 0);
+
+  s.orders[0] = sale;
+  await s.service.refresh();
+  const recovered = s.service.snapshot();
+  assert.equal(recovered.proposals.find((draft) => draft.listingId === dest.id)?.quantity, 0);
+  assert.equal(s.remote.locations[1].quantity, 0);
+});
+
+for (const save of ['individual', 'bulk'] as const) {
+  test(`a zero draft saved through the ${save} action preserves the pending order check`, async (t) => {
+    const { s, dest, sale } = await mapUnresolvedFourPack(t);
+    const { companyId } = s.item;
+    const saved =
+      save === 'individual'
+        ? s.service.edit(companyId, dest.id, 0)
+        : s.service.calculate(companyId, [dest.id], true);
+    const draft = saved.proposals.find((entry) => entry.listingId === dest.id)!;
+    assert.equal(draft.edited, true);
+    const checked = await s.service.refresh();
+    const listing = checked.listings.find((entry) => entry.id === dest.id)!;
+    assert.equal(listing.orderProposalPending, true);
+    assert.match(listing.proposalIssue!, /unresolved/);
+    assert.equal(listing.paused, false);
+    assert.deepEqual(
+      checked.proposals.find((entry) => entry.listingId === dest.id),
+      draft,
+    );
+    assert.deepEqual(s.f.writes, []);
+
+    if (save === 'individual') {
+      const review = s.service.review(companyId, [dest.id]);
+      const published = await s.service.publish(review.id);
+      assert.equal(published.rows[0].status, 'confirmed');
+      const paused = s.service.snapshot().listings.find((entry) => entry.id === dest.id)!;
+      assert.equal(paused.paused, true);
+      assert.equal(paused.orderProposalPending, true);
+    } else {
+      s.orders[0] = sale;
+      const recovered = await s.service.refresh();
+      const verified = recovered.listings.find((entry) => entry.id === dest.id)!;
+      assert.equal(verified.orderProposalPending, undefined);
+      assert.equal(verified.paused, false);
+      const kept = recovered.proposals.find((entry) => entry.listingId === dest.id)!;
+      assert.equal(kept.edited, true);
+      assert.equal(kept.quantity, draft.quantity);
+      assert.equal(kept.createdAt, draft.createdAt);
+    }
+    assert.equal(s.remote.locations[1].quantity, 0);
+  });
+}
 
 for (const keepPaused of [false, true]) {
   test(`a new order mapping counts the sale and ${keepPaused ? 'keeps its location paused' : 'follows company sync'}`, async (t) => {

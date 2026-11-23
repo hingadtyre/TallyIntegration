@@ -16,6 +16,8 @@ function checkedOrder(value: unknown): StockCoverageOrder {
     typeof order.orderDate !== 'string' ||
     !Number.isFinite(Date.parse(order.orderDate)) ||
     (order.eligibilityUnverified !== undefined && order.eligibilityUnverified !== true) ||
+    ('preDispatchWithoutCourierReturn' in order &&
+      (order.preDispatchWithoutCourierReturn !== true || !order.stockShipmentId)) ||
     (order.stockSyncQueued !== undefined && order.stockSyncQueued !== true) ||
     (order.firstSeenUnmapped !== undefined && order.firstSeenUnmapped !== true) ||
     (order.stockIdentityConflict !== undefined && order.stockIdentityConflict !== true) ||

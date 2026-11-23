@@ -88,7 +88,7 @@ export function stockConfiguration(
   };
 }
 
-export function mappedSaleItem(
+export function mappedSaleListing(
   ctx: ReturnType<typeof stockConfiguration>,
   accountId: string,
   order: FlipkartBillingOrder,
@@ -111,6 +111,14 @@ export function mappedSaleItem(
     remote.length === 1 &&
     remote[0].observedAt &&
     remote[0].id === order.listingId
-    ? destination.itemId
+    ? destination
     : null;
+}
+
+export function mappedSaleItem(
+  ctx: ReturnType<typeof stockConfiguration>,
+  accountId: string,
+  order: FlipkartBillingOrder,
+) {
+  return mappedSaleListing(ctx, accountId, order)?.itemId ?? null;
 }
