@@ -117,13 +117,13 @@ test('seller selects their ledger, previews, confirms setup, and explicitly matc
         return response(report);
       case '/api/billing/confirm':
         assert.deepEqual(body, { ...scope, previewId: report.previewId });
-        return response({ rule, report });
+        return response({ rule, report: { ...report, previewId: 'confirmed' } });
       case '/api/billing/coverage':
         return response({ from: null, current: false, checkedThrough: null });
       case '/api/billing/match':
         assert.deepEqual(body, {
           ...scope,
-          previewId: report.previewId,
+          previewId: 'confirmed',
           orderItemId: item.orderItemId,
           billId: candidate.id,
         });
@@ -131,13 +131,14 @@ test('seller selects their ledger, previews, confirms setup, and explicitly matc
           rule,
           report: {
             ...report,
+            previewId: 'matched',
             rows: [{ ...item, status: 'matched', manualBillId: candidate.id, bill: candidate }],
           },
         });
       case '/api/billing/unmatch':
         assert.deepEqual(body, {
           ...scope,
-          previewId: report.previewId,
+          previewId: 'matched',
           orderItemId: item.orderItemId,
         });
         return response({ rule, report });
@@ -166,8 +167,10 @@ test('seller selects their ledger, previews, confirms setup, and explicitly matc
     (screen.getByRole('button', { name: 'Confirm billing setup' }) as HTMLButtonElement).disabled,
   );
   fireEvent.change(screen.getByLabelText('Order period'), { target: { value: '30' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show unresolved only' }));
   fireEvent.click(screen.getByRole('button', { name: 'Confirm billing setup' }));
   const bill = await screen.findByLabelText('Choose bill for OI-82');
+  assert.ok(screen.getByRole('checkbox', { name: 'Show unresolved only', checked: true }));
   assert.ok(screen.getByRole('option', { name: /Tally voucher ID voucher-a/ }));
   assert.ok(screen.getByRole('option', { name: /Tally voucher ID voucher-b/ }));
   const confirm = screen.getByRole('button', { name: 'Confirm bill match' }) as HTMLButtonElement;
@@ -175,6 +178,8 @@ test('seller selects their ledger, previews, confirms setup, and explicitly matc
   fireEvent.change(bill, { target: { value: candidate.id } });
   fireEvent.click(confirm);
   await screen.findByText('1 matched · 0 unresolved');
+  assert.ok(screen.getByText('All order items in this preview have a matched bill.'));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show unresolved only', checked: true }));
   fireEvent.click(screen.getByRole('button', { name: 'Release manual match' }));
   await screen.findByText('0 matched · 1 unresolved');
   assert.deepEqual(commands, [

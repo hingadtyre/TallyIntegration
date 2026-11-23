@@ -788,6 +788,54 @@ test('account-wide search, status and pagination go to the backend and reset the
   assert.equal(requests.at(-1)?.get('accountId'), 'seller-a');
 });
 
+test('a failed filter hides the previous listings and retries the selected status', async (t) => {
+  let filteredReads = 0;
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    const url = new URL(String(input), 'http://localhost');
+    if (url.searchParams.get('status') !== 'ARCHIVED') return baseResponse(input);
+    filteredReads++;
+    return filteredReads === 1
+      ? response({ error: 'Could not read archived listings.' }, 503)
+      : response(page({ ...listing(), status: 'ARCHIVED', title: 'Archived tyre' }));
+  });
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  fireEvent.change(screen.getByLabelText('Listing status'), { target: { value: 'ARCHIVED' } });
+  const alert = await screen.findByRole('alert');
+  assert.match(alert.textContent ?? '', /Could not read archived listings/);
+  assert.equal(screen.queryByRole('table'), null);
+  assert.equal(screen.queryByText('Page 1 of 1'), null);
+  assert.equal(screen.queryByText('1 matching listing'), null);
+  assert.equal(screen.queryByText('No listings to show'), null);
+  fireEvent.click(within(alert).getByRole('button', { name: 'Retry listings' }));
+  await screen.findByText('Archived tyre');
+  assert.equal(screen.queryByRole('alert'), null);
+  assert.equal(filteredReads, 2);
+});
+
+test('retrying a failed catalogue refresh imports again before reading the saved listings', async (t) => {
+  let refreshes = 0;
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    if (String(input) === '/api/marketplaces/refresh') {
+      refreshes++;
+      return refreshes === 1
+        ? response({ error: 'Flipkart refresh timed out.' }, 503)
+        : response({ account: account() });
+    }
+    return baseResponse(input, refreshes < 2 ? listing() : { ...listing(), title: 'Updated tyre' });
+  });
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh listings' }));
+  const alert = await screen.findByRole('alert');
+  assert.match(alert.textContent ?? '', /Flipkart refresh timed out/);
+  assert.ok(screen.getByText('Marketplace tyre'));
+  fireEvent.click(within(alert).getByRole('button', { name: 'Retry refresh' }));
+  await screen.findByText('Updated tyre');
+  assert.equal(refreshes, 2);
+  assert.equal(screen.queryByRole('alert'), null);
+});
+
 test('a lost recovery approval response reloads the saved result without submitting another approval', async (t) => {
   const item = listing();
   const initial = result(

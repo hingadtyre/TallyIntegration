@@ -290,9 +290,9 @@ function MarketplaceListings({
     page: number;
   }>({ search: '', status: '', page: 1 });
   const [data, setData] = useState<MarketplacePage | null>(null);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState('');
+  const [readError, setReadError] = useState('');
+  const [refreshError, setRefreshError] = useState('');
   const [revision, setRevision] = useState(0);
   const [editor, setEditor] = useState<MarketplaceEditorTarget | null>(null);
   const [recovery, setRecovery] = useState<MarketplaceChange | null>(null);
@@ -314,8 +314,8 @@ function MarketplaceListings({
     const controller = new AbortController();
     const generation = ++request.current;
     readInFlight.current = true;
-    setLoading(true);
-    setError('');
+    setData(null);
+    setReadError('');
     void marketplaceApi
       .listings(account.id, query.search, query.status, query.page, controller.signal)
       .then((result) => {
@@ -326,27 +326,25 @@ function MarketplaceListings({
       })
       .catch((failure: unknown) => {
         if (!controller.signal.aborted && generation === request.current)
-          setError(errorMessage(failure));
+          setReadError(errorMessage(failure));
       })
       .finally(() => {
-        if (!controller.signal.aborted && generation === request.current) {
+        if (!controller.signal.aborted && generation === request.current)
           readInFlight.current = false;
-          setLoading(false);
-        }
       });
     return () => controller.abort();
   }, [account.id, query, revision]);
   async function refresh() {
     if (refreshing) return;
     setRefreshing(true);
-    setError('');
+    setRefreshError('');
     try {
       const result = await marketplaceApi.refresh(account.id);
       if (!alive.current) return;
       onAccountUpdated(result.account);
       setRevision((value) => value + 1);
     } catch (failure) {
-      if (alive.current) setError(errorMessage(failure));
+      if (alive.current) setRefreshError(errorMessage(failure));
     } finally {
       if (alive.current) setRefreshing(false);
     }
@@ -394,6 +392,7 @@ function MarketplaceListings({
     setEditor(null);
     setRecovery(change);
   }
+  const loading = !data && !readError;
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   return (
     <>
@@ -425,11 +424,11 @@ function MarketplaceListings({
           Last successful refresh: {time(data?.lastRefreshedAt ?? account.lastRefreshedAt)}
         </span>
       </div>
-      {error && (
+      {refreshError && (
         <div className="message error" role="alert">
-          <span>{error}</span>
-          <button className="button secondary" onClick={() => setRevision((value) => value + 1)}>
-            Retry listings
+          <span>{refreshError}</span>
+          <button className="button secondary" disabled={loading} onClick={() => void refresh()}>
+            Retry refresh
           </button>
         </div>
       )}
@@ -479,6 +478,13 @@ function MarketplaceListings({
           <p className="marketplace-loading" role="status">
             Loading listings…
           </p>
+        ) : readError ? (
+          <div className="message error" role="alert">
+            <span>{readError}</span>
+            <button className="button secondary" onClick={() => setRevision((value) => value + 1)}>
+              Retry listings
+            </button>
+          </div>
         ) : data?.listings.length ? (
           <div className="marketplace-table-scroll">
             <table className="marketplace-table">
@@ -522,32 +528,32 @@ function MarketplaceListings({
             </p>
           </div>
         )}
-        <div className="table-footer">
-          <span>
-            {data
-              ? `${data.total} matching listing${data.total === 1 ? '' : 's'}`
-              : 'No observations loaded'}
-          </span>
-          <div className="marketplace-pagination">
-            <button
-              className="button secondary"
-              disabled={loading || query.page <= 1}
-              onClick={() => setQuery((current) => ({ ...current, page: current.page - 1 }))}
-            >
-              Previous
-            </button>
+        {data && (
+          <div className="table-footer">
             <span>
-              Page {query.page} of {totalPages}
+              {data.total} matching listing{data.total === 1 ? '' : 's'}
             </span>
-            <button
-              className="button secondary"
-              disabled={loading || query.page >= totalPages}
-              onClick={() => setQuery((current) => ({ ...current, page: current.page + 1 }))}
-            >
-              Next
-            </button>
+            <div className="marketplace-pagination">
+              <button
+                className="button secondary"
+                disabled={data.page <= 1}
+                onClick={() => setQuery((current) => ({ ...current, page: current.page - 1 }))}
+              >
+                Previous
+              </button>
+              <span>
+                Page {data.page} of {totalPages}
+              </span>
+              <button
+                className="button secondary"
+                disabled={data.page >= totalPages}
+                onClick={() => setQuery((current) => ({ ...current, page: current.page + 1 }))}
+              >
+                Next
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </section>
       {editor && (
         <MarketplaceListingEditor

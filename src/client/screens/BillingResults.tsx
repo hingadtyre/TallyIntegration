@@ -74,7 +74,7 @@ export function BillingResults({ report, ...actions }: Actions & { report: Billi
                       <th>Tally bill</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody key={report.previewId}>
                     {rows.map((row) => (
                       <OrderRow
                         key={row.orderItemId}

@@ -133,17 +133,22 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           To see which recent Flipkart orders you have billed, open Order matching. Select the Tally
           company and Flipkart account, choose your Flipkart sales bill ledger, and select the bill
           field where you record an order or invoice number. You can also match manually. Preview
-          the matches and confirm the setup for each participating seller. Choose the tracking start
-          date after checking that earlier sales are in Tally. When an order needs a mapping, choose
-          Map listing and confirm the Tally item and Set of at that pickup location. Stockbridge
-          checks saved orders from your tracking date against the ledger and reserves unbilled
-          units. A verified seller-fulfilled order can reserve stock before packing. Held orders
-          need review. Existing listings keep syncing while a sale waits for its mapping, even if
-          they share the same tyres.
+          the matches and confirm the setup for each participating seller. Select Show unresolved
+          only to keep the remaining orders in view as you confirm each bill. Choose the tracking
+          start date after checking that earlier sales are in Tally. When an order needs a mapping,
+          choose Map listing and confirm the Tally item and Set of at that pickup location.
+          Stockbridge checks saved orders from your tracking date against the ledger and reserves
+          unbilled units. A verified seller-fulfilled order can reserve stock before packing. Held
+          orders need review. Existing listings keep syncing while a sale waits for its mapping,
+          even if they share the same tyres.
         </p>
       </details>
       <details className="guide-topic">
         <summary>Edit marketplace stock and prices</summary>
+        <p>
+          If a search, filter or page fails to load, choose Retry listings. If a Flipkart import
+          fails, choose Retry refresh to fetch the catalogue again.
+        </p>
         <p>
           In Marketplaces, use the pencil beside stock, MRP or selling price. Applying a manual
           stock edit to a Tally-mapped listing pauses sync at that warehouse. Flipkart can still

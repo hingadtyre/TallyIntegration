@@ -365,7 +365,6 @@ function BillingReview({
             </p>
           )}
           <BillingResults
-            key={report.previewId}
             report={report}
             confirmed={confirmed}
             busy={!!busy || requiresRefresh || periodChanged}

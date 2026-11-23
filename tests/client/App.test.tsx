@@ -215,6 +215,21 @@ test('narrow navigation closes after selection and resizing preserves the sideba
   render(<App />);
   await screen.findByRole('heading', { name: 'Inventory' });
 
+  const toggle = screen.getByRole('button', { name: 'Expand sidebar' });
+  const settings = screen.getByRole('button', { name: 'Settings' });
+  const company = screen.getByLabelText('Tally company');
+  fireEvent.click(toggle);
+  act(() => settings.focus());
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  fireEvent.keyDown(settings, { key: 'Escape' });
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(document.activeElement, toggle);
+  fireEvent.click(toggle);
+  act(() => settings.focus());
+  act(() => company.focus());
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(document.activeElement, company);
+
   fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
   assert.equal(
     screen.getByRole('button', { name: 'Collapse sidebar' }).getAttribute('aria-expanded'),
@@ -236,6 +251,8 @@ test('narrow navigation closes after selection and resizing preserves the sideba
     'false',
   );
   fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+  act(() => settings.focus());
+  act(() => company.focus());
   act(() => {
     Object.defineProperty(window, 'innerWidth', { value: 1400 });
     window.dispatchEvent(new window.Event('resize'));

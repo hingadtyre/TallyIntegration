@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Icon } from './components.js';
 import { useWorkspace } from './useWorkspace.js';
 import { InventoryScreen } from './screens/InventoryScreen.js';
@@ -32,6 +32,7 @@ export function App() {
   const [unsavedInventory, setUnsavedInventory] = useState(false);
   const [inventoryReset, setInventoryReset] = useState(0);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
+  const sidebarToggle = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => {
     document.documentElement.scrollTop = 0;
   }, [screen]);
@@ -81,7 +82,24 @@ export function App() {
   }
   return (
     <div className={`app-shell ${sidebarExpanded ? 'sidebar-expanded' : 'sidebar-collapsed'}`}>
-      <aside className="sidebar" id="workspace-sidebar">
+      <aside
+        className="sidebar"
+        id="workspace-sidebar"
+        onBlur={(event) => {
+          if (
+            sidebarExpanded &&
+            isNarrowViewport() &&
+            !event.currentTarget.contains(event.relatedTarget)
+          )
+            setSidebarExpanded(false);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && sidebarExpanded && isNarrowViewport()) {
+            setSidebarExpanded(false);
+            sidebarToggle.current?.focus();
+          }
+        }}
+      >
         <a
           href="#inventory"
           className="wordmark"
@@ -99,6 +117,7 @@ export function App() {
         <button
           type="button"
           className="sidebar-toggle"
+          ref={sidebarToggle}
           aria-label={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
           title={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
           aria-expanded={sidebarExpanded}
