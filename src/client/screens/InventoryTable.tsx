@@ -10,6 +10,12 @@ import {
 import { isLowStock } from '../selectors.js';
 import { QuantityEditor } from './QuantityEditor.js';
 import { KeepBackEditor } from './KeepBackEditor.js';
+
+function compareListingRows(a: Listing, b: Listing): number {
+  if (a.packSize !== b.packSize) return (a.packSize ?? Infinity) - (b.packSize ?? Infinity);
+  return a.sku.localeCompare(b.sku) || a.location.localeCompare(b.location);
+}
+
 export function ItemRows({
   item,
   listings,
@@ -126,6 +132,7 @@ export function ItemRows({
       </tr>
       {listings
         .filter((listing) => !collapsed || dirtyListings.includes(listing.id))
+        .sort(compareListingRows)
         .map((listing) => (
           <tr
             hidden={collapsed || !visibleListings.has(listing.id)}

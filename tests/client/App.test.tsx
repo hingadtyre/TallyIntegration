@@ -25,6 +25,55 @@ const disconnectedFlipkart: FlipkartConnectionStatus = {
   message: 'No Flipkart API credentials are saved.',
 };
 
+test('Inventory orders mapped listings by the displayed Set of, then SKU and pickup location', async (t) => {
+  const state = initialState('demo', 'unused');
+  const base = state.listings.find((listing) => listing.itemId === 'item-a')!;
+  const pair = {
+    ...base,
+    sku: 'PAIR-A',
+    packSize: 2,
+    packSource: 'packages' as const,
+    packageCount: 2,
+  };
+  state.listings = [
+    { ...base, id: 'unknown', sku: 'UNKNOWN', location: 'East', packSize: null, verified: false },
+    {
+      ...base,
+      id: 'ten',
+      sku: 'TEN',
+      location: 'East',
+      packSize: 10,
+      packSource: 'manual',
+      packageCount: 1,
+    },
+    {
+      ...pair,
+      id: 'pair-b',
+      sku: 'PAIR-B',
+      location: 'East',
+      packageCount: 1,
+      packageAvailable: true,
+      verified: false,
+    },
+    { ...pair, id: 'pair-west', location: 'West' },
+    { ...pair, id: 'pair-east', location: 'East' },
+  ];
+  t.mock.method(globalThis, 'fetch', async () => response(state));
+  render(<App />);
+
+  const buttons = await screen.findAllByRole('button', { name: /^Edit Set of for / });
+  assert.deepEqual(
+    buttons.map((button) => button.getAttribute('aria-label')),
+    [
+      'Edit Set of for PAIR-A at East',
+      'Edit Set of for PAIR-A at West',
+      'Edit Set of for PAIR-B at East',
+      'Edit Set of for TEN at East',
+      'Edit Set of for UNKNOWN at East',
+    ],
+  );
+});
+
 test('edits keep-back on a collapsed Tally item, previews order reservations, and saves only on request', async (t) => {
   const state = initialState('demo', 'unused');
   const item = state.items.find((row) => row.id === 'item-a')!;
