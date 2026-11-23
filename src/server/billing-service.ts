@@ -19,6 +19,7 @@ import {
   type BillingScope,
 } from './billing-matcher.js';
 import { sampleBills, sampleLedger } from './billing-sample.js';
+import { invalidateReservationDrafts } from './proposals.js';
 import type { BillingData } from './storage/billing-records.js';
 import type { StockAvailabilityService } from './stock-availability.js';
 import type { Store } from './store.js';
@@ -128,6 +129,7 @@ function currentReview(
 
 function saveDecision(
   data: BillingData,
+  state: Snapshot,
   decision: Decision,
   input: Record<string, unknown>,
   scope: BillingScope,
@@ -135,6 +137,20 @@ function saveDecision(
   match: Matches,
 ): void {
   if (decision === 'confirm') {
+    const previous = configuredRule(data, scope);
+    if (
+      !previous ||
+      previous.ledgerId !== rule.ledgerId ||
+      previous.field !== rule.field ||
+      previous.reference !== rule.reference
+    ) {
+      invalidateReservationDrafts(
+        state,
+        new Set(
+          state.items.filter((item) => item.companyId === scope.companyId).map((item) => item.id),
+        ),
+      );
+    }
     data.rules = data.rules.filter(
       (row) => row.companyId !== scope.companyId || row.accountId !== scope.accountId,
     );
@@ -143,15 +159,23 @@ function saveDecision(
   }
   const orderItemId = requireText(input.orderItemId, 'Order item');
   const row = match.rows.find((order) => order.orderItemId === orderItemId);
-  if (decision === 'unmatch') {
-    if (!row?.manualBillId)
-      throw new InputError('This order has no manual confirmation here.', 409);
-    data.links = data.links.filter(
-      (link) =>
-        link.accountId !== scope.accountId ||
-        link.companyId !== scope.companyId ||
-        link.orderItemId !== orderItemId,
+  const invalidateItem = (externalId: string) => {
+    const item = state.items.find(
+      (item) => item.companyId === scope.companyId && item.externalId === externalId,
     );
+    if (item) invalidateReservationDrafts(state, new Set([item.id]));
+  };
+  if (decision === 'unmatch') {
+    const previous = data.links.find(
+      (link) =>
+        link.accountId === scope.accountId &&
+        link.companyId === scope.companyId &&
+        link.orderItemId === orderItemId,
+    );
+    if (!previous || !row?.manualBillId)
+      throw new InputError('This order has no manual confirmation here.', 409);
+    invalidateItem(previous.itemId);
+    data.links = data.links.filter((link) => link !== previous);
     return;
   }
   const billId = requireText(input.billId, 'Sales bill');
@@ -159,6 +183,7 @@ function saveDecision(
   if (!link || row?.status !== 'review' || !row.candidates.some((bill) => bill.id === billId))
     throw new InputError('Choose an available candidate from the current review.', 409);
   data.links.push(link);
+  invalidateItem(link.itemId);
 }
 
 export class BillingService {
@@ -404,8 +429,8 @@ export class BillingService {
           'The order, bill or stock evidence changed. Preview it again before saving.',
           409,
         );
-      this.store.updateBilling((data) =>
-        saveDecision(data, action, input, scope, requested, match),
+      this.store.updateBilling((data, state) =>
+        saveDecision(data, state, action, input, scope, requested, match),
       );
       decisions = this.store.readBilling();
       match = matchCurrent();

@@ -50,7 +50,14 @@ const report: BillingReport = {
   rule,
   rows: [item],
   stock: [
-    { name: 'Sample tyre', unit: 'tyres', physical: 6, unmatchedUnits: 2, previewAvailable: 4 },
+    {
+      name: 'Sample tyre',
+      unit: 'tyres',
+      physical: 6,
+      keepBackUnits: 0,
+      unmatchedUnits: 2,
+      previewAvailable: 4,
+    },
   ],
 };
 

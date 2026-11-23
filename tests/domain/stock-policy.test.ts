@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  availableForMarketplaces,
   applyFlipkartTyreFloor,
   calculateStock,
   completePacks,
@@ -9,6 +10,17 @@ import {
 } from '../../src/domain/stock-policy.js';
 
 const auto: StockPolicy = { mode: 'auto', remaining: null };
+
+test('fractional Tally keep-back retains complete packs at decimal boundaries', () => {
+  const units = availableForMarketplaces(8.2, 1, 0.2);
+  assert.equal(units, 7);
+  assert.equal(completePacks(units, 1), 7);
+  assert.equal(availableForMarketplaces(0.3, 0, 0.1), 0.2);
+  assert.equal(availableForMarketplaces(0.2, 0, 0.2), 0);
+  assert.equal(completePacks(availableForMarketplaces(8, 0, 0.0000000000000001), 2), 3);
+  assert.equal(completePacks(availableForMarketplaces(8.1, 0, 0.10000000000000002), 1), 7);
+  assert.equal(availableForMarketplaces(1.5, 1, 2.5), 0);
+});
 
 test('a listing using ordinary pack arithmetic advertises only complete packs', () => {
   for (const [physical, expected] of [

@@ -24,6 +24,38 @@ export function requireNonnegativeUnits(value: number, name: string): void {
   }
 }
 
+function decimalUnits(value: number) {
+  const [mantissa, exponent = '0'] = String(value).split('e');
+  const [whole, fraction = ''] = mantissa.split('.');
+  return { digits: BigInt(whole + fraction), scale: fraction.length - Number(exponent) };
+}
+
+/** All three values are in the stock item's Tally base unit. Reservations are whole units. */
+export function availableForMarketplaces(
+  physical: number,
+  reservedUnits: number,
+  keepBackUnits: number,
+): number {
+  if (Number.isInteger(physical) && Number.isInteger(keepBackUnits))
+    return Math.max(0, physical - reservedUnits - keepBackUnits);
+  // Subtract the source decimals exactly (8.2 minus 0.2 makes eight whole units).
+  const stock = decimalUnits(physical);
+  const kept = decimalUnits(keepBackUnits);
+  const scale = Math.max(0, stock.scale, kept.scale);
+  const divisor = 10n ** BigInt(scale);
+  const net =
+    stock.digits * 10n ** BigInt(scale - stock.scale) -
+    kept.digits * 10n ** BigInt(scale - kept.scale) -
+    BigInt(reservedUnits) * divisor;
+  if (net <= 0n) return 0;
+  const result = Number(String(net) + 'e-' + scale);
+  // A tiny keep-back can round the result UP to a whole unit. Keep the returned
+  // balance just below that boundary so it cannot manufacture a complete pack.
+  if (Number.isInteger(result) && BigInt(result) > net / divisor)
+    return result - (result * Number.EPSILON) / 2;
+  return result;
+}
+
 /** Convert physical base units into complete sellable packs. */
 export function completePacks(physical: number, packSize: number): number {
   if (!Number.isFinite(physical) || Math.abs(physical) > Number.MAX_SAFE_INTEGER) {

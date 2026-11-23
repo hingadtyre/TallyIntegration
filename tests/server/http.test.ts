@@ -13,6 +13,55 @@ const dashboardHeaders = {
   'X-Stockbridge-Request': '1',
 };
 
+test('item keep-back saves by company and version, queues only eligible siblings and survives restart', async (t) => {
+  const f = fixture(t);
+  f.store.update((state) => {
+    state.companies[0].automation = true;
+    state.listings[1].verified = false;
+  });
+  f.service.calculate('demo-a', ['listing-1']);
+  const app = createApp(f.service, f.folder);
+  const address = await listen(app);
+  t.after(() => close(app));
+  const input = { companyId: 'demo-a', itemId: 'item-a', itemVersion: 1, keepBackUnits: 6.5 };
+  const post = (changes: Partial<typeof input> = {}) =>
+    fetch(address + '/api/items/keep-back', {
+      method: 'POST',
+      headers: dashboardHeaders,
+      body: JSON.stringify({ ...input, ...changes }),
+    });
+  assert.equal((await post({ companyId: 'demo-b' })).status, 400);
+  assert.equal((await post({ keepBackUnits: -1 })).status, 400);
+  const response = await post();
+  assert.equal(response.status, 200);
+  const result = (await response.json()) as Snapshot;
+  const item = result.items.find((row) => row.id === 'item-a')!;
+  assert.equal(item.keepBackUnits, 6.5);
+  assert.equal(item.version, 2);
+  assert.equal(item.physical, 4);
+  assert.equal(result.items.find((row) => row.id === 'item-e')!.keepBackUnits, 0);
+  assert.equal(result.proposals[0].stale, true);
+  assert.deepEqual(
+    result.listings.filter((row) => row.syncPendingItemVersion === 2).map((row) => row.id),
+    ['listing-1', 'listing-3', 'listing-4'],
+  );
+  assert.equal(result.listings[0].observed, 5);
+  assert.equal((await post()).status, 200, 'replaying a successful save is idempotent');
+  assert.equal((await post({ keepBackUnits: 3 })).status, 409);
+  assert.equal(
+    f.store.read().activity.filter((row) => row.operation === 'item-keep-back').length,
+    1,
+  );
+  f.reopen();
+  const reloaded = f.service.snapshot();
+  assert.deepEqual(reloaded.items, result.items);
+  assert.deepEqual(reloaded.listings, result.listings);
+  f.service.automation('demo-a', false);
+  const cleared = f.service.setKeepBack('demo-a', 'item-a', 2, 0);
+  assert.equal(cleared.items[0].keepBackUnits, 0);
+  assert.ok(cleared.listings.every((row) => row.syncPendingItemVersion == null));
+});
+
 test('Flipkart credential routes require dashboard requests and return only public status', async (t) => {
   const f = fixture(t, 'live');
   const state: FlipkartConnectionStatus = {

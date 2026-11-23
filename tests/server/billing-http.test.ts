@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createApp } from '../../src/server/http.js';
 import { MarketplaceService } from '../../src/server/marketplace-service.js';
+import { InventoryService } from '../../src/server/service.js';
 import { BillingService } from '../../src/server/billing-service.js';
 import { saleDay } from '../../src/server/billing-matcher.js';
 import { marketplaceData } from '../support/marketplace-fixture.js';
@@ -60,6 +61,10 @@ test('seller selects a ledger, previews, confirms and corrects a bill without pu
     await post('confirm', { previewId: preview.previewId })
   ).json()) as BillingWorkspace;
   assert.equal(confirmed.rule?.ledgerId, settings.ledgerId);
+  f.service.calculate(scope.companyId, ['listing-2']);
+  const savedDraft = () =>
+    f.service.snapshot().proposals.find((draft) => draft.listingId === 'listing-2')!;
+  assert.equal(savedDraft().stale, false);
   const linked = (await (
     await post('match', {
       previewId: confirmed.report!.previewId,
@@ -70,6 +75,11 @@ test('seller selects a ledger, previews, confirms and corrects a bill without pu
   const row = linked.report!.rows[0];
   assert.equal(row.status, 'matched');
   assert.equal(row.manualBillId, 'sample-bill-1');
+  assert.equal(
+    savedDraft().stale,
+    true,
+    'saving a manual bill link invalidates sibling calculations',
+  );
   assert.equal(linked.report!.rows[1].candidates.length, 0);
   assert.equal(linked.report!.stock[0].unmatchedUnits, 1);
   assert.equal(
@@ -86,10 +96,13 @@ test('seller selects a ledger, previews, confirms and corrects a bill without pu
     await post('workspace', { companyId: 'demo-b' })
   ).json()) as BillingWorkspace;
   assert.deepEqual(other, { rule: null, report: null });
+  f.service.calculate(scope.companyId, ['listing-2']);
+  assert.equal(savedDraft().stale, false);
   const released = (await (
     await post('unmatch', { previewId: linked.report!.previewId, orderItemId: row.orderItemId })
   ).json()) as BillingWorkspace;
   assert.equal(released.report!.stock[0].unmatchedUnits, 2);
+  assert.equal(savedDraft().stale, true, 'unlinking the bill requires fresh reservation evidence');
   const automatic = (await (
     await post('preview', { ...settings, field: 'reference' })
   ).json()) as BillingReport;
@@ -102,6 +115,76 @@ test('seller selects a ledger, previews, confirms and corrects a bill without pu
   assert.equal(f.store.readBilling().rules[0].field, 'manual');
   assert.deepEqual(f.store.readMarketplace(), market);
   assert.deepEqual(f.store.read().items, inventory.items);
+});
+
+test('keep-back preview verifies sample orders and the next sync publishes both increases and decreases', async (t) => {
+  const f = serverFixture(t);
+  const markets = new MarketplaceService(f.store, f.folder);
+  const inventory = new InventoryService(f.store, { marketplaces: markets });
+  const app = createApp(inventory, f.folder, undefined, undefined, markets);
+  const address = await listen(app);
+  t.after(async () => {
+    await close(app);
+    markets.stop();
+    await inventory.idle();
+    await markets.idle();
+  });
+  const scope = { companyId: 'demo-a', accountId: 'flipkart-primary' };
+  const itemId = 'item-a';
+  const post = (action: string, data: Record<string, unknown>) =>
+    fetch(address + '/api/' + action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Stockbridge-Request': '1' },
+      body: JSON.stringify({ ...scope, ...data }),
+    });
+  const list = () => f.store.read().listings.find((row) => row.id === 'listing-2')!;
+  const base = f.store.read().items.find((row) => row.id === itemId)!;
+  assert.equal((await post('items/keep-back/preview', { itemId })).status, 409);
+  const rule = await post('billing/preview', {
+    ledgerId: 'sample-sales-demo-a',
+    field: 'reference',
+    reference: 'orderId',
+    days: 7,
+  });
+  const { previewId } = (await rule.json()) as BillingReport;
+  assert.equal((await post('billing/confirm', { previewId })).status, 200);
+  assert.equal(
+    (await post('billing/coverage/start', { fromDate: saleDay(base.observedAt!), confirmed: true }))
+      .status,
+    200,
+  );
+  f.store.update((state) => {
+    state.companies.find((row) => row.id === scope.companyId)!.automation = true;
+    state.listings.find((row) => row.id === 'listing-2')!.tyreFloor = false;
+  });
+  const coverage = f.store.readStockCoverage(scope.companyId);
+  const preview = await post('items/keep-back/preview', { itemId });
+  assert.equal(preview.status, 200);
+  assert.deepEqual(await preview.json(), {
+    physical: 4,
+    reservedUnits: 1,
+    itemVersion: base.version,
+  });
+  assert.deepEqual(f.store.readStockCoverage(scope.companyId), coverage);
+  assert.equal(
+    (await post('items/keep-back', { itemId, itemVersion: base.version, keepBackUnits: 4 })).status,
+    200,
+  );
+  assert.equal(list().observed, 5);
+  assert.equal(f.store.readMarketplace().changes.length, 0);
+  await inventory.refresh(scope.companyId);
+  assert.equal(list().observed, 0);
+  assert.equal(list().paused, false);
+  assert.equal(list().syncPendingItemVersion, null);
+  const version = f.store.read().items.find((row) => row.id === itemId)!.version;
+  assert.equal(
+    (await post('items/keep-back', { itemId, itemVersion: version, keepBackUnits: 0 })).status,
+    200,
+  );
+  assert.equal(list().observed, 0);
+  await inventory.refresh(scope.companyId);
+  assert.equal(list().observed, 1);
+  assert.equal(f.store.readStockCoverage(scope.companyId)?.from, coverage?.from);
 });
 
 test('live review reads the configured books and seller, and a ledger bill alone creates no order', async (t) => {
@@ -135,6 +218,7 @@ test('live review reads the configured books and seller, and a ledger bill alone
       observedAt: null,
       version: 1,
       lowStockThreshold: 1,
+      keepBackUnits: 0,
     });
     state.listings.push({
       id: 'destination',

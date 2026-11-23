@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { saleDay } from '../domain/sale-day.js';
 import type { FlipkartBillingOrder } from '../adapters/flipkart-billing.js';
 import type { TallySalesBill, TallyStockItem } from '../adapters/tally.js';
+import { availableForMarketplaces } from '../domain/stock-policy.js';
 import type { BillingReport, BillingRow, BillingRule } from '../shared/billing-contracts.js';
 import type { Snapshot } from '../shared/contracts.js';
 import type { MarketplaceListing } from '../shared/marketplace-contracts.js';
@@ -309,10 +310,11 @@ export function matchBills(
       unit: item.unit,
       physical,
       unmatchedUnits,
+      keepBackUnits: item.keepBackUnits,
       previewAvailable:
         physical === null || unmatchedUnits === null
           ? null
-          : Math.max(0, physical - unmatchedUnits),
+          : availableForMarketplaces(physical, unmatchedUnits, item.keepBackUnits),
     };
   });
   return {

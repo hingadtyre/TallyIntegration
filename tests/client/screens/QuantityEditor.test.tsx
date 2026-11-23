@@ -132,7 +132,7 @@ test('explicitly retyping a calculated zero makes it a manual draft only after S
   assert.equal(screen.queryByRole('button', { name: /Save draft/ }), null);
 });
 
-test('an unchanged stale calculated zero requires recalculation and cannot be submitted as a manual zero', () => {
+test('an unchanged calculated zero waits for its automatic update and cannot be submitted as a manual zero', () => {
   const state = initialState('demo', 'unused');
   let saves = 0;
   const { container } = render(
@@ -147,8 +147,72 @@ test('an unchanged stale calculated zero requires recalculation and cannot be su
       }}
     />,
   );
-  assert.ok(screen.getByText('Needs recalculation'));
+  assert.ok(screen.getByText('Updating proposal…'));
   assert.equal(screen.queryByRole('button', { name: /Save draft/ }), null);
   fireEvent.submit(container.querySelector('form')!);
   assert.equal(saves, 0);
+});
+
+test('a refreshed proposal updates a clean input and preserves an unsaved manual quantity', async () => {
+  const state = initialState('demo', 'unused');
+  const saved: number[] = [];
+  const editor = (draft: Proposal, issue?: string) => (
+    <QuantityEditor
+      listing={{ ...state.listings[0], proposalIssue: issue }}
+      proposal={draft}
+      disabled={false}
+      onDirty={() => {}}
+      onSave={async (quantity) => {
+        saved.push(quantity);
+        return { ok: true, value: state };
+      }}
+    />
+  );
+  const stale = { ...proposal, stale: true };
+  const { rerender } = render(editor(stale, 'Check the stock balance in Tally.'));
+  const input = screen.getByRole('spinbutton') as HTMLInputElement;
+  assert.equal(input.value, '5');
+  assert.ok(screen.getByText('Previous proposal. Check the stock balance in Tally.'));
+  rerender(editor({ ...proposal, quantity: 4, itemVersion: 2 }));
+  assert.equal(input.value, '4');
+  assert.ok(screen.getByText('Calculated draft'));
+  fireEvent.change(input, { target: { value: '2' } });
+  rerender(editor({ ...proposal, quantity: 3, itemVersion: 3 }));
+  assert.equal(input.value, '2');
+  rerender(editor({ ...proposal, quantity: 2, itemVersion: 4 }));
+  assert.ok(screen.getByText('Unsaved draft'));
+  assert.deepEqual(saved, []);
+  fireEvent.click(screen.getByRole('button', { name: /Save draft/ }));
+  await waitFor(() => assert.deepEqual(saved, [2]));
+});
+
+test('retyping a calculated five can be saved explicitly or discarded to show the latest proposal', async () => {
+  const state = initialState('demo', 'unused');
+  const saved: number[] = [];
+  const editor = (quantity: number) => (
+    <QuantityEditor
+      listing={state.listings[0]}
+      proposal={{ ...proposal, quantity, calculated: quantity }}
+      disabled={false}
+      onDirty={() => {}}
+      onSave={async (value) => {
+        saved.push(value);
+        return { ok: true, value: state };
+      }}
+    />
+  );
+  const { rerender } = render(editor(5));
+  const input = screen.getByRole('spinbutton') as HTMLInputElement;
+  fireEvent.focus(input);
+  assert.equal(screen.queryByRole('button', { name: /Save draft/ }), null);
+  fireEvent.input(input, { target: { value: '5' } });
+  rerender(editor(4));
+  assert.equal(input.value, '5');
+  fireEvent.click(screen.getByRole('button', { name: /Discard edit/ }));
+  assert.equal(input.value, '4');
+  assert.deepEqual(saved, []);
+  rerender(editor(5));
+  fireEvent.input(input, { target: { value: '5' } });
+  fireEvent.click(screen.getByRole('button', { name: /Save draft/ }));
+  await waitFor(() => assert.deepEqual(saved, [5]));
 });

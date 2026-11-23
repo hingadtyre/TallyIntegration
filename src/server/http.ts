@@ -126,6 +126,15 @@ async function runCommand(
       return service.edit(input.companyId, input.listingId, input.quantity);
     case '/api/pause':
       return service.pause(input.companyId, input.listingIds, input.paused, input.listingVersion);
+    case '/api/items/keep-back':
+      return service.setKeepBack(
+        input.companyId,
+        input.itemId,
+        input.itemVersion,
+        input.keepBackUnits,
+      );
+    case '/api/items/keep-back/preview':
+      return service.previewKeepBack(input.companyId, input.itemId);
     case '/api/automation':
       if (input.enabled === true)
         return service.automationReviews.enable(input.companyId, input.previewId, () =>
@@ -137,7 +146,7 @@ async function runCommand(
     case '/api/automation/trial':
       return service.automationReviews.trial(input.companyId, input.previewId, input.listingId);
     case '/api/review':
-      return service.review(input.companyId, input.listingIds);
+      return service.prepareReview(input.companyId, input.listingIds);
     case '/api/settings':
       return service.settings(input.settings);
     case '/api/mappings':
@@ -147,7 +156,7 @@ async function runCommand(
     case '/api/backup':
       return service.backup();
     case '/api/publish':
-      return service.publish(input.reviewId, input.positiveEdits);
+      return service.publish(input.reviewId, input.positiveEdits, input.keepBackOverrides);
     default:
       throw new InputError('Route not found.', 404);
   }

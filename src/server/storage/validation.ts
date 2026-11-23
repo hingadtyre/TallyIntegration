@@ -114,6 +114,8 @@ function item(value: unknown, field: string): StockItem {
     observedAt: nullableTimestamp(row.observedAt, `${field}.observedAt`),
     version: integer(row.version, `${field}.version`),
     lowStockThreshold: number(row.lowStockThreshold, `${field}.lowStockThreshold`, 0),
+    keepBackUnits:
+      row.keepBackUnits === undefined ? 0 : number(row.keepBackUnits, `${field}.keepBackUnits`, 0),
   };
 }
 

@@ -1,3 +1,5 @@
+import type { MarketplaceKeepBackReview } from './marketplace-contracts.js';
+
 export type PolicyMode = 'auto' | 'limited';
 export interface Company {
   id: string;
@@ -18,6 +20,8 @@ export interface StockItem {
   observedAt: string | null;
   version: number;
   lowStockThreshold: number;
+  /** Tally base units the seller keeps out of calculated marketplace stock. */
+  keepBackUnits: number;
 }
 export interface SellerAccount {
   id: string;
@@ -127,6 +131,7 @@ export interface Snapshot {
   connection: ConnectionStatus;
 }
 export interface ReviewRow {
+  keepBackWarning?: MarketplaceKeepBackReview;
   /** Whether the destination was paused when the seller opened this review. */
   paused?: boolean;
   /** Present for positive manual edits, including null when Update once is eligible. */
@@ -153,6 +158,8 @@ export interface InventoryPublishRow {
   sku: string;
   status: 'confirmed' | 'unchanged' | 'blocked' | 'failed' | 'uncertain';
   message: string;
+  /** A changed calculated quantity saved for a fresh, listing-scoped review. */
+  latestQuantity?: number;
 }
 export interface InventoryPublishResult {
   rows: InventoryPublishRow[];

@@ -15,6 +15,8 @@ export async function runMarketplaceCommand(
       return service.refresh(input.accountId);
     case '/api/marketplaces/apply':
       return service.apply(input);
+    case '/api/marketplaces/keep-back/review':
+      return service.reviewKeepBack(input);
     case '/api/marketplaces/reconcile':
       return service.reconcile(input);
     case '/api/marketplaces/recovery/review':

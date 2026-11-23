@@ -17,6 +17,7 @@ import {
   createStockCoverageSchema,
   addCompanyStockIssue,
   addProposalIssue,
+  addItemKeepBack,
   createSkuMappings,
   upgradeOrderSyncSchema,
   CURRENT_SCHEMA_VERSION,
@@ -111,6 +112,7 @@ export function prepareDatabase(
       if (version < 8) addCompanyStockIssue(database);
       if (version < 10) addProposalIssue(database);
       if (version < 11) createSkuMappings(database);
+      if (version < 12) addItemKeepBack(database);
     }
     database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION};`);
     // The old-schema reader converted holds to pauses with their drafts and queued work.

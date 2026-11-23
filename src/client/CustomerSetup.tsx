@@ -98,6 +98,12 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           choices in this workspace and reloads them on restart.
         </p>
         <p>
+          To set stock aside, edit Keep back from marketplaces beside the item's Tally stock. Enter
+          the quantity in its Tally unit and choose Save. Stockbridge deducts it once across the
+          item's listings, then applies each listing's Set of and tyre minimum. Enter zero to
+          release the stock. Eligible listings update on the next sync.
+        </p>
+        <p>
           Before enabling company sync, review the seller accounts, locations and expected
           quantities in Inventory. Try one listing lets you approve a single update and verify it
           while company sync stays off. Paused listings stay paused. Waiting listings can start when
@@ -106,15 +112,19 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
         </p>
         <p>
           Choose Saved proposals at the top of Inventory to see listings with drafts. Choose Tally
-          stock items to return to all items. Use Calculate, Review changes and Publish to send
-          reviewed stock. For a positive manual edit on an Auto listing, choose Update once.
-          Publishing a zero you entered pauses Tally sync at that location. When Tally stock falls
-          too low to fill a set, Stockbridge can publish a calculated zero and update the listing
-          again after restocking. With automatic updates enabled, a change in Tally stock
-          recalculates eligible listings. A verified Flipkart sale can also lower stock on other
-          listings supplied by the same Tally item before the sale is billed. Review any
-          package-count changes in the listing’s Set of cell. If a bulk calculation reports blocked
-          listings, use Fix Set of where offered or review the ready drafts.
+          stock items to return to all items. Use Calculate to create a draft. Stockbridge refreshes
+          an outdated calculated draft automatically, even on a paused listing. A quantity you enter
+          yourself stays yours to review. Review changes keeps the quantities you saw when it
+          opened. Publish checks each listing again. If a calculated quantity has changed, you can
+          review its new value from the results. Other eligible listings can still publish. For a
+          positive manual edit on an Auto listing, choose Update once. Publishing a zero you entered
+          pauses Tally sync at that location. When Tally stock falls too low to fill a set,
+          Stockbridge can publish a calculated zero and update the listing again after restocking.
+          With automatic updates enabled, a change in Tally stock recalculates eligible listings. A
+          verified Flipkart sale can also lower stock on other listings supplied by the same Tally
+          item before the sale is billed. Review any package-count changes in the listing’s Set of
+          cell. If a bulk calculation reports blocked listings, use Fix Set of where offered or
+          review the ready drafts.
         </p>
       </details>
       <details className="guide-topic">

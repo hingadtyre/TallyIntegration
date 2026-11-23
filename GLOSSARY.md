@@ -74,8 +74,11 @@ Goods sent back after the marketplace buyer received them and requested a return
 The seller's confirmation that an individual returned package has arrived and has been checked. A marketplace or courier delivery status alone does not establish physical receipt.
 _Avoid_: Delivered when only a tracking status is known
 
+**Keep back from marketplaces**:
+A standing quantity of a Tally stock item that its seller sets aside for other uses. The seller enters it in the item's Tally unit. Stockbridge deducts it once from the shared balance used by all marketplace listings mapped to that item in that Tally company.
+
 **Fulfillable pack quantity**:
-The number of complete packs that can be supplied from the available Tally units before applying a marketplace advertising policy. For calculated stock sync, available units are the verified Tally balance less covered Flipkart sales whose stock deduction has yet to be matched in Tally, with a lower bound of zero.
+The number of complete packs that can be supplied from the available Tally units before applying a marketplace advertising policy. Available units are the verified Tally balance less the quantity kept back and covered Flipkart sales awaiting a matching Tally deduction, with a lower bound of zero.
 
 **Advertised stock floor**:
 A minimum marketplace quantity applied when at least one complete pack is physically available. For the agreed Flipkart tyre policy the floor is five; zero fulfillable packs still results in zero advertised stock.

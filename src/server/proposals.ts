@@ -1,4 +1,4 @@
-import { calculateStock } from '../domain/stock-policy.js';
+import { availableForMarketplaces, calculateStock } from '../domain/stock-policy.js';
 import type { Listing, Proposal, Snapshot, StockItem } from '../shared/contracts.js';
 import { InputError } from './validation.js';
 
@@ -39,19 +39,24 @@ export function requireStockSource(
 export function desiredStock(
   state: Snapshot,
   listing: Listing,
-  policy: 'current' | 'normal' = 'current',
+  policy: 'current' | 'manual-ceiling' = 'current',
   availableUnits?: number,
   item?: StockItem,
 ): number {
   const source = requireStockSource(state, listing, item);
+  // Manual Inventory edits retain their original upper bound from Tally. Overriding
+  // the lower, verified keep-back availability requires a separate confirmation.
+  const manualCeiling = policy === 'manual-ceiling';
+  const physical = manualCeiling
+    ? source.physical
+    : (availableUnits ?? availableForMarketplaces(source.physical, 0, source.item.keepBackUnits));
   return calculateStock({
-    physical: availableUnits ?? source.physical,
+    physical,
     packSize: source.packSize,
     tyreFloor: ruleVersion(state, listing) === 'flipkart-tyres-v1',
-    policy:
-      policy === 'normal'
-        ? { mode: 'auto', remaining: null }
-        : { mode: listing.policy, remaining: listing.remaining },
+    policy: manualCeiling
+      ? { mode: 'auto', remaining: null }
+      : { mode: listing.policy, remaining: listing.remaining },
   }).desired;
 }
 
@@ -80,12 +85,23 @@ export function isStaleProposal(state: Snapshot, draft: Proposal): boolean {
   const listing = state.listings.find((row) => row.id === draft.listingId);
   const item = state.items.find((row) => row.id === listing?.itemId);
   return (
+    draft.stale ||
     !listing ||
     !item ||
     draft.itemVersion !== item.version ||
     draft.listingVersion !== listing.version ||
     draft.ruleVersion !== ruleVersion(state, listing)
   );
+}
+
+/** Save the need for fresh order and bill evidence, including for paused listings. */
+export function invalidateReservationDrafts(state: Snapshot, itemIds: Set<string>): void {
+  const destinations = new Set(
+    state.listings.filter((row) => row.itemId && itemIds.has(row.itemId)).map((row) => row.id),
+  );
+  for (const draft of state.proposals) {
+    if (!draft.edited && destinations.has(draft.listingId)) draft.stale = true;
+  }
 }
 
 export function describeReviewPolicy(listing: Listing, draft?: Proposal): string {

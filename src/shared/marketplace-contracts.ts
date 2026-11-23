@@ -47,6 +47,7 @@ export interface MarketplaceListingView extends MarketplaceListing {
     listingId: string;
     listingVersion?: number;
     companyId?: string;
+    keepBackUnits?: number;
     companyName: string;
     automationStatus?: string;
     proposalIssue?: string;
@@ -76,8 +77,17 @@ export interface MarketplaceApplyInput {
   accountId: string;
   listingId: string;
   version: number;
+  keepBackConfirmation?: { reviewKey: string; quantity: number };
   /** Older clients included an automation preference on direct stock edits. */
   edit: (StockEdit & { automation?: StockEditAutomation }) | PriceEdit;
+}
+
+export interface MarketplaceKeepBackReview {
+  itemName: string;
+  unit: string;
+  keepBackUnits: number;
+  completePacks: number | null;
+  reviewKey: string;
 }
 
 export interface MarketplaceChange {

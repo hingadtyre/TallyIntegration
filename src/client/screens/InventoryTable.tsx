@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Listing, Proposal, Snapshot, StockItem } from '../../shared/contracts.js';
 import type { ActionResult } from '../api.js';
 import { Icon, ResumeSyncButton } from '../components.js';
@@ -8,14 +9,22 @@ import {
 } from '../format.js';
 import { isLowStock } from '../selectors.js';
 import { QuantityEditor } from './QuantityEditor.js';
+import { KeepBackEditor } from './KeepBackEditor.js';
 export function ItemRows({
   item,
   listings,
+  visibleListings,
+  visibleItem,
+  dirtyListings,
   collapsed,
   selected,
   proposals,
   busy,
   accountName,
+  allListings,
+  demo,
+  syncOn,
+  onSaveKeepBack,
   onToggleCollapse,
   onSelect,
   onMap,
@@ -29,29 +38,45 @@ export function ItemRows({
 }: {
   item: StockItem;
   listings: Listing[];
+  visibleListings: Set<string>;
+  visibleItem: boolean;
+  dirtyListings: string[];
   collapsed: boolean;
   selected: string[];
   proposals: Map<string, Proposal>;
   busy: boolean;
   accountName: string;
+  allListings: Listing[];
+  demo: boolean;
+  syncOn: boolean;
+  onSaveKeepBack: (quantity: number, version: number) => Promise<ActionResult<Snapshot>>;
   onToggleCollapse: () => void;
   onSelect: (id: string) => void;
   onMap: () => void;
   onEditPack: (listing: Listing) => void;
   onSave: (listing: Listing, quantity: number) => Promise<ActionResult<Snapshot>>;
-  onPause: (listing: Listing) => void;
+  onPause: (listing: Listing) => Promise<boolean>;
   onReview: (listing: Listing) => void;
   onHistory: (listing: Listing) => void;
   onRemove: (listing: Listing) => void;
   onDirty: (listingId: string, dirty: boolean) => void;
 }) {
+  const [localResumes, setLocalResumes] = useState<Record<string, number>>({});
+  async function resume(listing: Listing) {
+    if (await onPause(listing))
+      setLocalResumes((previous) => ({
+        ...previous,
+        [listing.id]: (previous[listing.id] ?? 0) + 1,
+      }));
+  }
   const low = isLowStock(item);
+  const matchingListings = listings.filter((listing) => visibleListings.has(listing.id)).length;
   return (
     <>
-      <tr className="parent-row">
+      <tr className="parent-row" hidden={!visibleItem}>
         <td colSpan={7}>
           <div className="stock-group">
-            {listings.length > 0 ? (
+            {matchingListings > 0 ? (
               <button
                 className="expand-button"
                 onClick={onToggleCollapse}
@@ -70,8 +95,8 @@ export function ItemRows({
               <div className="item-meta">
                 {item.brand && <span>{item.brand}</span>}
                 <span>
-                  {listings.length
-                    ? `${listings.length} matching listing${listings.length === 1 ? '' : 's'}`
+                  {matchingListings
+                    ? `${matchingListings} matching listing${matchingListings === 1 ? '' : 's'}`
                     : 'No mapped listing'}
                 </span>
               </div>
@@ -82,17 +107,28 @@ export function ItemRows({
                 {quantity(item.physical)} {item.unit || 'base units'}
               </strong>
               {low && <small>Low stock</small>}
+              <span className="parent-observation">Observed {time(item.observedAt)}</span>
             </div>
-            <span className="parent-observation">Observed {time(item.observedAt)}</span>
+            <KeepBackEditor
+              item={item}
+              busy={busy}
+              syncOn={syncOn}
+              allListings={allListings}
+              demo={demo}
+              onDirty={onDirty}
+              onSave={onSaveKeepBack}
+            />
             <button className="text-button map-button" disabled={busy} onClick={onMap}>
               <Icon name="plus" /> Map listing
             </button>
           </div>
         </td>
       </tr>
-      {!collapsed &&
-        listings.map((listing) => (
+      {listings
+        .filter((listing) => !collapsed || dirtyListings.includes(listing.id))
+        .map((listing) => (
           <tr
+            hidden={collapsed || !visibleListings.has(listing.id)}
             className={`listing-row ${selected.includes(listing.id) ? 'row-selected' : ''}`}
             key={listing.id}
           >
@@ -165,7 +201,7 @@ export function ItemRows({
             </td>
             <td data-label="Proposed stock">
               <QuantityEditor
-                key={`${listing.id}:${proposals.get(listing.id)?.createdAt ?? 'new'}:${proposals.get(listing.id)?.listingVersion ?? listing.proposalIssue ?? ''}`}
+                key={localResumes[listing.id] ?? 0}
                 listing={listing}
                 proposal={proposals.get(listing.id)}
                 disabled={busy}
@@ -185,7 +221,7 @@ export function ItemRows({
                   sku={listing.sku}
                   location={listing.location}
                   disabled={busy}
-                  onResume={() => onPause(listing)}
+                  onResume={() => void resume(listing)}
                 />
               ) : (
                 <>
@@ -193,7 +229,7 @@ export function ItemRows({
                   <button
                     className="automation-button"
                     disabled={busy}
-                    onClick={() => onPause(listing)}
+                    onClick={() => void onPause(listing)}
                     title="Pause automatic stock updates at this location."
                   >
                     <Icon name="pause" />
@@ -203,11 +239,11 @@ export function ItemRows({
               )}
             </td>
             <td>
-              <details className="row-menu">
+              <details className="row-menu" name="inventory-row-actions">
                 <summary aria-label={`Actions for ${listing.sku}`}>•••</summary>
                 <div>
                   <button
-                    disabled={busy || !proposals.has(listing.id)}
+                    disabled={busy || !!dirtyListings.length || !proposals.has(listing.id)}
                     onClick={(event) => {
                       event.currentTarget.closest('details')?.removeAttribute('open');
                       onReview(listing);

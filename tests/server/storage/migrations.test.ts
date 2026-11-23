@@ -118,6 +118,23 @@ function createVersionTwo(file: string, state: Snapshot): void {
   }
 }
 
+test('schema eleven items start with zero keep-back without changing drafts or queued stock', (t) => {
+  const f = fixture(t);
+  const original = legacyState(f.directory);
+  queryFile(f.file, (db) => {
+    createSchema(db, 11);
+    db.exec('PRAGMA user_version = 11');
+    writeSnapshot(db, original);
+  });
+  const store = f.open();
+  assert.ok(store.migrationBackupPath);
+  assert.deepEqual(store.read(), original);
+  queryFile(store.migrationBackupPath, (db) => {
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version, 11);
+    assert.deepEqual(readSnapshot(db), original);
+  });
+});
+
 test('schema four upgrades retain the stock mapping and start billing unconfigured', (t) => {
   const f = fixture(t);
   const original = legacyState(f.directory);

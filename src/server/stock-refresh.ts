@@ -53,6 +53,7 @@ function mergeStock(state: Snapshot, company: Company, items: TallyStockItem[], 
         observedAt: at,
         version: 1,
         lowStockThreshold: 5,
+        keepBackUnits: 0,
       });
     }
   }

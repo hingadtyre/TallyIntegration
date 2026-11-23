@@ -103,10 +103,9 @@ export function BillingResults({ report, ...actions }: Actions & { report: Billi
             <div>
               <h2>Available stock preview</h2>
               <p>
-                Physical stock less units without a matched bill, using current mappings for this
-                account and period. Orders outside this period and other seller accounts are
-                excluded. Automatic stock updates check orders across the company’s covered accounts
-                from its confirmed start date.
+                This preview subtracts the units kept back for each item and its unbilled orders for
+                the selected seller and period. Automatic updates check all covered sellers from the
+                company’s tracking start date.
               </p>
             </div>
           </div>
@@ -116,6 +115,7 @@ export function BillingResults({ report, ...actions }: Actions & { report: Billi
                 <tr>
                   <th>Tally item</th>
                   <th>Physical stock</th>
+                  <th>Keep back from marketplaces</th>
                   <th>Units without a matched bill</th>
                   <th>Preview available</th>
                 </tr>
@@ -128,6 +128,7 @@ export function BillingResults({ report, ...actions }: Actions & { report: Billi
                       <small>{item.unit}</small>
                     </td>
                     <td data-label="Physical stock">{item.physical ?? 'Unknown'}</td>
+                    <td data-label="Keep back from marketplaces">{item.keepBackUnits}</td>
                     <td data-label="Units without a matched bill">
                       {item.unmatchedUnits ?? 'Unknown'}
                     </td>

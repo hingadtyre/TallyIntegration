@@ -15,7 +15,9 @@ export function formatDateTime(value: string | null | undefined): string {
 }
 
 export function formatQuantity(value: number | null): string {
-  return value === null ? '-' : new Intl.NumberFormat().format(value);
+  return value === null
+    ? '-'
+    : new Intl.NumberFormat(undefined, { maximumSignificantDigits: 17 }).format(value);
 }
 
 export function formatUnits(quantity: number, source: 'listing' | 'Tally'): string {

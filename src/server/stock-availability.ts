@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { FlipkartBillingClient, type FlipkartBillingOrder } from '../adapters/flipkart-billing.js';
 import { TallyClient, type TallySalesBill, type TallyStockItem } from '../adapters/tally.js';
+import { availableForMarketplaces } from '../domain/stock-policy.js';
 import type { PendingOrderResult } from '../shared/billing-contracts.js';
 import {
   isVerifiedCancellation,
@@ -10,6 +11,8 @@ import {
 } from '../shared/stock-coverage.js';
 import { fingerprint, matchBills, saleDay } from './billing-matcher.js';
 import { sampleBills } from './billing-sample.js';
+import { checkCalculationStock, saveCalculation } from './inventory-calculation.js';
+import { invalidateReservationDrafts } from './proposals.js';
 import { mappedSaleItem, stockConfiguration } from './stock-configuration.js';
 import type { BillingSources } from './billing-service.js';
 import type { Store } from './store.js';
@@ -28,9 +31,16 @@ function coverageIssue(coverage: StockSyncCoverage, signature: string, now: numb
   return null;
 }
 type Access = (accountId: string) => Promise<{ token: string | null; verify: () => void }>;
-type CheckedStock = { available: number; verify: () => void };
+type CheckedStock = {
+  itemVersion: number;
+  physical: number;
+  reservedUnits: number;
+  available: number;
+  verify: () => void;
+};
 type ReviewedOrder = { order: StockCoverageOrder; result: PendingOrderResult };
 type CompanyCheck = {
+  reservationItems: () => Set<string>;
   forItem: (id: string) => Promise<CheckedStock>;
   review: (accountId: string, orderItemIds?: string[]) => Promise<ReviewedOrder[]>;
 };
@@ -99,12 +109,28 @@ function orderGeometry(o: FlipkartBillingOrder) {
   ]);
 }
 
+function orderEvidence(o: StockCoverageOrder) {
+  return JSON.stringify([
+    orderGeometry(o),
+    o.invoiceNumber,
+    o.eligibilityUnverified ?? false,
+    o.stockDisposition ?? null,
+    o.stockIdentityConflict ?? false,
+    o.stockDispatchObserved ?? false,
+    o.stockReconciliationRequired ?? false,
+    o.stockShipmentId ?? null,
+    o.stockReturnConflict ?? false,
+    o.firstSeenUnmapped ?? false,
+  ]);
+}
+
 function mergeOrders(
   coverage: StockSyncCoverage,
   accountId: string,
   observed: FlipkartBillingOrder[],
   ctx: ReturnType<typeof configuration>,
 ) {
+  const changedItems = new Set<string>();
   const journal = new Map(
     coverage.orders.map((entry) => [
       JSON.stringify([entry.accountId, entry.order.orderItemId]),
@@ -158,8 +184,12 @@ function mergeOrders(
         },
       });
     }
+    const current = journal.get(key)!.order;
+    if (!prior || orderEvidence(current) !== orderEvidence(prior)) {
+      for (const id of affectedStockItems(ctx, accountId, current)) changedItems.add(id);
+    }
   }
-  return [...journal.values()];
+  return { orders: [...journal.values()], changedItems };
 }
 
 function journalVersion(c: StockSyncCoverage | null) {
@@ -169,21 +199,8 @@ function journalVersion(c: StockSyncCoverage | null) {
       c.from,
       c.signature,
       c.orders
-        .map(({ accountId, order: o }) =>
-          JSON.stringify([
-            accountId,
-            o.orderItemId,
-            orderGeometry(o),
-            o.invoiceNumber,
-            o.eligibilityUnverified ?? false,
-            o.stockDisposition ?? null,
-            o.stockIdentityConflict ?? false,
-            o.stockDispatchObserved ?? false,
-            o.stockReconciliationRequired ?? false,
-            o.stockShipmentId ?? null,
-            o.stockReturnConflict ?? false,
-            o.firstSeenUnmapped ?? false,
-          ]),
+        .map(({ accountId, order }) =>
+          JSON.stringify([accountId, order.orderItemId, orderEvidence(order)]),
         )
         .sort(),
     ])
@@ -197,6 +214,7 @@ function saveOrderReceipts(
   ctx: ReturnType<typeof configuration>,
   coverage: StockSyncCoverage,
   accountId: string,
+  changedItems: Set<string>,
 ) {
   const affected = new Set<string>();
   for (const entry of coverage.orders) {
@@ -215,13 +233,14 @@ function saveOrderReceipts(
     o.stockSyncQueued = true;
     affected.add(itemId);
   }
-  if (!affected.size) {
+  if (!affected.size && !changedItems.size) {
     store.saveStockCoverage(coverage);
     return false;
   }
   const token = randomUUID();
   let queued = false;
   store.saveStockCoverage(coverage, (state) => {
+    invalidateReservationDrafts(state, changedItems);
     if (!state.companies.some((c) => c.id === ctx.company.id && c.automation)) return;
     for (const listing of state.listings)
       if (listing.itemId && affected.has(listing.itemId) && listing.verified && !listing.paused) {
@@ -255,6 +274,20 @@ function unresolvedDestinations(
         (l.sku === order.sku || l.sku === catalogueSku),
     )
     .map((l) => l.itemId!);
+}
+
+function affectedStockItems(
+  ctx: ReturnType<typeof configuration>,
+  accountId: string,
+  order: StockCoverageOrder,
+) {
+  if (order.stockIdentityConflict)
+    return ctx.state.items
+      .filter((item) => item.companyId === ctx.company.id)
+      .map((item) => item.id);
+  const itemId = mappedSaleItem(ctx, accountId, order);
+  const items = itemId ? [itemId] : unresolvedDestinations(ctx, accountId, order);
+  return items.filter((id) => ctx.items.get(id)?.companyId === ctx.company.id);
 }
 
 function reconcileOrders(
@@ -428,7 +461,10 @@ export class StockAvailabilityService {
         checkedThrough: null,
         orders: saved?.orders.filter((e) => e.order.orderDate >= from) ?? [],
       };
-      this.store.saveStockCoverage(saved);
+      const items = new Set(
+        ctx.state.items.filter((item) => item.companyId === companyId).map((item) => item.id),
+      );
+      this.store.saveStockCoverage(saved, (state) => invalidateReservationDrafts(state, items));
     } else if (path !== '/api/billing/coverage')
       throw new InputError('Unknown stock coverage action.', 404);
     const issue = saved ? coverageIssue(saved, ctx.signature, Date.now()) : startTrackingMessage;
@@ -452,7 +488,41 @@ export class StockAvailabilityService {
   }
 
   async checkOrders(companyId: string, batch: object): Promise<void> {
-    await this.companyCheck(companyId, batch);
+    let check: CompanyCheck | InputError;
+    try {
+      check = await this.companyCheck(companyId, batch);
+    } catch (error) {
+      if (!(error instanceof InputError)) throw error;
+      check = error;
+    }
+    const state = this.store.read();
+    const companyItems = new Set(
+      state.items.filter((item) => item.companyId === companyId).map((item) => item.id),
+    );
+    const calculated = new Map(
+      state.proposals.filter((draft) => !draft.edited).map((draft) => [draft.listingId, draft]),
+    );
+    // A failed seller read leaves the affected items unknown. A complete scan
+    // can limit ledger checks to items with sales and previously invalidated drafts.
+    const reservations =
+      calculated.size && !(check instanceof InputError) ? check.reservationItems() : null;
+    const selected = state.listings.filter(
+      (row) =>
+        row.itemId &&
+        companyItems.has(row.itemId) &&
+        calculated.has(row.id) &&
+        (!reservations || reservations.has(row.itemId) || calculated.get(row.id)?.stale),
+    );
+    if (selected.length) {
+      // Bills can match or cease to match without changing a shipment, local Tally
+      // version, or publication setting. Reuse this scan's ledger/balance reads.
+      const sources = await checkCalculationStock(state, selected, (itemId) => {
+        if (check instanceof InputError) throw check;
+        return check.forItem(itemId);
+      });
+      saveCalculation(this.store, state, companyId, selected, { sources, refreshStale: true });
+    }
+    if (check instanceof InputError) throw check;
   }
 
   async refreshPendingOrders(companyId: string, accountId?: string): Promise<void> {
@@ -593,14 +663,26 @@ export class StockAvailabilityService {
           );
         }
         verify();
-        coverage.orders = mergeOrders(coverage, rule.accountId, orders, ctx);
+        const merged = mergeOrders(coverage, rule.accountId, orders, ctx);
+        coverage.orders = merged.orders;
         if (mode === 'review') {
           // A seller opening the order history reads and remembers orders. The
           // ordinary automation pass can enqueue any eligible receipts later.
-          this.store.saveStockCoverage(coverage);
+          this.store.saveStockCoverage(
+            coverage,
+            merged.changedItems.size
+              ? (state) => invalidateReservationDrafts(state, merged.changedItems)
+              : undefined,
+          );
           expected = journalVersion(coverage);
         } else if (mode === 'publish') {
-          const queued = saveOrderReceipts(this.store, ctx, coverage, rule.accountId);
+          const queued = saveOrderReceipts(
+            this.store,
+            ctx,
+            coverage,
+            rule.accountId,
+            merged.changedItems,
+          );
           expected = journalVersion(coverage);
           if (queued) this.onPending?.(companyId, batch);
         }
@@ -680,9 +762,15 @@ export class StockAvailabilityService {
             throw hold('Tally stock changed during this check. Retry with the current balance.');
         };
         verifyItem();
-        return { physical, orders, verify: verifyItem };
+        return { item, physical, orders, verify: verifyItem };
       };
       return {
+        reservationItems: () =>
+          new Set(
+            coverage.orders.flatMap(({ accountId, order }) =>
+              isVerifiedCancellation(order) ? [] : affectedStockItems(ctx, accountId, order),
+            ),
+          ),
         forItem: async (itemId: string) => {
           const previous = checked.get(itemId);
           if (previous) {
@@ -690,9 +778,16 @@ export class StockAvailabilityService {
             return previous;
           }
           const evidence = await checkBalance(itemId);
-          const reserved = unbilledUnits(evidence.orders, itemId);
+          const reservedUnits = unbilledUnits(evidence.orders, itemId);
           const value = {
-            available: Math.max(0, evidence.physical - reserved),
+            itemVersion: evidence.item.version,
+            physical: evidence.physical,
+            reservedUnits,
+            available: availableForMarketplaces(
+              evidence.physical,
+              reservedUnits,
+              evidence.item.keepBackUnits,
+            ),
             verify: evidence.verify,
           };
           checked.set(itemId, value);

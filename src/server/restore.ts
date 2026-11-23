@@ -246,9 +246,10 @@ function restoredSnapshot(
     company.lastSuccess = null;
     company.stockIssue = 'not-checked';
   }
+  const currentVersions = new Map(current.items.map((item) => [item.id, item.version]));
   for (const item of restored.items) {
     item.observedAt = null;
-    item.version++;
+    item.version = Math.max(item.version, currentVersions.get(item.id) ?? 0) + 1;
   }
   for (const listing of restored.listings) {
     if (!listing.paused) listing.version++;

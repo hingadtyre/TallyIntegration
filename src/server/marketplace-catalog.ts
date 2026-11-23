@@ -40,12 +40,14 @@ export function listingView(listing: MarketplaceListing, state: Snapshot): Marke
           (row.itemId !== null || row.policy !== 'auto' || row.paused),
       )
       .map((row) => {
-        const companyId = state.items.find((item) => item.id === row.itemId)?.companyId;
+        const item = state.items.find((entry) => entry.id === row.itemId);
+        const companyId = item?.companyId;
         return {
           listingId: row.id,
           listingVersion: row.version,
           locationId: row.location,
           companyId,
+          ...(item?.keepBackUnits && { keepBackUnits: item.keepBackUnits }),
           companyName:
             state.companies.find((company) => company.id === companyId)?.name ?? 'Not mapped',
           policy: row.policy,
@@ -86,7 +88,11 @@ function observePackageCount(row: Listing, listing: MarketplaceListing): boolean
 }
 
 /** Both screens refer to the same account/SKU/location; refresh never grants a mapping. */
-export function updateInventoryObservations(state: Snapshot, listing: MarketplaceListing): void {
+export function updateInventoryObservations(
+  state: Snapshot,
+  listing: MarketplaceListing,
+  quantityOnlyChanges?: string[],
+): void {
   const skuRows = state.listings.filter(
     (row) => row.accountId === listing.accountId && row.sku === listing.sku,
   );
@@ -138,6 +144,13 @@ export function updateInventoryObservations(state: Snapshot, listing: Marketplac
       existing.title = listing.title;
       const packChanged = observePackageCount(existing, listing);
       if (existing.observed !== location.quantity || packChanged) existing.version++;
+      if (
+        !packChanged &&
+        existing.observed !== null &&
+        location.quantity !== null &&
+        existing.observed !== location.quantity
+      )
+        quantityOnlyChanges?.push(existing.id);
       existing.observed = location.quantity;
       existing.observedAt = listing.observedAt;
       if (

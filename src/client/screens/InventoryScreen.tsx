@@ -1,4 +1,5 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import type { AutomationPreview } from '../../shared/automation.js';
 import type {
   CalculationRow,
@@ -22,7 +23,8 @@ interface InventoryScreenProps {
   companyId: string;
   accountId: string;
   workspace: Workspace;
-  onAccountChange: (id: string) => void;
+  onAccountChange: (id: string) => boolean;
+  onUnsavedChange: (unsaved: boolean) => void;
   onOpenConnections: () => void;
 }
 
@@ -33,15 +35,19 @@ export function InventoryScreen({
   accountId,
   workspace,
   onAccountChange,
+  onUnsavedChange,
   onOpenConnections,
 }: InventoryScreenProps) {
   const { busy, mutate } = workspace;
+  const tableRef = useRef<HTMLTableElement>(null);
   const [query, setQuery] = useState('');
   const [view, setView] = useState<StockView>('all');
   const [brand, setBrand] = useState('');
   const [pack, setPack] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [dirtyListings, setDirtyListings] = useState<string[]>([]);
+  const hasUnsaved = dirtyListings.length > 0;
+  useEffect(() => onUnsavedChange(hasUnsaved), [hasUnsaved, onUnsavedChange]);
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [review, setReview] = useState<Review | null>(null);
   const [automationReview, setAutomationReview] = useState<{
@@ -56,6 +62,31 @@ export function InventoryScreen({
     rows: CalculationRow[];
   } | null>(null);
 
+  useEffect(() => {
+    const openMenu = () =>
+      tableRef.current?.querySelector<HTMLDetailsElement>('details.row-menu[open]');
+    function dismissOutside(event: Event) {
+      const menu = openMenu();
+      if (menu && !event.composedPath().includes(menu)) menu.open = false;
+    }
+    function dismissOnEscape(event: KeyboardEvent) {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const menu = openMenu();
+      if (!menu) return;
+      event.preventDefault();
+      menu.open = false;
+      menu.querySelector('summary')?.focus();
+    }
+    document.addEventListener('click', dismissOutside, true);
+    document.addEventListener('focusin', dismissOutside, true);
+    document.addEventListener('keydown', dismissOnEscape);
+    return () => {
+      document.removeEventListener('click', dismissOutside, true);
+      document.removeEventListener('focusin', dismissOutside, true);
+      document.removeEventListener('keydown', dismissOnEscape);
+    };
+  }, []);
+
   const markDirty = useCallback((id: string, dirty: boolean) => {
     setDirtyListings((current) => {
       if (dirty) return current.includes(id) ? current : [...current, id];
@@ -63,8 +94,7 @@ export function InventoryScreen({
     });
   }, []);
   function changeAccount(id: string) {
-    setSelected([]);
-    onAccountChange(id);
+    if (onAccountChange(id)) setSelected([]);
   }
   const filters = { companyId, accountId, query, brand, pack, view };
   const groups = inventoryGroups(state, filters);
@@ -92,6 +122,31 @@ export function InventoryScreen({
   );
   const lowStock = companyItems.filter(isLowStock).length;
   const visibleIds = groups.flatMap((group) => group.listings.map((listing) => listing.id));
+  const visibleListings = new Set(visibleIds);
+  const visibleItems = new Set(groups.map((group) => group.item.id));
+  const mountedGroups = new Map(groups.map((group) => [group.item.id, group]));
+  const hiddenEdits = new Set<string>();
+  // Keep only editors with unsaved input mounted when their rows drop out of view.
+  // Bulk actions and counts continue to use the original matching groups.
+  for (const id of dirtyListings) {
+    const listing = companyListings.find((row) => row.id === id);
+    const item = companyItems.find((row) =>
+      listing ? row.id === listing.itemId : id === `keep-back:${row.id}`,
+    );
+    if (!item) continue;
+    if (
+      !visibleItems.has(item.id) ||
+      (listing && (!visibleListings.has(id) || collapsed.includes(item.id)))
+    ) {
+      hiddenEdits.add(item.id);
+      const group = mountedGroups.get(item.id);
+      if (!group || (listing && !group.listings.includes(listing)))
+        mountedGroups.set(item.id, {
+          item,
+          listings: [...(group?.listings ?? []), ...(listing ? [listing] : [])],
+        });
+    }
+  }
   const hiddenSelected = selected.filter((id) => !visibleIds.includes(id)).length;
   const reviewIds = calculation
     ? calculation.filter((row) => row.status !== 'blocked').map((row) => row.listingId)
@@ -107,10 +162,12 @@ export function InventoryScreen({
     ),
   ].sort((a, b) => a - b);
 
-  async function openReview(ids: string[] = reviewIds) {
-    if (dirtyListings.length) return;
-    const result = await workspace.prepareReview(companyId, ids);
+  async function openReview(ids: string[] = reviewIds, reviewCompanyId = companyId) {
+    if (dirtyListings.length)
+      return { ok: false as const, error: 'Save or discard your edits before reviewing.' };
+    const result = await workspace.prepareReview(reviewCompanyId, ids);
     if (result.ok) setReview(result.value);
+    return result;
   }
   async function calculate() {
     setLastCalculation(null);
@@ -137,6 +194,7 @@ export function InventoryScreen({
         : 'Tally sync paused at this location until you choose Resume sync.',
     );
     if (listing.paused && result.ok) setLastCalculation(null);
+    return result.ok;
   }
   function toggleSelection(id: string) {
     setSelected((current) =>
@@ -219,7 +277,27 @@ export function InventoryScreen({
         {dirtyListings.length > 0 && (
           <div className="draft-reminder" role="status">
             {dirtyListings.length} unsaved quantity edit{dirtyListings.length === 1 ? '' : 's'}.
-            Save each row using its checkmark before reviewing.
+            Save or discard your edits before calculating or reviewing.
+            {hiddenEdits.size > 0 && (
+              <button
+                className="text-button"
+                onClick={() => {
+                  const edit = tableRef.current?.querySelector<HTMLInputElement>(
+                    'tr[hidden] input[data-unsaved]',
+                  );
+                  flushSync(() => {
+                    setQuery('');
+                    setBrand('');
+                    setPack('');
+                    setView('all');
+                    setCollapsed((items) => items.filter((id) => !hiddenEdits.has(id)));
+                  });
+                  edit?.focus();
+                }}
+              >
+                Show unsaved edits
+              </button>
+            )}
           </div>
         )}
         <div className="panel-heading">
@@ -259,7 +337,9 @@ export function InventoryScreen({
               <small>
                 {state.mode === 'demo' ? 'Simulates updates' : 'Updates Flipkart stock'} for
                 eligible listings across all seller accounts for {company.name}. Checks include
-                Tally stock changes and verified Flipkart sales that reduce shared stock.
+                Tally stock changes, changes to stock kept back, and verified Flipkart sales that
+                reduce shared stock. When automatic updates are on, eligible listings can sync while
+                a review is open.
               </small>
             </details>
             <div className="company-sync-actions">
@@ -445,9 +525,10 @@ export function InventoryScreen({
               Reset filters
             </button>
           </div>
-        ) : (
-          <div className="table-scroll">
-            <table className="inventory-table">
+        ) : null}
+        {mountedGroups.size > 0 && (
+          <div className="table-scroll" hidden={!groups.length}>
+            <table ref={tableRef} className="inventory-table">
               <thead>
                 <tr>
                   <th className="select-column">
@@ -472,16 +553,32 @@ export function InventoryScreen({
                 </tr>
               </thead>
               <tbody>
-                {groups.map(({ item, listings }) => (
+                {Array.from(mountedGroups.values(), ({ item, listings }) => (
                   <ItemRows
                     key={item.id}
                     item={item}
                     listings={listings}
+                    visibleItem={visibleItems.has(item.id)}
+                    visibleListings={visibleListings}
+                    dirtyListings={dirtyListings}
                     collapsed={collapsed.includes(item.id)}
                     selected={selected}
                     proposals={proposals}
                     busy={!!busy}
                     accountName={account?.name || 'Flipkart'}
+                    allListings={state.listings}
+                    demo={state.mode === 'demo'}
+                    syncOn={!!company?.automation}
+                    onSaveKeepBack={async (keepBackUnits, itemVersion) => {
+                      const result = await mutate(
+                        '/items/keep-back',
+                        { companyId, itemId: item.id, itemVersion, keepBackUnits },
+                        'Saving quantity to keep back',
+                        `Saved for ${item.name}. ${company?.automation ? 'Eligible listings will use it on their next sync.' : 'Company sync is off.'}`,
+                      );
+                      if (result.ok) setLastCalculation(null);
+                      return result;
+                    }}
                     onToggleCollapse={() =>
                       setCollapsed((current) =>
                         current.includes(item.id)
@@ -502,7 +599,7 @@ export function InventoryScreen({
                       if (result.ok) setLastCalculation(null);
                       return result;
                     }}
-                    onPause={(listing) => void togglePause(listing)}
+                    onPause={togglePause}
                     onReview={(listing) => void openReview([listing.id])}
                     onHistory={setHistoryListing}
                     onRemove={setRemoveListing}
@@ -532,10 +629,12 @@ export function InventoryScreen({
       </div>
       {review && (
         <ReviewDialog
+          key={review.id}
           state={state}
           review={review}
           onClose={() => setReview(null)}
           onPublish={workspace.publishReview}
+          onReviewLatest={(ids) => openReview(ids, review.companyId)}
         />
       )}
       {automationReview && !company?.automation && (

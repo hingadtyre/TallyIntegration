@@ -54,6 +54,12 @@ export class PollingLoop {
     await this.inFlight?.catch(() => undefined);
   }
 
+  /** Background notifications can share a running pass; the next tick picks up later changes. */
+  wake(): void {
+    if (this.running && !this.inFlight && this.options.enabled())
+      void this.runNow().catch((error) => this.options.unexpectedError(error));
+  }
+
   async runNow(task = this.options.task): Promise<void> {
     // Manual company-specific requests serialize too; they never borrow another company's result.
     while (this.inFlight) await this.inFlight.catch(() => undefined);

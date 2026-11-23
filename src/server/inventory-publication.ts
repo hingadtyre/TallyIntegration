@@ -1,8 +1,17 @@
 import type { Listing, Proposal, Snapshot } from '../shared/contracts.js';
-import type { MarketplaceListing } from '../shared/marketplace-contracts.js';
+import type { MarketplaceApplyInput, MarketplaceListing } from '../shared/marketplace-contracts.js';
 import { desiredStock, isStaleProposal, requireStockSource } from './proposals.js';
 import { InputError } from './validation.js';
 import { hasConfirmedPickup } from './marketplace-catalog.js';
+
+/** The review's destination and policy stay fixed while physical stock and reservations move. */
+export interface CalculatedReview extends Pick<
+  Listing,
+  'syncPendingItemVersion' | 'orderSyncPending'
+> {
+  observed: number | null;
+  verify: (state: Snapshot, listing: Listing, marketplace: MarketplaceListing) => void;
+}
 
 /** The review belongs to this server session. The saved proposal supplies the quantity. */
 export interface InventoryIntent {
@@ -11,6 +20,8 @@ export interface InventoryIntent {
   itemVersion: number;
   listingVersion: number;
   draft?: Proposal;
+  calculatedReview?: CalculatedReview;
+  keepBackConfirmation?: MarketplaceApplyInput['keepBackConfirmation'];
   positiveEdits?: 'allowance' | 'once';
   /** Receipt authorizing a decrease-only check when there is no Tally change. */
   orderOnly?: string;
@@ -83,6 +94,11 @@ export function inventoryTarget(
       : listing.syncPendingItemVersion === item.version;
     if (!company.automation || listing.paused || !current)
       throw new InputError('This automatic update is no longer current.', 409);
+  } else if (intent.calculatedReview) {
+    intent.calculatedReview.verify(state, listing, marketplace);
+    const current = state.proposals.find((entry) => entry.listingId === listing.id);
+    if (!current || current.edited)
+      throw new InputError('The reviewed draft was replaced or removed. Open a fresh review.', 409);
   } else {
     const current = state.proposals.find((row) => row.listingId === listing.id);
     if (
@@ -97,7 +113,9 @@ export function inventoryTarget(
     )
       throw new InputError('The reviewed proposal changed. Calculate and review it again.', 409);
   }
-  let quantity = draft?.quantity ?? desiredStock(state, listing, 'current', availableUnits);
+  let quantity =
+    (intent.calculatedReview ? undefined : draft?.quantity) ??
+    desiredStock(state, listing, 'current', availableUnits);
   if (intent.trial && quantity !== intent.trial.quantity)
     throw new InputError(
       'The calculated stock changed. Preview the new quantity before trying this listing.',
@@ -112,7 +130,7 @@ export function inventoryTarget(
       );
     quantity = Math.min(quantity, observed);
   }
-  if (draft && !draft.edited && availableUnits !== undefined) {
+  if (!intent.calculatedReview && draft && !draft.edited && availableUnits !== undefined) {
     const availableQuantity = desiredStock(state, listing, 'current', availableUnits);
     if (quantity !== availableQuantity)
       throw new InputError(
@@ -122,7 +140,7 @@ export function inventoryTarget(
   }
   if (!Number.isSafeInteger(quantity) || quantity < 0 || quantity > 5000)
     throw new InputError('Calculated stock must be a whole number between 0 and 5000.', 409);
-  if (draft?.edited && quantity > desiredStock(state, listing, 'normal'))
+  if (draft?.edited && quantity > desiredStock(state, listing, 'manual-ceiling'))
     throw new InputError('The edited quantity exceeds the current calculated stock.', 409);
   const updateOnce = draft?.edited && quantity > 0 && intent.positiveEdits === 'once';
   if (updateOnce && listing.policy !== 'auto')

@@ -25,6 +25,77 @@ const disconnectedFlipkart: FlipkartConnectionStatus = {
   message: 'No Flipkart API credentials are saved.',
 };
 
+test('edits keep-back on a collapsed Tally item, previews order reservations, and saves only on request', async (t) => {
+  const state = initialState('demo', 'unused');
+  const item = state.items.find((row) => row.id === 'item-a')!;
+  item.physical = 8;
+  const pair = state.listings.find((row) => row.itemId === item.id && row.packSize === 2)!;
+  state.listings
+    .filter((row) => row.itemId === item.id)
+    .forEach((row) => {
+      row.tyreFloor = row === pair;
+    });
+  const writes: unknown[] = [];
+  let checks = 0;
+  t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+    if (url === '/api/state') return response(state);
+    if (url === '/api/items/keep-back/preview') {
+      checks++;
+      if (checks > 1) return response({ error: 'Order matching unavailable' }, 409);
+      return response({ physical: 8, reservedUnits: 1, itemVersion: item.version });
+    }
+    assert.equal(url, '/api/items/keep-back');
+    const input = JSON.parse(String(init?.body));
+    writes.push(input);
+    return response({
+      ...state,
+      items: state.items.map((row) =>
+        row.id === item.id
+          ? { ...row, keepBackUnits: input.keepBackUnits, version: row.version + 1 }
+          : row,
+      ),
+    });
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: `Collapse ${item.name}` }));
+  const field = screen.getByRole('spinbutton', {
+    name: `Keep back from marketplaces for ${item.name}`,
+  }) as HTMLInputElement;
+  const form = within(field.closest('form')!);
+  assert.equal(field.value, '0');
+  assert.equal(checks, 0);
+  fireEvent.change(field, { target: { value: '2' } });
+  await form.findByText('Available for marketplaces');
+  assert.ok(form.getByText('5 tyres'));
+  assert.ok(form.getByText('6 tyres'));
+  assert.ok(form.getByText(/Set of 2 can supply 2 complete sets/));
+  fireEvent.change(field, { target: { value: '4' } });
+  assert.ok(form.getByText('3 tyres'));
+  assert.equal(checks, 1);
+  assert.deepEqual(writes, []);
+  fireEvent.change(screen.getByLabelText('Search stock items and listings'), {
+    target: { value: 'missing item' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Show unsaved edits' }));
+  assert.equal(document.activeElement, field);
+  assert.equal(field.value, '4');
+  fireEvent.click(form.getByRole('button', { name: 'Save' }));
+  await waitFor(() => assert.ok(!form.queryByRole('button', { name: 'Save' })));
+  assert.deepEqual(writes, [
+    { companyId: item.companyId, itemId: item.id, itemVersion: item.version, keepBackUnits: 4 },
+  ]);
+  fireEvent.change(field, { target: { value: '12' } });
+  await form.findByText(/Order reservations need a fresh check/);
+  assert.ok(form.getByText('0 tyres'));
+  assert.ok(!form.queryByText('Available for marketplaces'));
+  assert.ok(!(form.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled);
+  fireEvent.change(field, { target: { value: '-1' } });
+  assert.ok((form.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled);
+  fireEvent.keyDown(field, { key: 'Escape' });
+  assert.equal(field.value, '4');
+  assert.equal(writes.length, 1);
+});
+
 test('startup shows progress until the inventory snapshot arrives', async (t) => {
   let finish!: (response: Response) => void;
   t.mock.method(
@@ -53,6 +124,39 @@ test('startup failure exposes the server error and a retry action', async (t) =>
   await screen.findByText('Workspace could not be opened.');
   assert.ok(screen.getByRole('button', { name: 'Try again' }));
   assert.equal(screen.queryByRole('heading', { name: 'Inventory' }), null);
+});
+
+test('listing actions dismiss on an outside click, another row, and Escape', async (t) => {
+  const state = initialState('demo', 'unused');
+  t.mock.method(globalThis, 'fetch', async () => response(state));
+  render(<App />);
+  const first = await screen.findByLabelText('Actions for SAMPLE-CEAT-1-1');
+  const second = screen.getByLabelText('Actions for SAMPLE-CEAT-2-2');
+  const firstMenu = first.closest('details')!;
+  const secondMenu = second.closest('details')!;
+  const select = screen.getByRole('checkbox', {
+    name: 'Select SAMPLE-CEAT-1-1',
+  }) as HTMLInputElement;
+  const click = (element: HTMLElement) => {
+    fireEvent.pointerDown(element);
+    fireEvent.click(element);
+  };
+
+  click(first);
+  assert.ok(firstMenu.open);
+  click(select);
+  assert.ok(select.checked);
+  assert.ok(!firstMenu.open);
+
+  click(first);
+  click(second);
+  assert.ok(!firstMenu.open);
+  assert.ok(secondMenu.open);
+  const history = within(secondMenu).getByRole('button', { name: 'View history' });
+  history.focus();
+  fireEvent.keyDown(history, { key: 'Escape' });
+  assert.ok(!secondMenu.open);
+  assert.ok(document.activeElement === second);
 });
 
 test('collapsing and expanding navigation preserves filters, the selected screen and unsaved inputs', async (t) => {
@@ -511,6 +615,161 @@ test('selected listings keep priority through zero draft, review, publication an
   const row = screen.getByRole('row', { name: /SAMPLE-CEAT-2-2/ });
   assert.ok(within(row).getByRole('button', { name: /Resume sync/ }));
   assert.equal(within(row).queryByText('Auto'), null);
+});
+
+test('polling preserves the open review and each new review includes only destinations with a verified replacement', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const state = initialState('demo', 'unused');
+  const listings = state.listings.slice(0, 4);
+  const [first, second, matched, uncertain] = listings;
+  state.companies[0].automation = true;
+  first.syncPendingItemVersion = 1;
+  first.automationStatus = 'Queued for a stock check';
+  second.paused = true;
+  const ids = listings.map((listing) => listing.id);
+  const at = new Date().toISOString();
+  state.proposals = listings.map((listing, index) => ({
+    listingId: listing.id,
+    quantity: [7, 1, 2, 3][index],
+    calculated: [7, 1, 2, 3][index],
+    itemVersion: 1,
+    listingVersion: 1,
+    ruleVersion: 'complete-packs-v1',
+    createdAt: at,
+    stale: false,
+    edited: false,
+  }));
+  const scopes: string[][] = [];
+  const published: string[] = [];
+  let firstRetry = true;
+  t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+    if (url === '/api/state') return response(state);
+    const body = JSON.parse(String(init?.body));
+    if (url === '/api/review') {
+      assert.equal(body.companyId, 'demo-a');
+      if (scopes.length === 1 && firstRetry) {
+        firstRetry = false;
+        assert.deepEqual(body.listingIds, [first.id, second.id]);
+        return response({ error: 'Could not load the latest quantities.' }, 503);
+      }
+      scopes.push(body.listingIds);
+      return response({
+        id: 'review-' + scopes.length,
+        companyId: 'demo-a',
+        createdAt: at,
+        publishingEnabled: true,
+        rows: (body.listingIds as string[]).map((id) => {
+          const listing = listings.find((entry) => entry.id === id)!;
+          const proposal = state.proposals.find((entry) => entry.listingId === id)!;
+          return {
+            listingId: id,
+            sku: listing.sku,
+            account: 'Seller',
+            location: listing.location,
+            observed: listing.observed,
+            quantity: proposal.quantity,
+            policy: 'Auto',
+            problem: null,
+            stale: false,
+          };
+        }),
+      } satisfies Review);
+    }
+    assert.equal(url, '/api/publish');
+    published.push(body.reviewId);
+    const changed = (listing: typeof first, latestQuantity: number) => ({
+      listingId: listing.id,
+      sku: listing.sku,
+      status: 'blocked',
+      latestQuantity,
+      message: 'Calculated stock changed.',
+    });
+    if (body.reviewId === 'review-1')
+      return response({
+        rows: [
+          changed(first, 4),
+          changed(second, 2),
+          {
+            listingId: matched.id,
+            sku: matched.sku,
+            status: 'unchanged',
+            message: 'Already in sync.',
+          },
+          {
+            listingId: uncertain.id,
+            sku: uncertain.sku,
+            status: 'uncertain',
+            message: 'Check the previous update.',
+          },
+        ],
+      });
+    assert.equal(body.reviewId, 'review-2');
+    state.proposals[0].quantity = 0;
+    state.companies[0].automation = false;
+    return response({
+      rows: [
+        changed(first, 0),
+        {
+          listingId: second.id,
+          sku: second.sku,
+          status: 'confirmed',
+          message: 'Stock update confirmed.',
+        },
+      ],
+    });
+  });
+  render(<App />);
+  for (const listing of listings)
+    fireEvent.click(await screen.findByLabelText('Select ' + listing.sku));
+  fireEvent.click(screen.getByRole('button', { name: /Review changes/ }));
+  const initial = await screen.findByRole('dialog', { name: 'Review proposed stock' });
+  state.proposals[0].quantity = 4;
+  state.proposals[1].quantity = 2;
+  await act(async () => t.mock.timers.tick(15_000));
+  assert.equal(
+    (screen.getByLabelText('Proposed stock for ' + first.sku) as HTMLInputElement).value,
+    '4',
+  );
+  assert.ok(within(initial).getByText('7'));
+  assert.deepEqual(scopes, [ids]);
+  assert.deepEqual(published, []);
+  fireEvent.click(within(initial).getByRole('button', { name: 'Publish 4 eligible listings' }));
+  const results = await screen.findByRole('dialog', { name: 'Stock publication results' });
+  assert.match(
+    within(results).getByRole('status').textContent ?? '',
+    /1 already matched · 2 changed since review · 1 uncertain/,
+  );
+  assert.ok(within(results).getByText('Latest calculated stock: 4'));
+  assert.ok(within(results).getByText('Automatic updates · Queued for a stock check'));
+  assert.ok(within(results).getByText('Tally sync is paused at this location.'));
+  fireEvent.click(
+    within(results).getByRole('button', { name: 'Review latest quantities (2 listings)' }),
+  );
+  assert.equal(
+    (await within(results).findByRole('alert')).textContent?.trim(),
+    'Could not load the latest quantities.',
+  );
+  assert.equal(within(results).queryByRole('button', { name: /^Publish/ }), null);
+  fireEvent.click(
+    within(results).getByRole('button', { name: 'Review latest quantities (2 listings)' }),
+  );
+  const latest = await screen.findByRole('dialog', { name: 'Review proposed stock' });
+  assert.deepEqual(scopes, [ids, [first.id, second.id]]);
+  assert.deepEqual(published, ['review-1']);
+  assert.ok(within(latest).getByText('4'));
+  assert.equal(within(latest).queryByText(matched.sku), null);
+  assert.equal(within(latest).queryByText(uncertain.sku), null);
+  fireEvent.click(within(latest).getByRole('button', { name: 'Publish 2 eligible listings' }));
+  const next = await screen.findByRole('button', { name: 'Review latest quantity (0)' });
+  assert.ok(screen.getByText('Company sync is off.'));
+  assert.equal(screen.queryByRole('button', { name: /^Publish \d/ }), null);
+  fireEvent.click(next);
+  const zero = await screen.findByRole('dialog', { name: 'Review proposed stock' });
+  assert.deepEqual(scopes, [ids, [first.id, second.id], [first.id]]);
+  assert.ok(within(zero).getByText('0'));
+  assert.ok(within(zero).getByText('Auto'));
+  assert.equal(within(zero).queryByText('Tally sync paused'), null);
+  assert.deepEqual(published, ['review-1', 'review-2']);
 });
 
 test('company activation reviews every seller across filters and requires a fresh explicit decision after a trial', async (t) => {
@@ -1103,6 +1362,19 @@ test('a filtered quantity edit blocks review until saved and stays separate from
           };
         return response({ ...state, calculation: [{ listingId: 'listing-2', status: 'ready' }] });
       }
+      if (path === '/api/refresh') {
+        state = {
+          ...state,
+          proposals: state.proposals.map((draft) => ({
+            ...draft,
+            quantity: 3,
+            calculated: 3,
+            itemVersion: draft.itemVersion + 1,
+            createdAt: '2026-11-23T10:00:00.000Z',
+          })),
+        };
+        return response(state);
+      }
       if (path === '/api/proposals') {
         assert.equal(body.listingId, 'listing-2');
         assert.equal(body.quantity, 1);
@@ -1138,6 +1410,12 @@ test('a filtered quantity edit blocks review until saved and stays separate from
   fireEvent.change(screen.getByLabelText('Proposed stock for SAMPLE-CEAT-2-2'), {
     target: { value: '1' },
   });
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh Tally' }));
+  await screen.findByText('Refresh completed. Saved observations are shown below.');
+  assert.equal(
+    (screen.getByLabelText('Proposed stock for SAMPLE-CEAT-2-2') as HTMLInputElement).value,
+    '1',
+  );
   assert.equal(
     (screen.getByRole('button', { name: /Review changes/ }) as HTMLButtonElement).disabled,
     true,
@@ -1180,4 +1458,73 @@ test('switching company clears inventory selection and filters without combining
   assert.equal(screen.queryByText('SAMPLE-CEAT-2-2'), null);
   assert.equal(screen.queryByLabelText('Select SAMPLE-CEAT-2-2'), null);
   assert.match(screen.getByText('1 filtered listing').textContent ?? '', /1 filtered listing/);
+});
+
+test('an unsaved edit survives collapse, changing filters and a stock change that removes the row from Low stock', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const state = initialState('demo', 'unused');
+  const listing = state.listings[0];
+  listing.paused = true;
+  state.proposals = [
+    {
+      listingId: listing.id,
+      calculated: 5,
+      quantity: 5,
+      edited: false,
+      stale: false,
+      itemVersion: state.items[0].version,
+      listingVersion: listing.version,
+      createdAt: new Date().toISOString(),
+      ruleVersion: 'complete-packs-v1',
+    },
+  ];
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    assert.equal(url, '/api/state');
+    return response(state);
+  });
+  let discard = false;
+  const confirmation = t.mock.method(window, 'confirm', () => discard);
+  render(<App />);
+  const item = state.items[0];
+  const label = 'Proposed stock for ' + listing.sku;
+  const input = () => screen.getByRole('spinbutton', { name: label }) as HTMLInputElement;
+  fireEvent.click(await screen.findByRole('button', { name: /Show low physical stock/ }));
+  const menu = screen.getByLabelText('Actions for ' + listing.sku);
+  fireEvent.click(menu);
+  const reviewButton = within(menu.closest('details')!).getByRole('button', {
+    name: 'Review proposal',
+  }) as HTMLButtonElement;
+  assert.equal(reviewButton.disabled, false);
+  fireEvent.change(input(), { target: { value: '3' } });
+  assert.equal(reviewButton.disabled, true);
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse ' + item.name }));
+  assert.equal(screen.queryByRole('spinbutton', { name: label }), null);
+  assert.ok(screen.getByRole('button', { name: 'Show unsaved edits' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Expand ' + item.name }));
+  assert.equal(input().value, '3');
+  listing.paused = false; // Another dashboard resumed this listing during polling.
+  item.physical = 12;
+  await act(async () => t.mock.timers.tick(15_000));
+  assert.equal(screen.queryByRole('spinbutton', { name: label }), null);
+  fireEvent.click(screen.getByRole('button', { name: 'Show unsaved edits' }));
+  assert.equal(input().value, '3');
+  assert.equal(document.activeElement, input());
+  fireEvent.change(screen.getByRole('textbox', { name: 'Search stock items and listings' }), {
+    target: { value: 'missing tyre' },
+  });
+  assert.ok(screen.getByText('No matching items'));
+  assert.equal(screen.queryByRole('spinbutton', { name: label }), null);
+  fireEvent.click(screen.getByRole('button', { name: 'Show unsaved edits' }));
+  assert.equal(input().value, '3');
+  assert.equal(document.activeElement, input());
+  const company = screen.getByLabelText('Tally company') as HTMLSelectElement;
+  fireEvent.change(company, { target: { value: 'demo-b' } });
+  assert.equal(company.value, 'demo-a');
+  assert.equal(input().value, '3');
+  discard = true;
+  fireEvent.change(company, { target: { value: 'demo-b' } });
+  assert.equal(company.value, 'demo-b');
+  fireEvent.change(company, { target: { value: 'demo-a' } });
+  assert.equal(input().value, '5');
+  assert.equal(confirmation.mock.callCount(), 2);
 });

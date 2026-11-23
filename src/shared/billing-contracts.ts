@@ -42,6 +42,7 @@ export interface BillingReport {
     name: string;
     unit: string;
     physical: number | null;
+    keepBackUnits: number;
     unmatchedUnits: number | null;
     previewAvailable: number | null;
   }[];

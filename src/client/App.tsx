@@ -29,6 +29,8 @@ export function App() {
   const [screen, setScreen] = useState<Screen>('inventory');
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
   const [selectedAccountId, setSelectedAccountId] = useState('');
+  const [unsavedInventory, setUnsavedInventory] = useState(false);
+  const [inventoryReset, setInventoryReset] = useState(0);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   useLayoutEffect(() => {
     document.documentElement.scrollTop = 0;
@@ -53,13 +55,22 @@ export function App() {
     : (state.accounts[0]?.id ?? '');
   const company = state.companies.find((value) => value.id === companyId);
   const companyItems = state.items.filter((item) => item.companyId === companyId);
+  function leaveInventoryContext() {
+    if (!unsavedInventory) return true;
+    if (!window.confirm('Discard unsaved Inventory edits and switch?')) return false;
+    setInventoryReset((count) => count + 1);
+    return true;
+  }
   function changeCompany(id: string) {
+    if (id === companyId || !leaveInventoryContext()) return;
     setSelectedCompanyId(id);
     workspace.dismissNotice();
   }
   function changeAccount(id: string) {
+    if (id === accountId || !leaveInventoryContext()) return false;
     setSelectedAccountId(id);
     workspace.dismissNotice();
+    return true;
   }
   function selectScreen(value: Screen) {
     setScreen(value);
@@ -208,12 +219,13 @@ export function App() {
 
           <div hidden={screen !== 'inventory'}>
             <InventoryScreen
-              key={companyId}
+              key={companyId + ':' + inventoryReset}
               state={state}
               companyId={companyId}
               accountId={accountId}
               workspace={workspace}
               onAccountChange={changeAccount}
+              onUnsavedChange={setUnsavedInventory}
               onOpenConnections={() => selectScreen('connections')}
             />
           </div>

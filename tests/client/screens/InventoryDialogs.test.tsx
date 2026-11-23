@@ -356,6 +356,61 @@ test('mapping without available listings explains the empty state and keeps save
   );
 });
 
+test('choosing a manual keep-back override explicitly approves only the affected destination', async () => {
+  const state = initialState('demo', 'unused');
+  const submitted: Array<string[] | undefined> = [];
+  render(
+    <ReviewDialog
+      state={state}
+      review={{
+        id: 'keep-back-review',
+        companyId: 'demo-a',
+        createdAt: '2026-11-23T00:00:00Z',
+        publishingEnabled: true,
+        rows: [
+          {
+            listingId: 'held-pair',
+            sku: 'TYRE-PAIR',
+            account: 'Sample seller',
+            location: 'Warehouse',
+            quantity: 5,
+            observed: 3,
+            policy: 'Auto',
+            stale: false,
+            problem: null,
+            oneTimeProblem: null,
+            keepBackWarning: {
+              itemName: 'Tyre',
+              unit: 'tyres',
+              keepBackUnits: 2,
+              completePacks: 3,
+              reviewKey: 'reviewed',
+            },
+          },
+        ],
+      }}
+      onClose={() => {}}
+      onPublish={async (_id, _mode, overrides) => {
+        submitted.push(overrides);
+        return { ok: true, value: { rows: [] } };
+      }}
+      onReviewLatest={async () => assert.fail('No changed calculated stock')}
+    />,
+  );
+  const publish = screen.getByRole('button', {
+    name: 'Publish 1 eligible listing',
+  }) as HTMLButtonElement;
+  const override = screen.getByRole('checkbox', {
+    name: /Publish 5 for TYRE-PAIR at Warehouse.*keeping back 2 tyres.*3 complete packs/,
+  });
+  assert.equal(publish.disabled, true);
+  fireEvent.click(override);
+  assert.equal(publish.disabled, false);
+  fireEvent.click(publish);
+  await screen.findByRole('heading', { name: 'Stock publication results' });
+  assert.deepEqual(submitted, [['held-pair']]);
+});
+
 test('review reports stale or blocked destinations and keeps publication unavailable', () => {
   const state = initialState('demo', 'unused');
   render(
@@ -395,6 +450,7 @@ test('review reports stale or blocked destinations and keeps publication unavail
       onPublish={async () => {
         throw new Error('A blocked review cannot publish');
       }}
+      onReviewLatest={async () => assert.fail('No publication result')}
     />,
   );
 
@@ -452,6 +508,7 @@ test('choosing Update once on a paused listing keeps the pause visible and submi
           },
         };
       }}
+      onReviewLatest={async () => assert.fail('An update once cannot retry a calculated quantity')}
     />,
   );
   assert.equal(
@@ -467,6 +524,68 @@ test('choosing Update once on a paused listing keeps the pause visible and submi
   fireEvent.click(screen.getByRole('button', { name: 'Publish 1 eligible listing' }));
   await screen.findByText('Readback confirmed two sets.');
   assert.deepEqual(modes, [['positive-review', 'once']]);
+});
+
+test('a blocked manual edit allows other live rows to proceed and an expired review cannot be sent again', async () => {
+  const state = initialState('demo', 'unused');
+  state.mode = 'live';
+  const destination = {
+    listingId: 'calculated',
+    sku: 'READY',
+    account: 'Seller',
+    location: 'North',
+    observed: 2,
+    quantity: 3,
+    policy: 'Auto',
+    problem: null,
+    stale: false,
+  };
+  let attempts = 0;
+  render(
+    <ReviewDialog
+      state={state}
+      review={{
+        id: 'old-review',
+        companyId: 'demo-a',
+        createdAt: new Date().toISOString(),
+        publishingEnabled: true,
+        rows: [
+          destination,
+          {
+            ...destination,
+            listingId: 'manual',
+            sku: 'HELD',
+            policy: 'Limited sales',
+            problem: 'Live allowances are unavailable.',
+            oneTimeProblem: 'Update once requires Auto.',
+          },
+        ],
+      }}
+      onClose={() => {}}
+      onPublish={async (id, mode) => {
+        attempts++;
+        assert.equal(id, 'old-review');
+        assert.equal(mode, undefined);
+        return { ok: false, error: 'Open a fresh Inventory review before publishing.' };
+      }}
+      onReviewLatest={async () => assert.fail('An expired review has no verified replacement.')}
+    />,
+  );
+  assert.ok(screen.getByText('Update once requires Auto.'));
+  assert.equal(screen.queryByRole('group', { name: 'Positive stock edits' }), null);
+  const publish = screen.getByRole('button', {
+    name: 'Publish 1 eligible listing',
+  }) as HTMLButtonElement;
+  fireEvent.click(publish);
+  assert.match(
+    (await screen.findByRole('alert')).textContent ?? '',
+    /Open a fresh Inventory review/,
+  );
+  assert.ok(publish.disabled);
+  fireEvent.click(publish);
+  assert.equal(attempts, 1);
+  assert.equal(screen.queryByRole('button', { name: /Review latest/ }), null);
+  assert.equal(screen.queryByRole('heading', { name: 'Stock publication results' }), null);
 });
 
 test('a missing package observation preserves the saved source until the seller chooses a custom size', () => {

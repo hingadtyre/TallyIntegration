@@ -10,6 +10,8 @@ A fresh live workspace has no company or seller account in its selectors. Tally 
 
 ## Current milestone
 
+**Keep back from marketplaces** on each Tally stock item sets aside stock for other uses. Enter the quantity once in the item's Tally unit. All mapped marketplace listings draw on the same balance after this deduction and unbilled orders. For Flipkart, the listing's pack size, optional tyre minimum and sales allowance then determine the proposed stock. Saving queues eligible listings for their next sync. The field defaults to zero.
+
 **Order matching** lets each seller select a Tally company, Flipkart account and sales ledger. Choose where the order ID, order-item ID or invoice number is recorded, or review bills manually. Select today, the last 7 days or the last 30 days, preview the results, then save the setup. An exact reference, matching stock item and quantity can identify a unique bill. A seller can confirm or release a manual match. Flipkart supplies the orders and Tally supplies posted sales evidence. A ledger entry alone cannot establish that a Flipkart order exists.
 
 In **Order matching**, choose the tracking start date after accounting for earlier sales. Orders are saved even while company sync is off. Sellers can start with a few mappings, then map each new listing and pickup location as orders arrive. The first mapping keeps the original date and checks the waiting orders against the seller’s Tally ledger. Mapped listings continue syncing while an unknown sale waits for its stock item. If those listings share stock, their available quantities can temporarily be too high.
@@ -18,11 +20,11 @@ Each mapped, unbilled sale reserves its Tally units across every listing for tha
 
 Publishing a manually entered zero from Inventory or Marketplaces pauses Tally sync for that listing at that location. A zero calculated from insufficient stock keeps sync on so a later restock can update it. Listings previously marked **Kept out of stock** become **Tally sync paused** on upgrade. **Resume sync** replaces that destination’s draft with freshly calculated stock or shows why a quantity is unavailable. With company sync enabled, the next eligible check can publish the calculated quantity.
 
-Inventory shows whether each listing can sync. Before enabling automatic updates, review every mapped seller account and location for that company. You can try one calculated quantity on a single location and check the result while company sync stays off. A failed company stock read leaves fresh results from other companies available. Bulk Calculate saves the ready drafts and lists any rows that need attention.
+Inventory shows whether each listing can sync. Before enabling automatic updates, review every mapped seller account and location for that company. You can try one calculated quantity on a single location and check the result while company sync stays off. A failed company stock read leaves fresh results from other companies available. Bulk Calculate saves the ready drafts and lists any rows that need attention. Stockbridge automatically refreshes outdated calculated drafts, even with company sync off or a listing paused. It preserves quantities entered by the seller.
 
 The first local foundation is implemented. It includes company-separated stock views, parent/child listing rows, search/brand/pack filters, selected or filtered bulk proposals, saved manual drafts, stale-review protection, Pause state, activity/diagnostic views, editable polling settings and verified manual SQLite backups.
 
-With coverage configured, **Inventory → Calculate** also prepares the adjusted quantity for review when automatic sync is off. Apply checks the available stock again. If a new order makes the reviewed quantity too high, calculate again to see the new amount.
+With order coverage configured, existing calculated proposals reflect verified changes in unbilled units across listings that share a Tally item. **Review changes** keeps the quantities shown when it opens. **Publish** checks each destination again. If its calculated quantity has changed, the results show the new quantity for review. Other eligible listings can still publish.
 
 In **Inventory**, choose a summary card to show all Tally stock items, mapped listings, low physical stock or saved proposals. The cards show totals for the current company or seller. Search, brand and pack filters narrow the chosen view. On narrow screens, inventory, marketplace listings and order-matching results show labelled fields beneath each entry.
 

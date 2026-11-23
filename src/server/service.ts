@@ -1,18 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { TallyClient } from '../adapters/tally.js';
+import { availableForMarketplaces } from '../domain/stock-policy.js';
 import type {
   Activity,
   CalculationResult,
+  Listing,
   InventoryPublishResult,
   Proposal,
   Review,
   Snapshot,
 } from '../shared/contracts.js';
 import type { MarketplaceService } from './marketplace-service.js';
+import { checkManualKeepBack } from './marketplace-keep-back.js';
 import { pickupChoices, verifyOrderMapping } from './marketplace-catalog.js';
-import { checkCalculationStock, saveCalculation } from './inventory-calculation.js';
-import { inventoryTarget } from './inventory-publication.js';
+import { checkCalculationStock, proposalInputs, saveCalculation } from './inventory-calculation.js';
+import { inventoryTarget, type CalculatedReview } from './inventory-publication.js';
 import { AutomationReviews, indexAutomationCatalog } from './automation-preview.js';
 import { recordActivity } from './activity.js';
 import { createBackup } from './backups.js';
@@ -46,13 +49,22 @@ export class InventoryService {
   private readonly polling: PollingLoop;
   private readonly catalogPolling: PollingLoop;
   private readonly orderPolling: PollingLoop;
+  private readonly draftPolling: PollingLoop;
+  private readonly blockedDrafts = new Map<string, { inputs: string; retryAt: number }>();
   private readonly publishingBatches = new WeakSet<object>();
   private readonly pendingOrderWakes = new Map<string, object | undefined>();
   private orderWake: Promise<void> | null = null;
   private unsubscribeOrders?: () => void;
   private readonly marketplaces?: MarketplaceService;
   readonly automationReviews: AutomationReviews;
-  private readonly reviews = new Map<string, { review: Review; drafts: Proposal[] }>();
+  private readonly reviews = new Map<
+    string,
+    {
+      review: Review;
+      drafts: Proposal[];
+      calculated: Map<string, CalculatedReview>;
+    }
+  >();
 
   constructor(
     readonly store: Store,
@@ -90,6 +102,14 @@ export class InventoryService {
       enabled: () => !!this.marketplaces && store.read().mode === 'live',
       nextRunChanged: () => {},
       unexpectedError: (error) => this.diagnostics.error('order-sync', error),
+      timers: dependencies.timers,
+    });
+    this.draftPolling = new PollingLoop({
+      task: () => this.refreshStaleDrafts(dependencies.timers?.now() ?? Date.now()),
+      intervalMilliseconds: () => 15_000,
+      enabled: () => true,
+      nextRunChanged: () => {},
+      unexpectedError: (error) => this.diagnostics.error('draft-refresh', error),
       timers: dependencies.timers,
     });
   }
@@ -156,6 +176,7 @@ export class InventoryService {
       zero,
       strict: zero || selected.length === 1,
     });
+    if (zero) for (const row of selected) this.marketplaces?.supersedeInventoryReview(row.id);
     return this.snapshot();
   }
 
@@ -166,27 +187,77 @@ export class InventoryService {
   ): Promise<CalculationResult> {
     const state = this.store.read();
     const selected = requireListings(state, companyId, ids);
-    const sources =
-      this.marketplaces && this.store.readStockCoverage(String(companyId))
-        ? await checkCalculationStock(
-            state,
-            selected,
-            String(companyId),
-            this.marketplaces,
-            readOnly,
-          )
-        : undefined;
-    const calculation = saveCalculation(this.store, state, String(companyId), selected, {
-      sources,
+    const calculation = await this.calculateListings(state, String(companyId), selected, {
+      readOnly,
     });
     return { ...this.snapshot(), calculation };
+  }
+
+  private async calculateListings(
+    state: Snapshot,
+    companyId: string,
+    selected: Listing[],
+    options: { readOnly: boolean; refreshStale?: boolean },
+  ) {
+    const batch = {};
+    const marketplaces = this.marketplaces;
+    const sources =
+      marketplaces && this.store.readStockCoverage(companyId)
+        ? await checkCalculationStock(state, selected, (itemId) =>
+            marketplaces.availableStock(companyId, itemId, batch, options.readOnly),
+          )
+        : undefined;
+    return saveCalculation(this.store, state, companyId, selected, {
+      sources,
+      refreshStale: options.refreshStale,
+    });
+  }
+
+  /** Refresh saved calculations, including paused destinations and companies with sync off. */
+  private async refreshStaleDrafts(now: number): Promise<boolean> {
+    const state = this.store.read();
+    const stale = new Set(
+      state.proposals
+        .filter((draft) => !draft.edited && isStaleProposal(state, draft))
+        .map((draft) => draft.listingId),
+    );
+    for (const id of this.blockedDrafts.keys()) {
+      if (!stale.has(id)) this.blockedDrafts.delete(id);
+    }
+    if (!stale.size) return true;
+    const companies = new Map(state.items.map((item) => [item.id, item.companyId]));
+    for (const company of state.companies) {
+      const selected = state.listings.filter((row) => {
+        if (!stale.has(row.id) || !row.itemId || companies.get(row.itemId) !== company.id)
+          return false;
+        const block = this.blockedDrafts.get(row.id);
+        return !block || now >= block.retryAt || block.inputs !== proposalInputs(state, row);
+      });
+      if (!selected.length) continue;
+      const rows = await this.calculateListings(state, company.id, selected, {
+        readOnly: true,
+        refreshStale: true,
+      });
+      for (const row of rows) {
+        if (row.status === 'blocked') {
+          const listing = selected.find((listing) => listing.id === row.listingId)!;
+          this.blockedDrafts.set(row.listingId, {
+            inputs: proposalInputs(state, listing),
+            retryAt: now + 120_000,
+          });
+        } else {
+          this.blockedDrafts.delete(row.listingId);
+        }
+      }
+    }
+    return true;
   }
 
   edit(companyId: unknown, listingId: unknown, value: unknown): Snapshot {
     this.store.update((state) => {
       const listing = requireListings(state, companyId, [listingId])[0];
       const quantity = requireWholeNumber(value, 'Proposed quantity');
-      if (quantity > desiredStock(state, listing, 'normal')) {
+      if (quantity > desiredStock(state, listing, 'manual-ceiling')) {
         throw new InputError(
           'Proposed stock exceeds the normal calculation for the available complete packs.',
         );
@@ -201,6 +272,67 @@ export class InventoryService {
         listingId: listing.id,
       });
     });
+    this.marketplaces?.supersedeInventoryReview(String(listingId));
+    return this.snapshot();
+  }
+
+  async previewKeepBack(companyId: unknown, itemId: unknown) {
+    const state = this.store.read();
+    const company = requireCompany(state, companyId);
+    const item = state.items.find((row) => row.id === itemId && row.companyId === company.id);
+    if (!item) throw new InputError('Select a stock item in this Tally company.');
+    if (!this.marketplaces) throw new InputError('Order verification is unavailable.', 409);
+    const evidence = await this.marketplaces.availableStock(company.id, item.id, undefined, true);
+    evidence.verify();
+    return {
+      physical: evidence.physical,
+      reservedUnits: evidence.reservedUnits,
+      itemVersion: evidence.itemVersion,
+    };
+  }
+
+  setKeepBack(companyId: unknown, itemId: unknown, itemVersion: unknown, units: unknown): Snapshot {
+    if (
+      typeof units !== 'number' ||
+      !Number.isFinite(units) ||
+      units < 0 ||
+      units > Number.MAX_SAFE_INTEGER
+    ) {
+      throw new InputError('Enter a valid keep-back quantity of zero or more.');
+    }
+    if (typeof itemVersion !== 'number' || !Number.isSafeInteger(itemVersion) || itemVersion < 0) {
+      throw new InputError('The saved stock item version is required.');
+    }
+    this.store.update((state) => {
+      const company = requireCompany(state, companyId);
+      const item = state.items.find((row) => row.id === itemId && row.companyId === company.id);
+      if (!item) throw new InputError('Select a stock item in this Tally company.');
+      if (item.keepBackUnits === units) return;
+      if (item.version !== itemVersion) {
+        throw new InputError(
+          'The stock item changed. Refresh it before saving the keep-back quantity.',
+          409,
+        );
+      }
+      item.keepBackUnits = units;
+      item.version++;
+      for (const row of state.listings)
+        if (row.itemId === item.id) this.marketplaces?.supersedeInventoryReview(row.id);
+      if (company.automation) {
+        for (const listing of state.listings) {
+          if (listing.itemId === item.id && listing.verified && !listing.paused) {
+            listing.syncPendingItemVersion = item.version;
+          }
+        }
+      }
+      recordActivity(
+        state,
+        'item-keep-back',
+        `${item.name}: ${units} ${item.unit} kept back from marketplaces.`,
+        { companyId: company.id },
+      );
+    });
+    this.draftPolling.wake();
     return this.snapshot();
   }
 
@@ -287,6 +419,7 @@ export class InventoryService {
   review(companyId: unknown, ids: unknown): Review {
     const state = this.snapshot();
     const market = this.marketplaces ? this.store.readMarketplace() : null;
+    const calculated = new Map<string, CalculatedReview>();
     const rows = requireListings(state, companyId, ids).map((listing) => {
       const draft = state.proposals.find((row) => row.listingId === listing.id);
       let problem: string | null = null;
@@ -322,6 +455,11 @@ export class InventoryService {
             }
           };
           problem = check('allowance');
+          if (!problem && !draft.edited && this.marketplaces)
+            calculated.set(
+              listing.id,
+              this.marketplaces.captureCalculatedReview(state, listing, destination),
+            );
           if (draft.edited && draft.quantity > 0) oneTimeProblem = check('once');
         }
       }
@@ -359,7 +497,36 @@ export class InventoryService {
       this.reviews.set(review.id, {
         review,
         drafts: state.proposals.filter((row) => ids.has(row.listingId)),
+        calculated,
       });
+    }
+    return review;
+  }
+
+  async prepareReview(companyId: unknown, ids: unknown): Promise<Review> {
+    const review = this.review(companyId, ids);
+    const marketplaces = this.marketplaces;
+    const manualRows = review.rows.filter(
+      (row) => row.oneTimeProblem !== undefined && (!row.problem || !row.oneTimeProblem),
+    );
+    if (!marketplaces || !manualRows.length) return review;
+    const state = this.store.read();
+    const catalog = indexAutomationCatalog(this.store.readMarketplace());
+    const batch = {};
+    for (const row of manualRows) {
+      const mapped = state.listings.find((listing) => listing.id === row.listingId);
+      if (!mapped || !state.items.find((item) => item.id === mapped.itemId)?.keepBackUnits)
+        continue;
+      const [destination] = catalog.listingsFor(mapped);
+      if (!destination || row.quantity === null) continue;
+      const checked = await checkManualKeepBack(state, destination, row.location, (company, item) =>
+        marketplaces.availableStock(company, item, batch, true),
+      );
+      if (
+        checked &&
+        (checked.review.completePacks === null || row.quantity > checked.review.completePacks)
+      )
+        row.keepBackWarning = checked.review;
     }
     return review;
   }
@@ -367,6 +534,7 @@ export class InventoryService {
   async publish(
     reviewId: unknown,
     positiveEdits: unknown = 'allowance',
+    keepBackOverrides: unknown = [],
   ): Promise<InventoryPublishResult> {
     if (positiveEdits !== 'allowance' && positiveEdits !== 'once')
       throw new InputError('Choose a sales allowance or Update once for positive manual edits.');
@@ -375,15 +543,18 @@ export class InventoryService {
     const captured = typeof reviewId === 'string' ? this.reviews.get(reviewId) : undefined;
     if (!captured || Date.now() - Date.parse(captured.review.createdAt) > 900_000)
       throw new InputError('Open a fresh Inventory review before publishing.', 409);
+    const confirmed = new Set(Array.isArray(keepBackOverrides) ? keepBackOverrides : []);
     this.reviews.delete(captured.review.id);
     const rows: InventoryPublishResult['rows'] = [];
     const batch = {};
     for (const row of captured.review.rows) {
       const draft = captured.drafts.find((entry) => entry.listingId === row.listingId);
-      const problem =
+      let problem =
         positiveEdits === 'once' && row.oneTimeProblem !== undefined
           ? row.oneTimeProblem
           : row.problem;
+      if (!problem && row.keepBackWarning && !confirmed.has(row.listingId))
+        problem = 'Confirm the keep-back warning for this listing before publishing.';
       if (!draft || problem) {
         rows.push({
           listingId: row.listingId,
@@ -402,6 +573,13 @@ export class InventoryService {
             listingVersion: draft.listingVersion,
             positiveEdits,
             draft,
+            calculatedReview: captured.calculated.get(row.listingId),
+            ...(row.keepBackWarning && {
+              keepBackConfirmation: {
+                reviewKey: row.keepBackWarning.reviewKey,
+                quantity: draft.quantity,
+              },
+            }),
           },
           batch,
         ),
@@ -547,6 +725,7 @@ export class InventoryService {
         { companyId: item.companyId, listingId: listing.id },
       );
     });
+    this.draftPolling.wake();
     return this.snapshot();
   }
 
@@ -584,7 +763,11 @@ export class InventoryService {
 
   settings(input: unknown): Snapshot {
     const sourceChanged = saveSettings(this.store, input);
-    if (sourceChanged) this.stockRefresh.sourceChanged();
+    if (sourceChanged) {
+      this.stockRefresh.sourceChanged();
+      for (const listing of this.store.read().listings)
+        this.marketplaces?.supersedeInventoryReview(listing.id);
+    }
     this.polling.settingsChanged();
     this.catalogPolling.settingsChanged();
     this.orderPolling.settingsChanged();
@@ -689,7 +872,9 @@ export class InventoryService {
       // An exhausted allowance or a balance below one pack already targets zero.
       const zero =
         (listing.policy === 'limited' && listing.remaining === 0) ||
-        (listing.packSize !== null && item.physical !== null && item.physical < listing.packSize);
+        (listing.packSize !== null &&
+          item.physical !== null &&
+          availableForMarketplaces(item.physical, 0, item.keepBackUnits) < listing.packSize);
       if (!zeroOnly || zero) work.push({ listing, item, zero });
     }
     work.sort((a, b) => Number(b.zero) - Number(a.zero));
@@ -756,6 +941,8 @@ export class InventoryService {
         .runNow()
         .catch((error) => this.diagnostics.error('catalog-refresh', error));
     this.polling.start();
+    this.draftPolling.start();
+    this.draftPolling.wake();
   }
   stop(): void {
     this.unsubscribeOrders?.();
@@ -764,9 +951,15 @@ export class InventoryService {
     this.polling.stop();
     this.catalogPolling.stop();
     this.orderPolling.stop();
+    this.draftPolling.stop();
   }
   async idle(): Promise<void> {
-    await Promise.all([this.polling.idle(), this.catalogPolling.idle(), this.orderPolling.idle()]);
+    await Promise.all([
+      this.polling.idle(),
+      this.catalogPolling.idle(),
+      this.orderPolling.idle(),
+      this.draftPolling.idle(),
+    ]);
     while (this.orderWake) await this.orderWake;
   }
 }

@@ -279,6 +279,100 @@ test('bulk Calculate prepares nineteen drafts and identifies the pack that needs
   assert.deepEqual(f.service.snapshot().proposals, result.proposals);
 });
 
+test('the running workspace refreshes only saved calculated drafts after restart and keep-back changes', async (t) => {
+  const f = fixture(t);
+  f.service.calculate('demo-a', ['listing-1', 'listing-5', 'listing-6']);
+  f.service.edit('demo-a', 'listing-2', 0);
+  const before = f.store.read();
+  const originalDraft = (id: string) => before.proposals.find((draft) => draft.listingId === id);
+  f.service.setKeepBack('demo-a', 'item-a', 1, 4);
+  f.reopen();
+  f.service.start();
+  await f.service.idle();
+  const refreshed = f.service.snapshot();
+  for (const id of ['listing-1', 'listing-5']) {
+    const draft = refreshed.proposals.find((row) => row.listingId === id)!;
+    assert.equal(draft.quantity, 0);
+    assert.equal(draft.stale, false);
+  }
+  assert.deepEqual(
+    f.store.read().proposals.find((p) => p.listingId === 'listing-2'),
+    originalDraft('listing-2'),
+  );
+  assert.equal(refreshed.proposals.find((p) => p.listingId === 'listing-2')!.stale, true);
+  assert.deepEqual(
+    refreshed.proposals.find((p) => p.listingId === 'listing-6'),
+    originalDraft('listing-6'),
+  );
+  assert.equal(refreshed.proposals.length, before.proposals.length);
+  assert.deepEqual(refreshed.listings, before.listings);
+  assert.equal(refreshed.companies[0].automation, false);
+
+  f.service.setKeepBack('demo-a', 'item-a', 2, 0);
+  await f.service.idle();
+  assert.equal(
+    f.service.snapshot().proposals.find((p) => p.listingId === 'listing-5')!.quantity,
+    5,
+  );
+});
+
+test('an unverified stale proposal keeps its old quantity and reason until the background retry succeeds', async (t) => {
+  let scheduled!: { run: () => void; delay: number };
+  let now = 0;
+  const f = fixture(t, 'demo', {
+    timers: {
+      now: () => now,
+      schedule(run, delay) {
+        scheduled = { run, delay };
+        return () => {};
+      },
+    },
+  });
+  async function nextCheck() {
+    assert.equal(scheduled.delay, 15_000, 'a blocked listing must not slow down other listings');
+    now += scheduled.delay;
+    scheduled.run();
+    await f.service.idle();
+  }
+  f.service.calculate('demo-a', ['listing-1', 'listing-6']);
+  f.store.update((state) => {
+    state.listings[0].verified = false;
+    state.listings[0].version++;
+    state.items[0].physical = 7;
+    state.items[0].version++;
+  });
+  const activities = f.store.read().activity;
+  f.service.start();
+  await f.service.idle();
+  const waiting = f.service.snapshot();
+  assert.equal(waiting.proposals[0].quantity, 5);
+  assert.equal(waiting.proposals[0].stale, true);
+  assert.match(waiting.listings[0].proposalIssue!, /Verify the mapping and pack size/);
+  f.store.update((state) => {
+    const otherItem = state.items.find((item) => item.id === 'item-b')!;
+    otherItem.physical = 0;
+    otherItem.version++;
+  });
+  await nextCheck();
+  const other = f.service.snapshot().proposals.find((p) => p.listingId === 'listing-6')!;
+  assert.equal(other.quantity, 0);
+  assert.equal(other.stale, false);
+  const writes = t.mock.method(f.store, 'update');
+  await nextCheck();
+  assert.equal(writes.mock.callCount(), 0, 'unchanged blocked inputs wait before retrying');
+  assert.deepEqual(f.store.read().activity, activities);
+  f.store.update((state) => {
+    state.listings[0].verified = true;
+    state.listings[0].version++;
+  });
+  await nextCheck();
+  const refreshed = f.service.snapshot();
+  const recovered = refreshed.proposals.find((p) => p.listingId === 'listing-1')!;
+  assert.equal(recovered.quantity, 7);
+  assert.equal(recovered.stale, false);
+  assert.equal(refreshed.listings[0].proposalIssue, undefined);
+});
+
 test('edited quantity and zero drafts survive calculation without activating policies', (t) => {
   const f = fixture(t);
   const original = f.service.snapshot().listings;

@@ -11,7 +11,6 @@ interface QuantityEditorProps {
   onDirty: (listingId: string, dirty: boolean) => void;
 }
 
-/** The table keys this editor by saved proposal version so successful saves reset its local input. */
 export function QuantityEditor({
   proposal,
   listing,
@@ -21,16 +20,29 @@ export function QuantityEditor({
 }: QuantityEditorProps) {
   const savedValue = proposal ? String(proposal.quantity) : '';
   const descriptionId = useId();
-  const [value, setValue] = useState(savedValue);
-  const [reenteredCalculatedZero, setReenteredCalculatedZero] = useState(false);
+  const [typedValue, setTypedValue] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const dirty = value !== savedValue || reenteredCalculatedZero;
+  const value = typedValue ?? savedValue;
+  const dirty = typedValue !== null;
   const canSave = dirty || (proposal?.stale && proposal.edited);
 
   useEffect(() => {
     onDirty(listing.id, dirty);
     return () => onDirty(listing.id, false);
   }, [dirty, listing.id, onDirty]);
+
+  function edit(text: string) {
+    // Saving an explicitly typed quantity is a seller decision, even if it
+    // happens to equal the calculated proposal currently on screen.
+    const alreadySaved = text === savedValue && (!proposal || proposal.edited);
+    setTypedValue(alreadySaved ? null : text);
+    setError('');
+  }
+
+  function discard() {
+    setTypedValue(null);
+    setError('');
+  }
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -41,7 +53,8 @@ export function QuantityEditor({
     }
     setError('');
     const result = await onSave(Number(value));
-    if (!result.ok) setError(result.error);
+    if (result.ok) setTypedValue((current) => (current === typedValue ? null : current));
+    else setError(result.error);
   }
 
   let description = listing.proposalIssue
@@ -52,11 +65,16 @@ export function QuantityEditor({
     description = error;
     descriptionClass = 'text-danger';
   } else if (dirty) {
-    description = 'Save this draft ↗';
+    description = 'Unsaved draft';
     descriptionClass = 'text-amber';
-  } else if (proposal?.stale) {
-    description = proposal.edited ? 'Save again to review' : 'Needs recalculation';
+  } else if (proposal?.stale && proposal.edited) {
+    description = 'Save again to review';
     descriptionClass = 'text-danger';
+  } else if (proposal?.stale) {
+    description = listing.proposalIssue
+      ? `Previous proposal. ${listing.proposalIssue}`
+      : 'Updating proposal…';
+    descriptionClass = listing.proposalIssue ? 'text-amber' : '';
   } else if (proposal?.edited) {
     description =
       proposal.quantity === 0 ? 'Publishing pauses Tally sync' : 'Choose how to publish at review';
@@ -75,15 +93,19 @@ export function QuantityEditor({
           inputMode="numeric"
           aria-label={`Proposed stock for ${listing.sku}`}
           aria-describedby={descriptionId}
+          data-unsaved={dirty || undefined}
           value={value}
           placeholder="-"
           disabled={disabled}
-          onInput={(event) =>
-            setReenteredCalculatedZero(
-              proposal?.quantity === 0 && !proposal.edited && event.currentTarget.value === '0',
-            )
-          }
-          onChange={(event) => setValue(event.target.value)}
+          onInput={(event) => {
+            // React skips change when a replacement has the same DOM value.
+            if (proposal && !proposal.edited && event.currentTarget.value === savedValue)
+              edit(savedValue);
+          }}
+          onChange={(event) => edit(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && dirty) discard();
+          }}
         />
         {canSave && (
           <button
@@ -100,6 +122,17 @@ export function QuantityEditor({
       <small id={descriptionId} className={descriptionClass} role={error ? 'alert' : undefined}>
         {description}
       </small>
+      {dirty && (
+        <button
+          type="button"
+          className="text-button"
+          aria-label={`Discard edit for ${listing.sku}`}
+          disabled={disabled}
+          onClick={discard}
+        >
+          Discard edit
+        </button>
+      )}
     </div>
   );
 }

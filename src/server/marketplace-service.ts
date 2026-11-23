@@ -5,10 +5,15 @@ import { FlipkartListingError, FlipkartListingsClient } from '../adapters/flipka
 import type {
   FlipkartConnectionStatus,
   InventoryPublishRow,
+  Listing,
   Snapshot,
 } from '../shared/contracts.js';
 import { checkAutomationDestination, indexAutomationCatalog } from './automation-preview.js';
-import { inventoryTarget, type InventoryIntent } from './inventory-publication.js';
+import {
+  inventoryTarget,
+  type CalculatedReview,
+  type InventoryIntent,
+} from './inventory-publication.js';
 import type {
   MarketplaceAccount,
   MarketplaceAccountRecord,
@@ -35,6 +40,7 @@ import {
 import { desiredStock } from './proposals.js';
 import { StockAvailabilityService } from './stock-availability.js';
 import { MarketplaceStockRecovery } from './marketplace-stock-recovery.js';
+import { checkManualKeepBack } from './marketplace-keep-back.js';
 import type { Store } from './store.js';
 import { InputError, requireText, requireWholeNumber } from './validation.js';
 
@@ -67,6 +73,7 @@ export class MarketplaceService {
   private readonly verifiedImportErrors = new Map<string, string>();
   private readonly client: ListingTransport;
   private readonly publisher: MarketplacePublication;
+  private readonly sellerDecisions = new Map<string, number>();
   private readonly billing: BillingService;
   private readonly availability: StockAvailabilityService;
   private readonly orderListeners = new Set<(companyId: string, batch?: object) => void>();
@@ -81,7 +88,9 @@ export class MarketplaceService {
   ) {
     this.mode = store.read().mode;
     this.client = dependencies.client ?? new FlipkartListingsClient();
-    this.publisher = new MarketplacePublication(store, this.client);
+    this.publisher = new MarketplacePublication(store, this.client, (companyId, itemId) =>
+      this.availableStock(companyId, itemId, undefined, true),
+    );
     this.billing = new BillingService(store, dependencies.billingSources);
     this.availability = new StockAvailabilityService(
       store,
@@ -388,13 +397,14 @@ export class MarketplaceService {
   private async refreshAccount(
     account: MarketplaceAccountRecord,
   ): Promise<{ account: MarketplaceAccount }> {
+    const quantityChanges: string[] = [];
     if (this.mode === 'demo') {
       this.store.updateMarketplace((data, state) => {
         const observedAt = new Date().toISOString();
         data.accounts.find((row) => row.id === account.id)!.lastRefreshedAt = observedAt;
         for (const listing of data.listings.filter((row) => row.accountId === account.id)) {
           listing.observedAt = observedAt;
-          updateInventoryObservations(state, listing);
+          updateInventoryObservations(state, listing, quantityChanges);
         }
       });
     } else {
@@ -539,7 +549,7 @@ export class MarketplaceService {
                   row.skuMappingId = listing.id;
               }
             }
-            updateInventoryObservations(state, listing);
+            updateInventoryObservations(state, listing, quantityChanges);
           }
           for (const row of state.listings.filter((row) => row.accountId === account.id)) {
             if (
@@ -597,6 +607,7 @@ export class MarketplaceService {
         throw error;
       }
     }
+    this.publisher.recordQuantityChanges(quantityChanges);
     this.verifiedImportErrors.delete(account.id);
     return { account: await this.publicAccount(this.account(account.id)) };
   }
@@ -722,13 +733,22 @@ export class MarketplaceService {
     return this.connection(accountId).getAccessToken();
   }
 
-  apply(input: Record<string, unknown>) {
+  async reviewKeepBack(input: Record<string, unknown>) {
+    const checked = await this.publisher.checkKeepBack(this.account(input.accountId).id, input);
+    return checked?.review ?? null;
+  }
+
+  async apply(input: Record<string, unknown>) {
     const account = this.account(input.accountId);
+    const check = this.publisher.checkDirectEdit(account.id, input);
+    const keepBack = check ? await check : null;
     return this.serial(account.id, async () => {
       const result = await this.publisher.apply(
         account.id,
         input,
         await this.verifiedToken(account.id),
+        undefined,
+        { keepBack, verify: this.sellerGuard(account.id) },
       );
       if (result) result.listing = this.currentListingView(result.listing);
       return result;
@@ -806,6 +826,59 @@ export class MarketplaceService {
     };
   }
 
+  supersedeInventoryReview(listingId: string) {
+    this.sellerDecisions.set(listingId, (this.sellerDecisions.get(listingId) ?? 0) + 1);
+  }
+
+  captureCalculatedReview(
+    state: Snapshot,
+    listing: Listing,
+    destination: MarketplaceListing,
+  ): CalculatedReview {
+    const sourceKey = (snapshot: Snapshot, row: Listing) => {
+      const item = snapshot.items.find((entry) => entry.id === row.itemId);
+      return JSON.stringify([
+        snapshot.settings.tallyUrl,
+        item?.id,
+        item?.companyId,
+        item?.externalId,
+        item?.unit,
+        item?.name,
+        item?.keepBackUnits,
+        row.accountId,
+        row.sku,
+        row.location,
+        row.skuMappingId,
+        row.packSize,
+        row.packSource,
+        row.verified,
+        row.sourceScope,
+        row.tyreFloor,
+        row.paused,
+        row.policy,
+        row.remaining,
+        this.publisher.setupVersion(row),
+        this.sellerDecisions.get(row.id),
+      ]);
+    };
+    const capturedKey = sourceKey(state, listing);
+    return {
+      observed: listing.observed,
+      syncPendingItemVersion: listing.syncPendingItemVersion,
+      orderSyncPending: listing.orderSyncPending,
+      verify: (current, row, marketplace) => {
+        if (
+          sourceKey(current, row) !== capturedKey ||
+          !sameListingIdentity(destination, marketplace)
+        )
+          throw new InputError(
+            'The mapping, source or stock policy changed. Open a fresh review.',
+            409,
+          );
+      },
+    };
+  }
+
   async publishInventory(
     intent: InventoryIntent,
     batch?: object,
@@ -821,6 +894,16 @@ export class MarketplaceService {
         .listings.find((entry) => entry.accountId === row.accountId && entry.sku === row.sku);
       if (!marketplace)
         throw new InputError('Refresh the seller account to locate this listing.', 409);
+      if (intent.calculatedReview) {
+        intent.calculatedReview.verify(state, row, marketplace);
+        // Freeze the versions used for this new check. The transaction rechecks them
+        // after order, seller and destination reads, including on the no-write paths.
+        intent = {
+          ...intent,
+          itemVersion: state.items.find((item) => item.id === row.itemId)!.version,
+          listingVersion: row.version,
+        };
+      }
       // Keep slow order and bill reads off the seller's write queue so an
       // explicit zero or pause can still take effect during reconciliation.
       const protectedStock =
@@ -830,6 +913,12 @@ export class MarketplaceService {
       const evidence = protectedStock
         ? await this.availableStock(intent.companyId, row.itemId!, batch)
         : undefined;
+      const keepBack =
+        intent.draft?.edited && intent.draft.quantity > 0 && row.location
+          ? await checkManualKeepBack(state, marketplace, row.location, (company, item) =>
+              this.availableStock(company, item, batch, true),
+            )
+          : null;
       return await this.serial(row.accountId, async () => {
         const verifySeller = this.sellerGuard(row.accountId);
         const token = await this.verifiedToken(row.accountId);
@@ -850,6 +939,7 @@ export class MarketplaceService {
           intent,
           {
             available: evidence?.available,
+            keepBack,
             verify: () => {
               verifyReview?.();
               verifySeller();
@@ -866,6 +956,19 @@ export class MarketplaceService {
                 ? 'Stock is already zero. Tally sync paused for this location.'
                 : 'The current marketplace quantity already matches.',
           };
+        if ('latestQuantity' in result)
+          return result.alreadyCurrent
+            ? {
+                ...identity,
+                status: 'unchanged',
+                message: `Flipkart already matches the latest calculated quantity of ${result.latestQuantity}. No update was sent.`,
+              }
+            : {
+                ...identity,
+                status: 'blocked',
+                latestQuantity: result.latestQuantity,
+                message: 'Calculated stock changed. Review the latest quantity before publishing.',
+              };
         const status =
           result.change.state === 'confirmed' || result.change.state === 'failed'
             ? result.change.state

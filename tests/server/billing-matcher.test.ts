@@ -101,6 +101,21 @@ test('exact fields and delimited narration distinguish similar references and mi
   }
 });
 
+test('the seller-period stock preview shows keep-back and unbilled units as separate deductions', () => {
+  const f = fixture();
+  f.stock.physical = 8;
+  f.stock.keepBackUnits = 2;
+  const unbilled = f.match([f.order], []).stock[0];
+  assert.deepEqual(
+    [unbilled.physical, unbilled.keepBackUnits, unbilled.unmatchedUnits, unbilled.previewAvailable],
+    [8, 2, 1, 5],
+  );
+  f.stock.keepBackUnits = 10;
+  assert.equal(f.match().stock[0].previewAvailable, 0);
+  f.stock.physical = null;
+  assert.equal(f.match().stock[0].previewAvailable, null);
+});
+
 test('wrong seller, listing identity, location, company, item, unit, quantity or earlier voucher cannot settle an order', () => {
   const f = fixture();
   for (const edit of [

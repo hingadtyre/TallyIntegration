@@ -12,12 +12,18 @@ import type {
 } from '../shared/marketplace-contracts.js';
 import { recordActivity } from './activity.js';
 import {
+  checkManualKeepBack,
+  keepBackSource,
+  type CheckedAvailability,
+} from './marketplace-keep-back.js';
+import {
   findMarketplaceListing,
   hasConfirmedPickup,
   listingView,
   updateInventoryObservations,
 } from './marketplace-catalog.js';
 import type { Store } from './store.js';
+import { isStaleProposal, prepareProposal } from './proposals.js';
 import { InputError, requireText, requireWholeNumber } from './validation.js';
 import {
   activateInventoryIntent,
@@ -37,7 +43,12 @@ type PendingStockSync = {
   tallyPending: boolean;
   orderPending?: string | null;
 };
-type InventoryEvidence = { available?: number; verify: () => void };
+type PublicationEvidence = {
+  available?: number;
+  verify: () => void;
+  keepBack?: Awaited<ReturnType<typeof checkManualKeepBack>>;
+};
+type RecheckedQuantity = { latestQuantity: number; alreadyCurrent: boolean };
 
 export function blocksListing(change: MarketplaceChange, accountId: string, listingId: string) {
   return (
@@ -206,19 +217,59 @@ export function automaticRetryAt(
 
 /** Durable attempts never replay an uncertain absolute stock write after a restart. */
 export class MarketplacePublication {
+  private readonly observationRevisions = new Map<string, number>();
+
+  /** Called after a successful transaction, only for numeric observation changes. */
+  recordQuantityChanges(ids: string[]) {
+    for (const id of ids)
+      this.observationRevisions.set(id, (this.observationRevisions.get(id) ?? 0) + 1);
+  }
+
+  setupVersion(listing: { id: string; version: number }) {
+    return listing.version - (this.observationRevisions.get(listing.id) ?? 0);
+  }
+
   constructor(
     private readonly store: Store,
     private readonly client: ListingTransport,
+    private readonly availableStock?: CheckedAvailability,
   ) {}
 
-  private saveObservation(listing: MarketplaceListing): MarketplaceListing {
-    return this.store.updateMarketplace((data, state) => {
+  checkKeepBack(accountId: string, input: Record<string, unknown>) {
+    const listing = findMarketplaceListing(
+      this.store.readMarketplace(),
+      accountId,
+      requireText(input.listingId, 'Listing'),
+    );
+    const location = requireText(input.locationId, 'Location');
+    const state = this.store.read();
+    if (!keepBackSource(state, listing, location)) return null;
+    if (
+      listing.version !== input.version ||
+      !listing.locations.some((entry) => entry.id === location)
+    )
+      throw new InputError(
+        'This listing has changed. Refresh the seller’s listings and reopen this stock editor.',
+        409,
+      );
+    return checkManualKeepBack(state, listing, location, this.availableStock);
+  }
+
+  checkDirectEdit(accountId: string, input: Record<string, unknown>) {
+    const edit = parseEdit(input.edit);
+    if (edit.kind !== 'stock' || edit.quantity === 0) return null;
+    return this.checkKeepBack(accountId, { ...input, locationId: edit.locationId });
+  }
+
+  private saveObservation(listing: MarketplaceListing): void {
+    const quantityChanges: string[] = [];
+    this.store.updateMarketplace((data, state) => {
       const current = findMarketplaceListing(data, listing.accountId, listing.id);
       const updated = { ...listing, version: current.version + 1 };
       data.listings[data.listings.indexOf(current)] = updated;
-      updateInventoryObservations(state, updated);
-      return updated;
+      updateInventoryObservations(state, updated, quantityChanges);
     });
+    this.recordQuantityChanges(quantityChanges);
   }
 
   private finish(
@@ -267,21 +318,30 @@ export class MarketplacePublication {
     accountId: string,
     input: Record<string, unknown>,
     token: string | null,
+    intent?: undefined,
+    evidence?: PublicationEvidence,
   ): Promise<MarketplaceApplyResult>;
   apply(
     accountId: string,
     input: Record<string, unknown>,
     token: string | null,
-    intent: InventoryIntent,
-    evidence?: InventoryEvidence,
+    intent: InventoryIntent & { calculatedReview?: undefined },
+    evidence?: PublicationEvidence,
   ): Promise<MarketplaceApplyResult | null>;
+  apply(
+    accountId: string,
+    input: Record<string, unknown>,
+    token: string | null,
+    intent: InventoryIntent,
+    evidence?: PublicationEvidence,
+  ): Promise<MarketplaceApplyResult | RecheckedQuantity | null>;
   async apply(
     accountId: string,
     input: Record<string, unknown>,
     token: string | null,
     intent?: InventoryIntent,
-    evidence?: InventoryEvidence,
-  ): Promise<MarketplaceApplyResult | null> {
+    evidence?: PublicationEvidence,
+  ): Promise<MarketplaceApplyResult | RecheckedQuantity | null> {
     const data = this.store.readMarketplace();
     const listing = findMarketplaceListing(
       data,
@@ -307,6 +367,19 @@ export class MarketplacePublication {
         );
     };
     if (intent && !intent.draft && !intent.orderOnly) checkBackoff();
+    // Check orders and bills first. The final remote stock read must still catch
+    // a sale that arrived while the seller's keep-back was being checked.
+    const manualPositive =
+      (!intent || intent.draft?.edited) && edit.kind === 'stock' && edit.quantity > 0;
+    const keepBack =
+      manualPositive && evidence?.keepBack === undefined
+        ? await checkManualKeepBack(
+            this.store.read(),
+            listing,
+            edit.locationId,
+            this.availableStock,
+          )
+        : evidence?.keepBack;
     const before =
       token === null
         ? listing
@@ -365,12 +438,55 @@ export class MarketplacePublication {
       ? (before.locations.find((location) => location.id === intent.trial!.location)?.quantity ??
           null) === intent.trial.observed
       : sameBaseline(listing, before, edit);
-    if (!orderStockDrift && !baselineMatches) {
+    const calculatedReview = intent?.calculatedReview;
+    const remoteQuantity =
+      edit.kind === 'stock'
+        ? (before.locations.find((location) => location.id === edit.locationId)?.quantity ?? null)
+        : null;
+    const reviewedBaselineChanged =
+      calculatedReview &&
+      (calculatedReview.observed !== remoteQuantity ||
+        intent.draft?.listingVersion !== intent.listingVersion);
+    const quantityChanged =
+      calculatedReview && edit.kind === 'stock' && intent.draft?.quantity !== edit.quantity;
+    const alreadyCurrent = !!calculatedReview && matchesEdit(before, edit);
+    if (
+      !orderStockDrift &&
+      !alreadyCurrent &&
+      !quantityChanged &&
+      (!baselineMatches || reviewedBaselineChanged)
+    ) {
       this.saveObservation(before);
       throw new InputError(
         'Flipkart changed since this editor was opened. Refresh and review the latest value.',
         409,
       );
+    }
+    if (keepBack?.usesPackageCount && listing.packageCount !== before.packageCount) {
+      this.saveObservation(before);
+      throw new InputError(
+        'Flipkart’s package count changed. Refresh the listing and review its Set of before applying.',
+        409,
+      );
+    }
+    if (
+      keepBack &&
+      edit.kind === 'stock' &&
+      (keepBack.review.completePacks === null || edit.quantity > keepBack.review.completePacks)
+    ) {
+      const confirmation = intent?.keepBackConfirmation ?? input.keepBackConfirmation;
+      if (
+        !confirmation ||
+        typeof confirmation !== 'object' ||
+        !('reviewKey' in confirmation) ||
+        confirmation.reviewKey !== keepBack.review.reviewKey ||
+        !('quantity' in confirmation) ||
+        confirmation.quantity !== edit.quantity
+      )
+        throw new InputError(
+          'Review the current Keep back from marketplaces warning and confirm this quantity before applying.',
+          409,
+        );
     }
     const expected = expectedListing(before, edit);
     const at = new Date().toISOString();
@@ -389,6 +505,8 @@ export class MarketplacePublication {
     // The guard reads persisted billing evidence. Run it outside the transaction,
     // with no asynchronous gap before recording a write or consuming a no-op.
     evidence?.verify();
+    keepBack?.verify?.();
+    const quantityChanges: string[] = [];
     const consumedWork = this.store.updateMarketplace((current, state) => {
       const latest = findMarketplaceListing(current, accountId, listing.id);
       if (current.changes.some((c) => blocksListing(c, accountId, listing.id)))
@@ -399,6 +517,15 @@ export class MarketplacePublication {
       if (latest.version !== version)
         throw new InputError('The listing changed. Refresh before applying.', 409);
       const destinations = edit.kind === 'stock' ? policyRows(state, latest, edit.locationId) : [];
+      if (
+        manualPositive &&
+        edit.kind === 'stock' &&
+        keepBackSource(state, latest, edit.locationId)?.version !== keepBack?.version
+      )
+        throw new InputError(
+          'The keep-back setting or stock mapping changed. Review the current stock before applying.',
+          409,
+        );
       // Older clients sent an automation choice. The mapping at the moment of Apply
       // determines whether this direct edit locks a destination.
       if (!intent && edit.kind === 'stock')
@@ -435,12 +562,40 @@ export class MarketplacePublication {
           target.listing.location !== edit.locationId
         )
           throw new InputError('The stock target changed. Review the new calculation.', 409);
+        const saved =
+          calculatedReview && state.proposals.find((row) => row.listingId === intent.listingId);
+        const newerWork =
+          saved &&
+          (reviewedBaselineChanged ||
+            saved.createdAt !== intent.draft?.createdAt ||
+            intent.itemVersion !== intent.draft?.itemVersion ||
+            saved.stale ||
+            (target.listing.syncPendingItemVersion != null &&
+              target.listing.syncPendingItemVersion !== calculatedReview.syncPendingItemVersion) ||
+            (target.listing.orderSyncPending != null &&
+              target.listing.orderSyncPending !== calculatedReview.orderSyncPending));
+        if (saved && (quantityChanged || (alreadyCurrent && newerWork))) {
+          // Refresh the saved calculation only. This review cannot consume a newer sync
+          // marker or authorize dispatch of any quantity the seller has not seen.
+          if (!sameBaseline(latest, before, edit)) {
+            const updated = { ...before, version: latest.version + 1 };
+            current.listings[current.listings.indexOf(latest)] = updated;
+            updateInventoryObservations(state, updated, quantityChanges);
+          }
+          if (saved.quantity !== target.quantity || isStaleProposal(state, saved))
+            Object.assign(
+              saved,
+              prepareProposal(state, target.listing, undefined, evidence?.available),
+            );
+          delete target.listing.proposalIssue;
+          return { latestQuantity: target.quantity, alreadyCurrent };
+        }
         activateInventoryIntent(state, intent, target.listing);
         if (matchesEdit(before, edit)) {
           if (intent.orderOnly || intent.trial) {
             const updated = { ...before, version: latest.version + 1 };
             current.listings[current.listings.indexOf(latest)] = updated;
-            updateInventoryObservations(state, updated);
+            updateInventoryObservations(state, updated, quantityChanges);
           }
           recordActivity(
             state,
@@ -490,6 +645,7 @@ export class MarketplacePublication {
         orderPending,
       }));
     });
+    this.recordQuantityChanges(quantityChanges);
     if (consumedWork === null) {
       if (intent) return null;
       return {
@@ -500,6 +656,7 @@ export class MarketplacePublication {
         ),
       };
     }
+    if ('latestQuantity' in consumedWork) return consumedWork;
     return this.dispatch(change, token, before, expected, consumedWork, firstPickupWrite);
   }
 

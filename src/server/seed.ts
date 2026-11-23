@@ -64,6 +64,7 @@ export function initialState(mode: 'live' | 'demo', backupFolder: string): Snaps
       observedAt: at,
       version: 1,
       lowStockThreshold: 5,
+      keepBackUnits: 0,
     },
     {
       id: 'item-b',
@@ -76,6 +77,7 @@ export function initialState(mode: 'live' | 'demo', backupFolder: string): Snaps
       observedAt: at,
       version: 1,
       lowStockThreshold: 5,
+      keepBackUnits: 0,
     },
     {
       id: 'item-c',
@@ -88,6 +90,7 @@ export function initialState(mode: 'live' | 'demo', backupFolder: string): Snaps
       observedAt: at,
       version: 1,
       lowStockThreshold: 5,
+      keepBackUnits: 0,
     },
     {
       id: 'item-d',
@@ -100,6 +103,7 @@ export function initialState(mode: 'live' | 'demo', backupFolder: string): Snaps
       observedAt: at,
       version: 1,
       lowStockThreshold: 5,
+      keepBackUnits: 0,
     },
     {
       id: 'item-e',
@@ -112,6 +116,7 @@ export function initialState(mode: 'live' | 'demo', backupFolder: string): Snaps
       observedAt: at,
       version: 1,
       lowStockThreshold: 5,
+      keepBackUnits: 0,
     },
   ];
   for (const [index, pack] of [1, 2, 3, 4, 1].entries())

@@ -789,12 +789,23 @@ async function verifyPilot(zip) {
       };
     });
     if (hasUpgrade) {
+      const initialItem = (await api('/api/state')).items[0];
+      const hasKeepBack = Object.hasOwn(initialItem, 'keepBackUnits');
       await check('upgrade_restarts_running_workspace_with_saved_data', async () => {
         const previous = readRuntimeRecord(runtimeFile);
+        if (hasKeepBack)
+          await api('/api/items/keep-back', {
+            companyId: initialItem.companyId,
+            itemId: initialItem.id,
+            itemVersion: initialItem.version,
+            keepBackUnits: 1.25,
+          });
         const result = await launch('upgrade');
         assert.match(result.stdout, /Verified safety copy:/);
         assert.notEqual(readRuntimeRecord(runtimeFile).instanceId, previous.instanceId);
-        assert.equal((await api('/api/state')).items[0].id, fixture.itemId);
+        const item = (await api('/api/state')).items[0];
+        assert.equal(item.id, fixture.itemId);
+        if (hasKeepBack) assert.equal(item.keepBackUnits, 1.25);
       });
       await check('upgrade_migrates_existing_schema_ten_and_keeps_credentials', async () => {
         await launch('stop');
@@ -805,6 +816,7 @@ async function verifyPilot(zip) {
           const db = new DatabaseSync(join(process.env.STOCKBRIDGE_DATA_DIR, 'live.sqlite'));
           db.exec('UPDATE companies SET automation = 1');
           db.prepare("INSERT INTO listings (id,account_id,sku,title,location,item_id,pack_size,pack_evidence,verified,policy,remaining,paused,version,sort_order) SELECT 'paused-pilot',?,'pilot-sku','Pilot tyre','test location',id,1,'test fixture',1,'limited',2,1,1,0 FROM stock_items LIMIT 1").run(process.argv[1]);
+          if (db.prepare('PRAGMA table_info(stock_items)').all().some(row => row.name === 'keep_back_units')) db.exec('ALTER TABLE stock_items DROP COLUMN keep_back_units');
           db.exec('DROP TABLE sku_mappings; PRAGMA user_version = 10');
           db.close();
         `;
@@ -823,10 +835,11 @@ async function verifyPilot(zip) {
           (
             await command(node, ['-e', readVersion, join(dataDirectory, 'live.sqlite')], options)
           ).stdout.trim(),
-          '11',
+          hasKeepBack ? '12' : '11',
         );
         const state = await api('/api/state');
         assert.equal(state.items[0].id, fixture.itemId);
+        if (hasKeepBack) assert.equal(state.items[0].keepBackUnits, 0);
         assert.equal(state.settings.tallySeconds, 45);
         assert.equal(state.companies[0].automation, true);
         const paused = state.listings.find((row) => row.id === 'paused-pilot');

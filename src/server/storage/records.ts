@@ -57,7 +57,8 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
     .prepare(
       `
     SELECT id, company_id AS companyId, external_id AS externalId, name, brand, unit,
-      physical, observed_at AS observedAt, version, low_stock_threshold AS lowStockThreshold
+      physical, observed_at AS observedAt, version, low_stock_threshold AS lowStockThreshold,
+      ${version >= 12 ? 'keep_back_units' : '0'} AS keepBackUnits
     FROM stock_items ORDER BY sort_order
   `,
     )
@@ -266,6 +267,7 @@ export function writeSnapshot(database: DatabaseSync, input: Snapshot): void {
       observed_at: item.observedAt,
       version: item.version,
       low_stock_threshold: item.lowStockThreshold,
+      ...(version >= 12 && { keep_back_units: item.keepBackUnits }),
       sort_order: index,
     })),
   );

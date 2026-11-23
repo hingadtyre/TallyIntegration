@@ -9,12 +9,15 @@ import { InputError } from './validation.js';
 type CheckedStock = Awaited<ReturnType<MarketplaceService['availableStock']>>;
 type ItemEvidence = Map<string, CheckedStock | InputError>;
 
-function proposalInputs(state: Snapshot, listing: Listing): string {
+export function proposalInputs(state: Snapshot, listing: Listing): string {
+  const draft = state.proposals.find((proposal) => proposal.listingId === listing.id);
   return JSON.stringify([
     listing.version,
     listing.itemId,
     state.items.find((item) => item.id === listing.itemId)?.version,
-    state.proposals.find((draft) => draft.listingId === listing.id),
+    // Reading orders for this calculation can itself mark the old quantity stale.
+    // The verified source and every seller-editable draft input are still checked.
+    draft && { ...draft, stale: undefined },
   ]);
 }
 
@@ -22,12 +25,9 @@ function proposalInputs(state: Snapshot, listing: Listing): string {
 export async function checkCalculationStock(
   state: Snapshot,
   listings: Listing[],
-  companyId: string,
-  marketplaces: MarketplaceService,
-  readOnly: boolean,
+  readItem: (id: string) => Promise<CheckedStock>,
 ): Promise<ItemEvidence> {
   const sources: ItemEvidence = new Map();
-  const batch = {};
   for (const listing of listings) {
     const itemId = listing.itemId!;
     if (sources.has(itemId) || state.proposals.some((p) => p.listingId === listing.id && p.edited))
@@ -40,7 +40,7 @@ export async function checkCalculationStock(
       throw error;
     }
     try {
-      sources.set(itemId, await marketplaces.availableStock(companyId, itemId, batch, readOnly));
+      sources.set(itemId, await readItem(itemId));
     } catch (error) {
       if (!(error instanceof InputError)) throw error;
       sources.set(itemId, error);
@@ -49,12 +49,33 @@ export async function checkCalculationStock(
   return sources;
 }
 
+function calculatedDraft(
+  state: Snapshot,
+  listing: Listing,
+  sources?: ItemEvidence,
+  zero?: boolean,
+) {
+  let available: number | undefined;
+  if (sources && desiredStock(state, listing) > 0) {
+    const source = sources.get(listing.itemId!);
+    if (source instanceof InputError) throw source;
+    if (!source) throw new InputError('The available stock changed. Calculate again.', 409);
+    available = source.available;
+  }
+  return prepareProposal(state, listing, zero ? 0 : undefined, available);
+}
+
 export function saveCalculation(
   store: Store,
   initial: Snapshot,
   companyId: string,
   selected: Listing[],
-  options: { zero?: boolean; strict?: boolean; sources?: ItemEvidence } = {},
+  options: {
+    zero?: boolean;
+    strict?: boolean;
+    sources?: ItemEvidence;
+    refreshStale?: boolean;
+  } = {},
 ): CalculationRow[] {
   // These guards reread SQLite. Verify before taking the snapshot write lock.
   for (const [itemId, source] of options.sources ?? []) {
@@ -66,16 +87,47 @@ export function saveCalculation(
       options.sources?.set(itemId, error);
     }
   }
+  const unchanged: CalculationRow[] = [];
+  if (options.refreshStale) {
+    // The scheduled order check often sees the same evidence. Leave the store
+    // and outstanding reviews alone when no quantity or displayed status changed.
+    selected = selected.filter((listing) => {
+      const previous = initial.proposals.find((draft) => draft.listingId === listing.id);
+      if (!previous || previous.edited) return false;
+      try {
+        const draft = calculatedDraft(initial, listing, options.sources);
+        if (
+          isStaleProposal(initial, previous) ||
+          listing.proposalIssue ||
+          draft.quantity !== previous.quantity ||
+          draft.calculated !== previous.calculated
+        )
+          return true;
+        unchanged.push({ listingId: listing.id, status: 'ready' });
+      } catch (error) {
+        if (!(error instanceof InputError)) throw error;
+        if (!previous.stale || listing.proposalIssue !== error.message) return true;
+        unchanged.push({ listingId: listing.id, status: 'blocked', reason: error.message });
+      }
+      return false;
+    });
+    if (!selected.length) return unchanged;
+  }
   return store.update((state) => {
-    const rows: CalculationRow[] = [];
+    const rows: CalculationRow[] = [...unchanged];
     for (const original of selected) {
       const listing = state.listings.find((row) => row.id === original.id);
+      const sameInputs =
+        listing && proposalInputs(initial, original) === proposalInputs(state, listing);
       try {
-        if (!listing || proposalInputs(initial, original) !== proposalInputs(state, listing))
+        if (!sameInputs) {
+          // Another action owns the new draft or mapping. A later pass can inspect it.
+          if (options.refreshStale) continue;
           throw new InputError(
             'Stock, mapping or a selected draft changed during calculation. Calculate again.',
             409,
           );
+        }
         const edited =
           !options.zero && state.proposals.find((p) => p.listingId === listing.id && p.edited);
         if (edited) {
@@ -99,24 +151,34 @@ export function saveCalculation(
           !options.sources &&
           state.mode === 'live' &&
           listing.proposalIssue &&
+          !state.proposals.some((draft) => draft.listingId === listing.id) &&
           desiredStock(state, listing) > 0
         )
           throw new InputError(startTrackingMessage, 409);
-        let available: number | undefined;
-        if (options.sources && desiredStock(state, listing) > 0) {
-          const source = options.sources.get(listing.itemId!);
-          if (source instanceof InputError) throw source;
-          if (!source) throw new InputError('The available stock changed. Calculate again.', 409);
-          available = source.available;
+        const draft = calculatedDraft(state, listing, options.sources, options.zero);
+        const previous = state.proposals.find((p) => p.listingId === listing.id);
+        if (
+          options.refreshStale &&
+          previous &&
+          previous.quantity === draft.quantity &&
+          previous.calculated === draft.calculated &&
+          previous.itemVersion === draft.itemVersion &&
+          previous.listingVersion === draft.listingVersion &&
+          previous.ruleVersion === draft.ruleVersion
+        ) {
+          previous.stale = false;
+        } else {
+          state.proposals = [...state.proposals.filter((p) => p.listingId !== listing.id), draft];
         }
-        const draft = prepareProposal(state, listing, options.zero ? 0 : undefined, available);
-        state.proposals = [...state.proposals.filter((p) => p.listingId !== listing.id), draft];
         delete listing.proposalIssue;
         rows.push({ listingId: listing.id, status: 'ready' });
       } catch (error) {
         if (!(error instanceof InputError) || options.strict) throw error;
-        if (listing?.proposalIssue && listing.version === original.version)
-          listing.proposalIssue = error.message;
+        if (sameInputs) {
+          const draft = state.proposals.find((p) => p.listingId === listing.id);
+          if (draft && !draft.edited) draft.stale = true;
+          if (draft?.stale || listing.proposalIssue) listing.proposalIssue = error.message;
+        }
         const needsPack =
           listing &&
           listing.itemId === original.itemId &&
@@ -132,6 +194,7 @@ export function saveCalculation(
         });
       }
     }
+    if (options.refreshStale) return rows;
     const blocked = rows.filter((row) => row.status === 'blocked').length;
     recordActivity(
       state,

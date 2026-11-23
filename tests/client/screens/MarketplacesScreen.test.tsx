@@ -868,6 +868,59 @@ test('a late response from a previous account cannot appear in the newly opened 
   assert.ok(screen.getByText('Second account tyre'));
 });
 
+test('stock above keep-back capacity needs confirmation again after the seller changes the quantity', async (t) => {
+  const item = listing();
+  item.stockPolicies = [
+    {
+      locationId: 'warehouse-1',
+      listingId: 'mapped-item',
+      companyId: 'company',
+      companyName: 'Tyre shop',
+      keepBackUnits: 2,
+      policy: 'auto',
+      remaining: null,
+      paused: false,
+    },
+  ];
+  let sent: MarketplaceApplyInput | undefined;
+  t.mock.method(
+    globalThis,
+    'fetch',
+    async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input) === '/api/marketplaces/keep-back/review')
+        return response({
+          itemName: 'Sample tyre',
+          unit: 'tyres',
+          keepBackUnits: 2,
+          completePacks: 3,
+          reviewKey: 'review-for-three',
+        });
+      if (String(input) === '/api/marketplaces/apply') {
+        sent = JSON.parse(String(options?.body)) as MarketplaceApplyInput;
+        return response(result(sent, 'confirmed', item));
+      }
+      return baseResponse(input, item);
+    },
+  );
+  render(<MarketplacesScreen mode="demo" onOpenInventory={() => {}} />);
+  await openListings();
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Edit stock for SKU-seller-a at warehouse-1' }),
+  );
+  const dialog = within(screen.getByRole('dialog', { name: 'Edit stock' }));
+  const apply = dialog.getByRole('button', { name: 'Apply and pause sync' }) as HTMLButtonElement;
+  const box = await dialog.findByRole('checkbox', { name: /Set stock to 4 at warehouse-1/ });
+  assert.equal(apply.disabled, true);
+  fireEvent.click(box);
+  assert.equal(apply.disabled, false);
+  fireEvent.change(dialog.getByLabelText('Stock'), { target: { value: '5' } });
+  assert.equal(apply.disabled, true);
+  fireEvent.click(dialog.getByRole('checkbox', { name: /Set stock to 5 at warehouse-1/ }));
+  fireEvent.click(apply);
+  await dialog.findByText('Updated');
+  assert.deepEqual(sent?.keepBackConfirmation, { reviewKey: 'review-for-three', quantity: 5 });
+});
+
 test('closing an unsent editor discards its value without publishing', async (t) => {
   let writes = 0;
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {

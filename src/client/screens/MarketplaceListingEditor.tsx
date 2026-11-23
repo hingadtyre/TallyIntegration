@@ -1,7 +1,8 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type {
   MarketplaceApplyResult,
   MarketplaceChange,
+  MarketplaceKeepBackReview,
   MarketplaceListingView,
 } from '../../shared/marketplace-contracts.js';
 import { errorMessage, RequestError } from '../api.js';
@@ -66,6 +67,13 @@ export function MarketplaceListingEditor({
   const [error, setError] = useState('');
   const [change, setChange] = useState<MarketplaceChange | null>(null);
   const [currentVersion, setCurrentVersion] = useState(listing.version);
+  const [reviewRevision, setReviewRevision] = useState(0);
+  const [keepBackCheck, setKeepBackCheck] = useState<{
+    key: string;
+    review?: MarketplaceKeepBackReview | null;
+    error?: string;
+  } | null>(null);
+  const [confirmedOverride, setConfirmedOverride] = useState(false);
   const submitting = useRef(false);
   const quantity = Number(value);
   const valid =
@@ -82,8 +90,56 @@ export function MarketplaceListingEditor({
   const needsReconcile =
     !!change && ['pending', 'sending', 'checking', 'uncertain'].includes(change.state);
   const finished = change?.state === 'confirmed' || change?.state === 'reconciled';
+  const stockLocation = target.kind === 'stock' ? target.locationId : null;
+  const reviewKey =
+    stockLocation &&
+    !finished &&
+    !needsReconcile &&
+    !lostResponse &&
+    (policy?.keepBackUnits || reviewRevision)
+      ? JSON.stringify([
+          listing.accountId,
+          listing.id,
+          stockLocation,
+          currentVersion,
+          reviewRevision,
+        ])
+      : null;
+  useEffect(() => {
+    if (!reviewKey || !stockLocation) return;
+    const controller = new AbortController();
+    void marketplaceApi
+      .reviewKeepBack(
+        listing.accountId,
+        listing.id,
+        stockLocation,
+        currentVersion,
+        controller.signal,
+      )
+      .then((review) => {
+        if (!controller.signal.aborted) setKeepBackCheck({ key: reviewKey, review });
+      })
+      .catch((cause: unknown) => {
+        if (!controller.signal.aborted)
+          setKeepBackCheck({ key: reviewKey, error: errorMessage(cause) });
+      });
+    return () => controller.abort();
+  }, [listing.accountId, listing.id, stockLocation, currentVersion, reviewKey]);
+  const check = keepBackCheck?.key === reviewKey ? keepBackCheck : null;
+  const review = check?.review;
+  const warnOverride =
+    review &&
+    valid &&
+    quantity > 0 &&
+    (review.completePacks === null || quantity > review.completePacks);
+  const waitingForReview = !!reviewKey && quantity > 0 && check?.review === undefined;
+  const needsConfirmation = waitingForReview || (!!warnOverride && !confirmedOverride);
   async function apply(reconcile = false) {
-    if (submitting.current || (!reconcile && (lostResponse || !valid || conflict))) return;
+    if (
+      submitting.current ||
+      (!reconcile && (lostResponse || !valid || conflict || needsConfirmation))
+    )
+      return;
     submitting.current = true;
     setPending(true);
     onPending(true);
@@ -96,6 +152,10 @@ export function MarketplaceListingEditor({
               accountId: listing.accountId,
               listingId: listing.id,
               version: currentVersion,
+              ...(warnOverride &&
+                confirmedOverride && {
+                  keepBackConfirmation: { reviewKey: review.reviewKey, quantity },
+                }),
               edit:
                 target.kind === 'stock'
                   ? {
@@ -115,6 +175,10 @@ export function MarketplaceListingEditor({
       setError(message);
       onFailure(message, uncertain);
       if (uncertain) setLostResponse(true);
+      if (stockLocation && failure instanceof RequestError && failure.status === 409) {
+        setConfirmedOverride(false);
+        setReviewRevision((version) => version + 1);
+      }
     } finally {
       submitting.current = false;
       setPending(false);
@@ -174,6 +238,7 @@ export function MarketplaceListingEditor({
       setListing(next);
       setCurrentVersion(next.version);
       setPolicyConfirmation(false);
+      setConfirmedOverride(false);
       onPolicyUpdated(next);
     } catch (failure) {
       setError(errorMessage(failure));
@@ -210,9 +275,54 @@ export function MarketplaceListingEditor({
             onChange={(event) => {
               setValue(event.target.value);
               setChange(null);
+              setConfirmedOverride(false);
             }}
           />
         </label>
+        {reviewKey && !finished && !needsReconcile && !lostResponse && (
+          <>
+            {waitingForReview && !check?.error && (
+              <p role="status">Checking stock available for this listing…</p>
+            )}
+            {check?.error && (
+              <div className="marketplace-error" role="alert">
+                {check.error}{' '}
+                <button
+                  className="text-button"
+                  onClick={() => setReviewRevision((current) => current + 1)}
+                >
+                  Check again
+                </button>
+              </div>
+            )}
+            {review && (
+              <div
+                className={warnOverride ? 'marketplace-policy-confirmation' : 'marketplace-help'}
+              >
+                <p>
+                  <strong>{review.itemName}</strong> · Keep back from marketplaces:{' '}
+                  {review.keepBackUnits} {review.unit}.{' '}
+                  {review.completePacks === null
+                    ? 'Available stock could not be verified.'
+                    : `${review.completePacks} complete ${review.completePacks === 1 ? 'pack is' : 'packs are'} available after keep-back and unbilled orders.`}
+                </p>
+                {warnOverride && (
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={confirmedOverride}
+                      disabled={pending}
+                      onChange={(event) => setConfirmedOverride(event.target.checked)}
+                    />{' '}
+                    {review.completePacks === null
+                      ? `Set stock to ${quantity} at ${stockLocation} even though availability is unknown.`
+                      : `Set stock to ${quantity} at ${stockLocation} even though only ${review.completePacks} ${review.completePacks === 1 ? 'pack is' : 'packs are'} available.`}
+                  </label>
+                )}
+              </div>
+            )}
+          </>
+        )}
         {policy && (
           <div className="marketplace-policy">
             {policy.companyId && (
@@ -328,7 +438,7 @@ export function MarketplaceListingEditor({
             !finished && (
               <button
                 className="button primary"
-                disabled={pending || !valid || !!conflict}
+                disabled={pending || !valid || !!conflict || needsConfirmation}
                 onClick={() => void apply()}
               >
                 {pending

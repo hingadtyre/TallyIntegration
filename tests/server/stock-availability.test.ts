@@ -5,6 +5,7 @@ import type { TallySalesBill, TallyStockItem } from '../../src/adapters/tally.js
 import { BillingService } from '../../src/server/billing-service.js';
 import { saleDay } from '../../src/server/billing-matcher.js';
 import { StockAvailabilityService } from '../../src/server/stock-availability.js';
+import { desiredStock } from '../../src/server/proposals.js';
 import { marketplaceData } from '../support/marketplace-fixture.js';
 import { serverFixture } from '../support/server-fixture.js';
 
@@ -45,6 +46,7 @@ function setup(t: TestContext, sellerPacks = [1]) {
       version: 1,
       observedAt: now,
       lowStockThreshold: 1,
+      keepBackUnits: 0,
     });
     sellerPacks.forEach((packSize, index) => {
       const id = 'seller-' + index;
@@ -154,6 +156,7 @@ function setup(t: TestContext, sellerPacks = [1]) {
     itemId,
     confirm,
     available: (batch?: object, target = itemId) => service.forItem(companyId, target, batch),
+    preview: () => service.forItem(companyId, itemId, undefined, true),
     review: () => service.reviewOrders(companyId, 'seller-0'),
     pendingGroups: () =>
       new BillingService(f.store).pendingOrders(
@@ -214,6 +217,72 @@ test('a restock can publish five and the matching Tally sale leaves five availab
   assert.equal((await s.available()).available, 4);
 });
 
+test('order checks keep calculated proposals current across sellers with sync off and paused listings', async (t) => {
+  const s = setup(t, [1, 2, 1, 1]);
+  const first = s.orders.get('seller-0')![0];
+  const second = { ...first, orderItemId: 'second', orderId: 'second-order' };
+  for (const id of s.orders.keys()) s.orders.set(id, []);
+  s.confirm();
+  s.f.store.update((state) => {
+    state.connection.tally = 'online';
+    state.companies.find((c) => c.id === s.companyId)!.automation = false;
+    state.listings[1].paused = true;
+  });
+  s.f.service.calculate(s.companyId, ['map-0', 'map-1']);
+  s.f.service.edit(s.companyId, 'map-2', 4);
+  const originalEdit = s.f.store.read().proposals.find((row) => row.listingId === 'map-2');
+  const calculated = () => {
+    const state = s.f.store.read();
+    assert.deepEqual(
+      state.proposals.find((row) => row.listingId === 'map-2'),
+      originalEdit,
+    );
+    assert.ok(!state.proposals.some((row) => row.listingId === 'map-3'));
+    assert.ok(state.listings.every((row) => !row.orderSyncPending && !row.syncPendingItemVersion));
+    assert.equal(state.listings[1].paused, true);
+    return ['map-0', 'map-1'].map((id) => state.proposals.find((row) => row.listingId === id));
+  };
+  const quantities = () => calculated().map((row) => row?.quantity);
+  assert.deepEqual(quantities(), [6, 3]);
+  s.orders.set('seller-0', [first]);
+  const baseline = s.f.store.readStockCoverage(s.companyId);
+  assert.equal((await s.preview()).available, 5);
+  assert.deepEqual(s.f.store.readStockCoverage(s.companyId), baseline);
+  assert.deepEqual(quantities(), [6, 3]);
+  await s.scan();
+  assert.deepEqual(quantities(), [5, 2]);
+  const stable = calculated();
+  const writes = t.mock.method(s.f.store, 'update');
+  await s.scan();
+  assert.deepEqual(calculated(), stable, 'identical evidence preserves the reviewed calculations');
+  assert.equal(writes.mock.callCount(), 0, 'unchanged calculations require no snapshot write');
+  writes.mock.restore();
+  s.orders.set('seller-0', [first, second]);
+  await s.scan();
+  assert.deepEqual(quantities(), [4, 2]);
+  s.orders.set('seller-0', [{ ...second, stockDisposition: 'cancelled' }]);
+  await s.scan();
+  assert.deepEqual(quantities(), [5, 2], 'a verified cancellation releases only its units');
+  s.bills.set('seller-0', [s.bill()]);
+  await s.scan();
+  assert.deepEqual(quantities(), [6, 3], 'a newly matched bill releases the remaining reservation');
+  assert.equal(s.f.store.read().items[0].version, 1);
+  s.source.unavailable = 'seller-0';
+  await assert.rejects(s.scan(), /Could not verify/);
+  assert.deepEqual(quantities(), [6, 3]);
+  assert.ok(calculated().every((draft) => draft?.stale));
+  assert.match(s.f.store.read().listings[1].proposalIssue ?? '', /Could not verify/);
+  s.source.unavailable = '';
+  s.bills.set('seller-0', []);
+  s.restoreService();
+  s.f.store.update((state) => {
+    state.connection.tally = 'online';
+    delete state.companies.find((company) => company.id === s.companyId)!.stockIssue;
+  });
+  await s.scan();
+  assert.deepEqual(quantities(), [5, 2], 'saved receipts remain available after restart');
+});
+
 test('sum pack units across accounts even when both sellers use the same order-item ID', async (t) => {
   const s = setup(t, [1, 2]);
   s.confirm();
@@ -228,6 +297,50 @@ test('sum pack units across accounts even when both sellers use the same order-i
   assert.equal((await s.available()).available, 3);
   s.bills.set('seller-1', [s.bill(1)]);
   assert.equal((await s.available()).available, 5);
+});
+
+test('one item keep-back precedes pack size, the tyre minimum and the allowance across sellers', async (t) => {
+  const s = setup(t, [1, 2]);
+  s.orders.set('seller-1', []);
+  s.confirm();
+  s.setStock(8);
+  s.f.store.update((state) => {
+    state.connection.tally = 'online';
+    state.items[0].keepBackUnits = 2;
+    state.items[0].version++;
+    state.listings[1].tyreFloor = false;
+  });
+  const state = s.f.store.read();
+  const [single, pair] = state.listings;
+  const checked = await s.available();
+  assert.deepEqual([checked.physical, checked.reservedUnits, checked.available], [8, 1, 5]);
+  assert.equal(
+    desiredStock(state, single),
+    6,
+    'the local estimate uses keep-back before verified orders',
+  );
+  assert.equal(desiredStock(state, single, 'current', checked.available), 5);
+  assert.equal(desiredStock(state, pair, 'current', checked.available), 2);
+  assert.equal(desiredStock(state, { ...pair, tyreFloor: true }, 'current', checked.available), 5);
+  assert.equal(
+    desiredStock(
+      state,
+      { ...pair, tyreFloor: true, policy: 'limited', remaining: 1 },
+      'current',
+      checked.available,
+    ),
+    1,
+  );
+  s.setStock(7);
+  s.bills.set('seller-0', [s.bill()]);
+  assert.equal((await s.available()).available, 5, 'a matched bill accounts for the sale once');
+  s.setStock(2);
+  const exhausted = await s.available();
+  assert.equal(exhausted.available, 0);
+  assert.equal(
+    desiredStock(s.f.store.read(), { ...pair, tyreFloor: true }, 'current', exhausted.available),
+    0,
+  );
 });
 
 test('a failed seller check keeps already observed sales and cannot advance verified coverage', async (t) => {
@@ -557,6 +670,11 @@ test('an unmapped order is retained, then reserved across sibling listings and m
   s.orders.set('seller-0', []); // A short later read cannot erase the sale.
   s.restoreService();
   const previous = await s.available();
+  s.f.store.update((state) => {
+    state.connection.tally = 'online';
+    delete state.companies.find((company) => company.id === s.companyId)!.stockIssue;
+  });
+  s.f.service.calculate(s.companyId, ['map-0']);
   const row = s.f.store.read().listings.find((l) => l.id === 'pair-mapping')!;
   s.f.service.mapping({
     listingId: row.id,
@@ -572,6 +690,15 @@ test('an unmapped order is retained, then reserved across sibling listings and m
   const coverage = s.f.store.readStockCoverage(s.companyId)!;
   assert.equal(coverage.from, from);
   assert.equal(coverage.orders.length, 1);
+  assert.equal(
+    s.f.service.snapshot().proposals.find((draft) => draft.listingId === 'map-0')?.stale,
+    true,
+  );
+  await s.scan();
+  assert.equal(
+    s.f.service.snapshot().proposals.find((draft) => draft.listingId === 'map-0')?.quantity,
+    4,
+  );
   assert.deepEqual(
     s.pending().map((e) => [e.order.orderItemId, e.mapped]),
     [['late-line', true]],

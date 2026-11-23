@@ -47,6 +47,7 @@ function fixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
     sample.mode = mode;
     sample.connection.tally = 'online';
     sample.accounts[0].name = 'Saved seller';
+    sample.items[0].keepBackUnits = 0.5;
     sample.accounts[0].status = mode === 'demo' ? 'demo' : 'not-connected';
     for (const company of sample.companies) {
       company.source = mode === 'demo' ? 'demo' : 'tally';
@@ -223,8 +224,8 @@ test('offline restore preserves local settings and a verified safety copy while 
   assert.ok(restored.listings.every((listing) => listing.paused && listing.observedAt === null));
   assert.ok(restored.accounts.every((account) => account.status === 'not-connected'));
   assert.deepEqual(
-    restored.items.map((item) => [item.id, item.physical]),
-    f.saved.items.map((item) => [item.id, item.physical]),
+    restored.items.map((item) => [item.id, item.physical, item.keepBackUnits]),
+    f.saved.items.map((item) => [item.id, item.physical, item.keepBackUnits]),
   );
   assert.deepEqual(
     restored.listings.map((listing) => [listing.itemId, listing.policy, listing.remaining]),
@@ -757,8 +758,16 @@ test('a backup manifest must match its database schema and marketplace payloads 
 
 test('restored sample data can be refreshed locally without changing quantities or saved drafts', async (t) => {
   const f = fixture(t, 'demo');
+  const current = new Store(f.destination, 'demo');
+  current.update((state) => {
+    state.items[0].version = 12;
+    state.items[0].keepBackUnits = 4;
+  });
+  current.close();
   await restorePilotBackup(restoreOptions(f));
   const store = new Store(f.destination, 'demo');
+  assert.equal(store.read().items[0].version, 13);
+  assert.equal(store.read().items[0].keepBackUnits, 0.5);
   const service = new InventoryService(store, {
     createTallyReader() {
       throw new Error('Sample refresh must not create an external reader.');

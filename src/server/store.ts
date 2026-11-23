@@ -16,6 +16,7 @@ import { readSnapshot, writeSnapshot } from './storage/records.js';
 import { CURRENT_SCHEMA_VERSION } from './storage/schema.js';
 import { readStockCoverage, writeStockCoverage } from './storage/stock-coverage.js';
 import { mappedSaleItem, stockConfiguration } from './stock-configuration.js';
+import { invalidateReservationDrafts } from './proposals.js';
 
 /** SQLite owns records and transactions; callers receive a detached read model. */
 export class Store {
@@ -148,6 +149,7 @@ export class Store {
         const ctx = stockConfiguration(state, market, billing, coverage.companyId);
         coverage.signature = ctx.signature;
         let newlyBound = false;
+        let hasOrders = false;
         for (const entry of coverage.orders) {
           const o = entry.order;
           if (
@@ -158,6 +160,7 @@ export class Store {
           )
             continue;
           o.firstSeenUnmapped = true;
+          hasOrders = true;
           if (
             o.stockDisposition ||
             o.stockIdentityConflict ||
@@ -168,6 +171,8 @@ export class Store {
           o.stockSyncQueued = true;
           newlyBound = true;
         }
+        if (hasOrders && ctx.items.get(listing.itemId)?.companyId === coverage.companyId)
+          invalidateReservationDrafts(state, new Set([listing.itemId]));
         if (
           newlyBound &&
           ctx.company.automation &&
@@ -195,12 +200,14 @@ export class Store {
     }
   }
 
-  updateBilling(change: (data: BillingData) => void): void {
+  updateBilling(change: (data: BillingData, state: Snapshot) => void): void {
     this.database.exec('BEGIN IMMEDIATE');
     try {
       const data = readBilling(this.database);
-      change(data);
+      const state = readSnapshot(this.database);
+      change(data, state);
       writeBilling(this.database, data);
+      writeSnapshot(this.database, state);
       this.database.exec('COMMIT');
     } catch (error) {
       this.database.exec('ROLLBACK');

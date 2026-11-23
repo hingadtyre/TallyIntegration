@@ -145,13 +145,14 @@ export function useWorkspace() {
     );
 
   const publishReview = useCallback(
-    (reviewId: string, positiveEdits?: 'once' | 'allowance') =>
+    (reviewId: string, positiveEdits?: 'once' | 'allowance', keepBackOverrides?: string[]) =>
       runAction(
         'Publishing reviewed stock',
         async () => {
           const result = await requestJson<InventoryPublishResult>('/publish', {
             reviewId,
             positiveEdits,
+            keepBackOverrides,
           });
           try {
             const next = await requestJson<Snapshot>('/state');
