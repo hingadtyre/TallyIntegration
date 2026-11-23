@@ -69,7 +69,15 @@ npm run build
 npm run demo
 ```
 
-After the build succeeds, start Demo and open `http://127.0.0.1:4311` for clearly marked sample data. Stop with Ctrl+C in its terminal; closing the browser does not stop the backend. The sample database is `.data/demo.sqlite` and never reads Tally or calls a marketplace.
+Open `http://127.0.0.1:4311` for the sample workspace. Demo mode stores its data in `.data/demo.sqlite` and simulates Tally and marketplace updates.
+
+To stop the demo, open a new terminal in this project folder and run:
+
+```powershell
+npm run demo:stop
+```
+
+Wait for the stop confirmation. Your sample data is ready for the next `npm run demo`.
 
 For the real workspace on the customer's Tally computer:
 

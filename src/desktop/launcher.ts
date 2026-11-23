@@ -1,73 +1,16 @@
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, statSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { liveDashboardPort } from '../shared/dashboard-port.js';
+import { createRuntimeControl, type RuntimeRecord as WorkspaceRecord } from './runtime-control.js';
 import { installDesktopShortcut } from './shortcut.js';
 
-const dashboardUrl = `http://127.0.0.1:${liveDashboardPort()}`;
+const { dashboardUrl, parseRuntimeRecord, readRecord, instanceResponds, stopVerifiedInstance } =
+  createRuntimeControl('live', liveDashboardPort());
 
-export interface RuntimeRecord {
-  application: 'stockbridge';
-  mode: 'live';
-  version: string;
-  instanceId: string;
-  pid: number;
-  url: string;
-  token: string;
-}
-
-/** Never send a control token to an address supplied by an unvalidated file. */
-export function parseRuntimeRecord(value: unknown): RuntimeRecord {
-  if (!value || typeof value !== 'object') throw new Error('Invalid application status file.');
-  const record = value as Partial<RuntimeRecord>;
-  if (
-    record.application !== 'stockbridge' ||
-    record.mode !== 'live' ||
-    record.url !== dashboardUrl ||
-    typeof record.version !== 'string' ||
-    typeof record.instanceId !== 'string' ||
-    !/^[a-zA-Z0-9-]{16,80}$/.test(record.instanceId) ||
-    typeof record.token !== 'string' ||
-    !/^[a-zA-Z0-9_-]{32,256}$/.test(record.token) ||
-    !Number.isSafeInteger(record.pid) ||
-    record.pid! <= 0
-  ) {
-    throw new Error('Invalid application status file. Contact support; no process was stopped.');
-  }
-  return record as RuntimeRecord;
-}
-
-export async function instanceResponds(
-  record: RuntimeRecord,
-  request: typeof fetch = fetch,
-): Promise<boolean> {
-  try {
-    const response = await request(`${dashboardUrl}/api/health`, {
-      signal: AbortSignal.timeout(1500),
-      redirect: 'error',
-    });
-    if (!response.ok) return false;
-    const health = (await response.json()) as Partial<RuntimeRecord>;
-    return (
-      health.application === 'stockbridge' &&
-      health.mode === 'live' &&
-      health.instanceId === record.instanceId
-    );
-  } catch {
-    return false;
-  }
-}
-
-function readRecord(dataDirectory: string): RuntimeRecord | null {
-  const file = join(dataDirectory, 'live.runtime.json');
-  try {
-    return parseRuntimeRecord(JSON.parse(readFileSync(file, 'utf8')));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
-}
+export { parseRuntimeRecord, instanceResponds };
+export type RuntimeRecord = WorkspaceRecord<'live'>;
 
 function openWindow(program: string, args: string[]): void {
   const child = spawn(program, args, { detached: true, windowsHide: true, stdio: 'ignore' });
@@ -139,31 +82,7 @@ export async function runLauncher(
       console.log('No matching Stockbridge instance is responding. No other process was stopped.');
       return;
     }
-    const response = await fetch(`${dashboardUrl}/api/runtime/stop`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${record.token}`,
-        'Content-Type': 'application/json',
-        'X-Stockbridge-Request': '1',
-      },
-      body: '{}',
-      signal: AbortSignal.timeout(5000),
-      redirect: 'error',
-    });
-    if (!response.ok)
-      throw new Error('Stockbridge did not accept the stop request. Contact support.');
-    for (let attempt = 0; attempt < 120; attempt++) {
-      await delay(250);
-      const current = readRecord(dataDirectory);
-      if (!current || current.instanceId !== record.instanceId) {
-        console.log('Stockbridge stopped. Saved data was retained.');
-        break;
-      }
-    }
-    if (readRecord(dataDirectory)?.instanceId === record.instanceId)
-      throw new Error(
-        'Stockbridge is still finishing a task. Wait and check Status before updating files.',
-      );
+    await stopVerifiedInstance(dataDirectory, record);
     if (action === 'stop') return;
   }
 

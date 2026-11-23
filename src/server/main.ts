@@ -6,7 +6,7 @@ try {
   console.log(`Stockbridge ${mode} dashboard: ${runtime.record.url}`);
   console.log(
     mode === 'demo'
-      ? 'Sample workspace. Inventory and marketplace updates are simulated. Press Ctrl+C to stop.'
+      ? 'Sample workspace. Inventory and marketplace updates are simulated. To stop, press Ctrl+C here or run npm run demo:stop from another terminal in the project folder.'
       : 'Live workspace. Publishing sends verified stock updates to Flipkart. Press Ctrl+C to stop.',
   );
   const stop = () => {

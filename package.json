@@ -19,7 +19,8 @@
     "test:pilot": "node scripts/verify-pilot.mjs",
     "restore:pilot": "tsc -p tsconfig.json && node scripts/restore-pilot.mjs",
     "start": "node dist/src/server/main.js",
-    "demo": "node dist/src/server/main.js --demo"
+    "demo": "node dist/src/server/main.js --demo",
+    "demo:stop": "node scripts/stop-demo.mjs"
   },
   "dependencies": {
     "fast-xml-parser": "5.12.0",

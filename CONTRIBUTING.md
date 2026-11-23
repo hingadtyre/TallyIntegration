@@ -17,7 +17,7 @@ npm run build
 npm run demo
 ```
 
-Open `http://127.0.0.1:4311`. Sample data lives in `.data/demo.sqlite`, separate from the customer's live database. Keep one server running per workspace. Stop the server with Ctrl+C before changing the database schema or restarting with a new build.
+Open `http://127.0.0.1:4311`. Sample data lives in `.data/demo.sqlite`, separate from the customer's live database. Keep one server running per workspace. To stop the demo from another terminal in this checkout, run `npm run demo:stop`. It uses the demo's saved instance record and waits for shutdown. If you started the demo with a custom `STOCKBRIDGE_DATA_DIR`, use the same absolute folder when stopping it.
 
 The optional Windows launcher, [scripts/app.ps1](scripts/app.ps1), selects the project-local Node runtime when available and delegates to the same npm scripts. Use it when intentionally selecting that runtime; prefer npm directly when the terminal already uses Node.js 24. The launcher neither installs dependencies nor rebuilds before starting.
 
@@ -25,11 +25,11 @@ The optional Windows launcher, [scripts/app.ps1](scripts/app.ps1), selects the p
 
 `npm run build` compiles TypeScript and replaces the generated dashboard in `dist/web`, clearing assets from previous builds. `npm start` and `npm run demo` execute the compiled server in `dist/src` and serve the built dashboard in `dist/web`. Neither run command rebuilds or watches source files, so starting without rebuilding uses the previous build.
 
-For backend changes, stop the running backend with Ctrl+C, run `npm run build`, and restart it with `npm run demo` after the build succeeds. Use `npm start` instead only for the intended real workspace. Keep one backend per database running. The database survives a normal stop/restart.
+For backend changes, stop the demo with `npm run demo:stop` or press Ctrl+C in its original terminal. Run `npm run build`, then restart it with `npm run demo`. Use `npm start` only for the intended real workspace. Keep one backend per database running. The database survives a normal stop/restart.
 
 For frontend editing, keep the built Demo backend running in one terminal, and run `npm run dev` in a second terminal. Open the address printed by Vite. Frontend changes reload there automatically; opening port 4311 instead shows the built dashboard, not the development page. Vite forwards `/api` requests to the Demo backend on port 4311, as configured in [vite.config.ts](vite.config.ts).
 
-`npm run dev` watches only the frontend. Backend changes, including shared code used by the backend, still need a build and backend restart. When checking the built dashboard after frontend-only changes, rebuild and refresh the browser. Stop each running development process with Ctrl+C in its own terminal.
+`npm run dev` watches only the frontend. Backend changes, including shared code used by the backend, still need a build and backend restart. When checking the built dashboard after frontend-only changes, rebuild and refresh the browser. Stop the demo with `npm run demo:stop` and the Vite frontend with Ctrl+C in its own terminal.
 
 ## Where to make a change
 
