@@ -11,6 +11,7 @@ import { App } from '../../../src/client/App.js';
 import { BillingListingMappings } from '../../../src/client/screens/BillingListingMappings.js';
 import { BillingResults } from '../../../src/client/screens/BillingResults.js';
 import { BillingScreen } from '../../../src/client/screens/BillingScreen.js';
+import { BillingSetup } from '../../../src/client/screens/BillingSetup.js';
 import {
   act,
   fireEvent,
@@ -150,11 +151,20 @@ test('seller selects their ledger, previews, confirms setup, and explicitly matc
   await screen.findByRole('heading', { name: 'Inventory' });
   assert.deepEqual(commands, []);
   fireEvent.click(screen.getByRole('button', { name: 'Order matching' }));
-  const ledger = await screen.findByLabelText('Sales bill ledger');
-  assert.equal((ledger as HTMLSelectElement).value, '');
-  fireEvent.change(screen.getByLabelText('Search ledgers'), { target: { value: 'north' } });
-  assert.equal(screen.queryByRole('option', { name: 'Fees' }), null);
-  fireEvent.change(ledger, { target: { value: rule.ledgerId } });
+  const ledger = await screen.findByRole<HTMLInputElement>('combobox', {
+    name: 'Sales bill ledger',
+  });
+  assert.equal(ledger.value, '');
+  assert.equal(screen.queryByLabelText('Search ledgers'), null);
+  fireEvent.focus(ledger);
+  fireEvent.click(ledger);
+  assert.ok(within(screen.getByRole('listbox')).getByRole('option', { name: 'Fees' }));
+  fireEvent.change(ledger, { target: { value: 'NoRtH' } });
+  const matches = within(screen.getByRole('listbox'));
+  assert.equal(matches.getAllByRole('option').length, 1);
+  fireEvent.click(matches.getByRole('option', { name: rule.ledgerName }));
+  assert.equal(ledger.value, rule.ledgerName);
+  assert.equal(screen.queryByRole('listbox'), null);
   fireEvent.change(screen.getByLabelText('Order period'), { target: { value: '30' } });
   fireEvent.change(screen.getByLabelText(/Where do you enter/), { target: { value: 'manual' } });
   assert.equal(screen.queryByLabelText(/Which Flipkart reference/), null);
@@ -191,6 +201,82 @@ test('seller selects their ledger, previews, confirms setup, and explicitly matc
     '/api/billing/match',
     '/api/billing/unmatch',
   ]);
+});
+
+test('editing a saved ledger restores dismissed searches and accepts a keyboard choice before preview', async (t) => {
+  const replacement = { externalId: 'trade-18', name: 'Online sales south' };
+  t.mock.method(globalThis, 'fetch', async () =>
+    response({ ledgers: [{ externalId: rule.ledgerId, name: rule.ledgerName }, replacement] }),
+  );
+  const previews: Pick<BillingRule, 'ledgerId' | 'field' | 'reference'>[] = [];
+  render(
+    <BillingSetup
+      companyId="company"
+      accountId="seller"
+      initialRule={rule}
+      busy={false}
+      onPreview={async (input) => {
+        previews.push(input);
+      }}
+    />,
+  );
+  const ledger = await screen.findByRole<HTMLInputElement>('combobox', {
+    name: 'Sales bill ledger',
+  });
+  const submit = screen.getByRole<HTMLButtonElement>('button', { name: 'Preview matches' });
+  assert.equal(ledger.value, rule.ledgerName);
+  assert.equal(submit.disabled, false);
+
+  fireEvent.focus(ledger);
+  fireEvent.change(ledger, { target: { value: 'no such ledger' } });
+  assert.ok(screen.getByText(/No matching ledgers/i));
+  fireEvent.keyDown(ledger, { key: 'Escape' });
+  assert.equal(ledger.value, rule.ledgerName);
+  assert.equal(screen.queryByRole('listbox'), null);
+  fireEvent.change(ledger, { target: { value: 'south' } });
+  fireEvent.blur(ledger);
+  assert.equal(ledger.value, rule.ledgerName);
+  assert.equal(screen.queryByRole('listbox'), null);
+  assert.equal(submit.disabled, false);
+
+  fireEvent.focus(ledger);
+  fireEvent.change(ledger, { target: { value: 'online sales' } });
+  fireEvent.keyDown(ledger, { key: 'ArrowDown' });
+  assert.equal(fireEvent.keyDown(ledger, { key: 'Enter' }), false);
+  assert.equal(ledger.value, replacement.name);
+  assert.equal(screen.queryByRole('listbox'), null);
+  assert.equal(previews.length, 0);
+  fireEvent.click(submit);
+  assert.deepEqual(previews, [
+    { ledgerId: replacement.externalId, field: rule.field, reference: rule.reference },
+  ]);
+});
+
+test('an empty ledger list can be reloaded and a sole ledger still requires selection', async (t) => {
+  const ledgers: { externalId: string; name: string }[] = [];
+  t.mock.method(globalThis, 'fetch', async () => response({ ledgers }));
+  render(
+    <BillingSetup
+      companyId="company"
+      accountId="seller"
+      initialRule={null}
+      busy={false}
+      onPreview={async () => assert.fail('Selecting a ledger must not submit the form.')}
+    />,
+  );
+  await screen.findByText('No ledgers were found in the selected company.');
+  ledgers.push({ externalId: rule.ledgerId, name: rule.ledgerName });
+  fireEvent.click(screen.getByRole('button', { name: 'Reload ledgers' }));
+  const ledger = await screen.findByRole<HTMLInputElement>('combobox', {
+    name: 'Sales bill ledger',
+  });
+  const submit = screen.getByRole<HTMLButtonElement>('button', { name: 'Preview matches' });
+  fireEvent.change(screen.getByLabelText(/Where do you enter/), { target: { value: 'manual' } });
+  fireEvent.focus(ledger);
+  fireEvent.change(ledger, { target: { value: rule.ledgerName } });
+  assert.ok(submit.disabled);
+  fireEvent.keyDown(ledger, { key: 'Enter' });
+  assert.equal(submit.disabled, false);
 });
 
 test('a late result from another seller cannot replace the selected billing workspace', async (t) => {
@@ -298,6 +384,9 @@ test('company stock tracking starts only after the seller confirms the chosen In
 
 test('maps a listing once and checks tracked orders outside the current billing preview', async (t) => {
   const state = initialState('demo', 'unused');
+  const originalItem = state.items.find((row) => row.id === 'item-a')!;
+  const replacement = state.items.find((row) => row.id === 'item-d')!;
+  replacement.name = originalItem.name;
   const listing = state.listings.find((row) => !row.itemId)!;
   const company = state.companies[0];
   company.automation = true;
@@ -370,16 +459,38 @@ test('maps a listing once and checks tracked orders outside the current billing 
   fireEvent.click(await screen.findByRole('button', { name: 'Order matching' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Map listing' }));
   const dialog = within(screen.getByRole('dialog'));
-  const picker = dialog.getByLabelText('Tally stock item');
-  assert.equal(within(picker).queryByText(/sample-e/), null);
-  fireEvent.change(picker, { target: { value: 'item-d' } });
+  const picker = dialog.getByRole<HTMLInputElement>('combobox', { name: 'Tally stock item' });
+  fireEvent.click(picker);
+  fireEvent.change(picker, { target: { value: 'mIlAzE' } });
+  const results = within(dialog.getByRole('listbox'));
+  assert.equal(results.getAllByRole('option').length, 2);
+  assert.equal(results.queryByRole('option', { name: /sample-e/ }), null);
+  fireEvent.click(results.getByRole('option', { name: /tyres · sample-a$/ }));
+  const units = dialog.getByLabelText<HTMLInputElement>('Tally units per sale');
+  const confirmation = () =>
+    dialog.getByRole<HTMLInputElement>('checkbox', { name: /I confirm the item/ });
+  fireEvent.change(units, { target: { value: '4' } });
+  fireEvent.click(confirmation());
+  fireEvent.click(picker);
+  fireEvent.change(picker, { target: { value: 'No such stock item' } });
+  assert.ok(dialog.getByText('No items match this search.'));
+  assert.equal(fireEvent.keyDown(picker, { key: 'Escape' }), false);
+  assert.ok(picker.value.endsWith('tyres · sample-a'));
+  assert.equal(units.value, '4');
+  assert.equal(confirmation().checked, true);
+
+  fireEvent.click(picker);
+  fireEvent.change(picker, { target: { value: 'sample-d' } });
+  fireEvent.keyDown(picker, { key: 'Enter' });
+  assert.ok(picker.value.endsWith('tyres · sample-d'));
+  assert.equal(confirmation().checked, false);
   fireEvent.change(dialog.getByLabelText('Tally units per sale'), { target: { value: '1' } });
   const pause = dialog.getByRole('checkbox', {
     name: /Keep this listing paused/,
   }) as HTMLInputElement;
   assert.equal(pause.checked, false);
   fireEvent.click(pause);
-  fireEvent.click(dialog.getByRole('checkbox', { name: /I confirm the item/ }));
+  fireEvent.click(confirmation());
   fireEvent.click(dialog.getByRole('button', { name: 'Save mapping and check orders' }));
   await screen.findByText('Tally is unavailable.');
   const retry = await screen.findByRole<HTMLButtonElement>('button', { name: 'Retry order check' });

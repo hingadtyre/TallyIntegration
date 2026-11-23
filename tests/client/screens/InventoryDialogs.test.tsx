@@ -31,6 +31,12 @@ test('failed unlink stays open and closes only after a successful retry', async 
   await waitFor(() => assert.equal(closes, 1));
 });
 
+function openListingPicker() {
+  const picker = screen.getByRole<HTMLInputElement>('combobox', { name: 'Flipkart listing' });
+  fireEvent.click(picker);
+  return picker;
+}
+
 test('mapping offers only unmapped listings from the selected seller account', () => {
   const state = initialState('demo', 'unused');
   state.listings.push({
@@ -50,16 +56,16 @@ test('mapping offers only unmapped listings from the selected seller account', (
     />,
   );
 
-  assert.ok(screen.getByRole('button', { name: /SAMPLE-UNMAPPED-1/ }));
-  assert.equal(screen.queryByRole('button', { name: /OTHER-ACCOUNT/ }), null);
-  assert.equal(screen.queryByRole('button', { name: /SAMPLE-CEAT-/ }), null);
-  const search = screen.getByRole('searchbox', { name: 'Search listings' });
+  assert.equal(screen.queryByRole('listbox'), null);
+  const search = openListingPicker();
+  assert.ok(screen.getByRole('option', { name: /SAMPLE-UNMAPPED-1/ }));
+  assert.equal(screen.queryByRole('option', { name: /OTHER-ACCOUNT/ }), null);
+  assert.equal(screen.queryByRole('option', { name: /SAMPLE-CEAT-/ }), null);
   fireEvent.change(search, { target: { value: 'OTHER-ACCOUNT' } });
   assert.ok(screen.getByText(/No matching listings/));
-  assert.equal(screen.queryByRole('button', { name: /OTHER-ACCOUNT/ }), null);
-  fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
-  assert.equal(document.activeElement, search);
-  assert.ok(screen.getByRole('button', { name: /SAMPLE-UNMAPPED-1/ }));
+  assert.equal(screen.queryByRole('option', { name: /OTHER-ACCOUNT/ }), null);
+  fireEvent.change(search, { target: { value: '' } });
+  assert.ok(screen.getByRole('option', { name: /SAMPLE-UNMAPPED-1/ }));
 });
 
 test('an imported SKU without a stock location is searchable but cannot select a stale warehouse or another seller', () => {
@@ -103,15 +109,16 @@ test('an imported SKU without a stock location is searchable but cannot select a
       onSave={async () => ({ ok: true, value: state })}
     />,
   );
+  const picker = openListingPicker();
   for (const query of ['155/65R14', 'FSN-1', 'LISTING-1', 'Example tyre']) {
-    fireEvent.change(screen.getByRole('searchbox'), { target: { value: query } });
+    fireEvent.change(picker, { target: { value: query } });
     assert.ok(screen.getByText('Example tyre'));
     assert.ok(screen.getByText(/Flipkart has not reported stock/));
     assert.equal(screen.queryByText('Other seller tyre'), null);
-    assert.equal(screen.getAllByRole('button', { name: /155\/65R14/ }).length, 1);
+    assert.equal(screen.getAllByRole('option', { name: /155\/65R14/ }).length, 1);
     assert.ok((screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled);
   }
-  fireEvent.click(screen.getByRole('button', { name: /155\/65R14/ }));
+  fireEvent.click(screen.getByRole('option', { name: /155\/65R14/ }));
   assert.equal(
     (screen.getByLabelText(/Flipkart pickup location/) as HTMLSelectElement).value,
     'North',
@@ -131,8 +138,8 @@ test('mapping requires a selected seller before showing inventory destinations',
     />,
   );
   assert.ok(screen.getByRole('heading', { name: 'Choose a seller account' }));
-  assert.equal(screen.queryByRole('searchbox'), null);
-  assert.equal(screen.queryByRole('button', { name: /SAMPLE-UNMAPPED-1/ }), null);
+  assert.equal(screen.queryByRole('combobox', { name: 'Flipkart listing' }), null);
+  assert.equal(screen.queryByRole('option', { name: /SAMPLE-UNMAPPED-1/ }), null);
   assert.ok((screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled);
 });
 
@@ -169,19 +176,19 @@ test('possible matches keep both warehouses distinct and require a confirmed des
       }}
     />,
   );
-  const matches = screen.getByRole('region', { name: 'Possible matches for this item' });
-  assert.ok(within(matches).getByRole('button', { name: /North warehouse/ }));
-  assert.ok(within(matches).getByRole('button', { name: /South warehouse/ }));
-  assert.equal(within(matches).queryByRole('button', { name: /Bridgestone/ }), null);
-  assert.ok(screen.getByRole('button', { name: /Bridgestone/ }));
+  const search = openListingPicker();
+  const matches = screen.getByRole('group', { name: 'Possible matches for this item' });
+  assert.ok(within(matches).getByRole('option', { name: /North warehouse/ }));
+  assert.ok(within(matches).getByRole('option', { name: /South warehouse/ }));
+  assert.equal(within(matches).queryByRole('option', { name: /Bridgestone/ }), null);
+  assert.ok(screen.getByRole('option', { name: /Bridgestone/ }));
   assert.equal(screen.queryByLabelText(/I confirm the item/), null);
   assert.ok((screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled);
-  const search = screen.getByRole('searchbox', { name: 'Search listings' });
   fireEvent.change(search, { target: { value: 'tyr-fsn-247' } });
-  assert.equal(screen.queryByRole('region', { name: 'Possible matches for this item' }), null);
-  const results = screen.getByRole('region', { name: 'Search results' });
-  assert.equal(within(results).getAllByRole('button').length, 2);
-  const south = within(results).getByRole('button', { name: /South warehouse/ });
+  assert.equal(screen.queryByRole('group', { name: 'Possible matches for this item' }), null);
+  const results = screen.getByRole('group', { name: 'Search results' });
+  assert.equal(within(results).getAllByRole('option').length, 2);
+  const south = within(results).getByRole('option', { name: /South warehouse/ });
   assert.match(south.textContent ?? '', /LST-247/);
   fireEvent.click(south);
   assert.ok(
@@ -189,7 +196,8 @@ test('possible matches keep both warehouses distinct and require a confirmed des
       .getByRole('group', { name: 'Selected listing' })
       .textContent?.includes('South warehouse'),
   );
-  assert.equal(document.activeElement, screen.getByRole('button', { name: 'Change listing' }));
+  assert.match(search.value, /South warehouse/);
+  assert.equal(screen.queryByRole('listbox'), null);
   assert.ok((screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled);
   assert.ok(screen.getByText(/Company sync is on/));
   const pause = screen.getByLabelText('Keep this listing paused') as HTMLInputElement;
@@ -221,17 +229,18 @@ test('sellers can browse additional suggested warehouses or search beyond the fi
       onSave={async () => ({ ok: true, value: state })}
     />,
   );
-  const suggestions = screen.getByRole('region', { name: 'Possible matches for this item' });
-  assert.equal(within(suggestions).getAllByRole('button').length, 10);
+  const search = openListingPicker();
+  const suggestions = screen.getByRole('group', { name: 'Possible matches for this item' });
+  assert.equal(within(suggestions).getAllByRole('option').length, 10);
   fireEvent.click(screen.getByRole('button', { name: /Show more listings/ }));
-  assert.equal(within(suggestions).getAllByRole('button').length, 12);
+  assert.equal(within(suggestions).getAllByRole('option').length, 12);
   assert.equal(
-    document.activeElement,
-    within(suggestions).getByRole('button', { name: /Warehouse 10/ }),
+    search.getAttribute('aria-activedescendant'),
+    within(suggestions).getByRole('option', { name: /Warehouse 10/ }).id,
   );
-  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'VARIANT-11' } });
-  assert.equal(screen.getAllByRole('button', { name: /VARIANT-/ }).length, 1);
-  assert.ok(screen.getByRole('button', { name: /Warehouse 11/ }));
+  fireEvent.change(search, { target: { value: 'VARIANT-11' } });
+  assert.equal(screen.getAllByRole('option', { name: /VARIANT-/ }).length, 1);
+  assert.ok(screen.getByRole('option', { name: /Warehouse 11/ }));
   assert.ok((screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled);
 });
 
@@ -256,13 +265,18 @@ test('changing destination resets confirmation and a missing package count accep
     />,
   );
   const save = () => screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement;
-  fireEvent.click(screen.getByRole('button', { name: /SAMPLE-UNMAPPED-1/ }));
+  const search = openListingPicker();
+  fireEvent.click(screen.getByRole('option', { name: /SAMPLE-UNMAPPED-1/ }));
   fireEvent.click(screen.getByRole('checkbox', { name: /I confirm/ }));
   assert.equal(save().disabled, false);
 
-  fireEvent.click(screen.getByRole('button', { name: 'Change listing' }));
-  assert.equal(document.activeElement, screen.getByRole('searchbox'));
-  fireEvent.click(screen.getByRole('button', { name: /UNVERIFIED/ }));
+  fireEvent.click(search);
+  fireEvent.change(search, { target: { value: 'UNVERIFIED' } });
+  fireEvent.keyDown(search, { key: 'Escape' });
+  assert.match(search.value, /SAMPLE-UNMAPPED-1/);
+  assert.equal(save().disabled, false);
+  fireEvent.click(search);
+  fireEvent.click(screen.getByRole('option', { name: /UNVERIFIED/ }));
   const confirmation = screen.getByRole('checkbox', { name: /I confirm/ }) as HTMLInputElement;
   assert.equal(confirmation.checked, false);
   assert.equal(confirmation.disabled, true);
@@ -279,8 +293,8 @@ test('changing destination resets confirmation and a missing package count accep
   });
   fireEvent.click(confirmation);
   assert.equal(save().disabled, false);
-  fireEvent.click(screen.getByRole('button', { name: 'Change listing' }));
-  fireEvent.click(screen.getByRole('button', { name: /SAMPLE-UNMAPPED-1/ }));
+  fireEvent.click(search);
+  fireEvent.click(screen.getByRole('option', { name: /SAMPLE-UNMAPPED-1/ }));
   assert.equal(
     (screen.getByRole('checkbox', { name: /I confirm/ }) as HTMLInputElement).checked,
     false,
@@ -349,7 +363,7 @@ test('mapping without available listings explains the empty state and keeps save
   );
 
   assert.ok(screen.getByRole('heading', { name: 'No unmapped listings available' }));
-  assert.equal(screen.queryByRole('searchbox'), null);
+  assert.equal(screen.queryByRole('combobox', { name: 'Flipkart listing' }), null);
   assert.equal(
     (screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled,
     true,

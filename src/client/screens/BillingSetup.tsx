@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { BillField, BillingRule, OrderReference } from '../../shared/billing-contracts.js';
 import { errorMessage, requestJson } from '../api.js';
+import { SearchablePicker } from '../SearchablePicker.js';
+
+type LedgerOption = { externalId: string; name: string };
 
 export const fieldLabels: Record<BillField, string> = {
   reference: 'Voucher reference',
@@ -29,16 +32,15 @@ export function BillingSetup({
   onPreview: (input: Pick<BillingRule, 'ledgerId' | 'field' | 'reference'>) => Promise<void>;
   onCancel?: () => void;
 }) {
-  const [ledgers, setLedgers] = useState<{ externalId: string; name: string }[] | null>(null);
+  const [ledgers, setLedgers] = useState<LedgerOption[] | null>(null);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
-  const [query, setQuery] = useState('');
   const [ledgerId, setLedgerId] = useState(initialRule?.ledgerId ?? '');
   const [field, setField] = useState<BillField | ''>(initialRule?.field ?? '');
   const [reference, setReference] = useState<OrderReference | ''>(initialRule?.reference ?? '');
   useEffect(() => {
     const controller = new AbortController();
-    requestJson<{ ledgers: { externalId: string; name: string }[] }>(
+    requestJson<{ ledgers: LedgerOption[] }>(
       '/billing/ledgers',
       { companyId, accountId },
       controller.signal,
@@ -52,12 +54,6 @@ export function BillingSetup({
     return () => controller.abort();
   }, [companyId, accountId, retry]);
   const selected = ledgers?.find((ledger) => ledger.externalId === ledgerId);
-  const filtered =
-    ledgers?.filter(
-      (ledger) =>
-        ledger.externalId === ledgerId ||
-        ledger.name.toLowerCase().includes(query.trim().toLowerCase()),
-    ) ?? [];
   const ready = selected && field && (field === 'manual' || reference);
   return (
     <form
@@ -94,39 +90,17 @@ export function BillingSetup({
       ) : !ledgers ? (
         <p role="status">Reading company ledgers…</p>
       ) : (
-        <>
-          {ledgers.length > 1 && (
-            <label className="field">
-              <span>Search ledgers</span>
-              <input
-                type="search"
-                disabled={busy}
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setLedgerId('');
-                }}
-              />
-            </label>
-          )}
-          <label className="field">
-            <span>Sales bill ledger</span>
-            <select
-              disabled={busy}
-              required
-              value={selected?.externalId ?? ''}
-              onChange={(event) => setLedgerId(event.target.value)}
-            >
-              <option value="">Choose a ledger</option>
-              {filtered.map((ledger) => (
-                <option key={ledger.externalId} value={ledger.externalId}>
-                  {ledger.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {filtered.length === 0 && <p role="status">No matching ledgers. Try another name.</p>}
-        </>
+        <SearchablePicker
+          label="Sales bill ledger"
+          placeholder="Choose a ledger"
+          emptyMessage="No matching ledgers. Try another name."
+          options={ledgers}
+          getId={(ledger) => ledger.externalId}
+          getLabel={(ledger) => ledger.name}
+          selected={selected}
+          disabled={busy}
+          onSelect={setLedgerId}
+        />
       )}
       <label className="field">
         <span>Where do you enter the Flipkart reference on the Tally bill?</span>

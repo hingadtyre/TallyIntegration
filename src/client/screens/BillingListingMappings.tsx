@@ -10,6 +10,7 @@ import type { Listing, Snapshot } from '../../shared/contracts.js';
 import { errorMessage, requestJson } from '../api.js';
 import { Modal } from '../components.js';
 import { formatUnits } from '../format.js';
+import { SearchablePicker } from '../SearchablePicker.js';
 import { PackForm, type SaveMapping } from './MappingDialog.js';
 
 type Group = PendingListingGroup & { trackedIds: string[] };
@@ -405,14 +406,10 @@ function OrderMappingDialog({
   onClose: () => void;
   onSave: SaveMapping;
 }) {
-  const [query, setQuery] = useState('');
   const [itemId, setItemId] = useState('');
   const [saving, setSaving] = useState(false);
   const { listing, issue } = findDestination(inventory, accountId, group);
   const items = inventory.items.filter((item) => item.companyId === company.id);
-  const filtered = items.filter((item) =>
-    item.name.toLowerCase().includes(query.trim().toLowerCase()),
-  );
   const item = items.find((entry) => entry.id === (listing?.itemId || itemId));
   return (
     <Modal
@@ -438,43 +435,20 @@ function OrderMappingDialog({
             <p>
               Mapped Tally item in {company.name}: <strong>{item?.name}</strong>
             </p>
+          ) : items.length ? (
+            <SearchablePicker
+              label="Tally stock item"
+              placeholder={`Search Tally items in ${company.name}`}
+              options={items}
+              selected={item}
+              getId={(entry) => entry.id}
+              getLabel={(entry) => `${entry.name} · ${entry.unit} · ${entry.externalId}`}
+              onSelect={setItemId}
+              disabled={saving}
+              emptyMessage="No items match this search."
+            />
           ) : (
-            <>
-              <label className="field">
-                <span>Search Tally items in {company.name}</span>
-                <input
-                  type="search"
-                  value={query}
-                  disabled={saving}
-                  onChange={(event) => {
-                    setQuery(event.target.value);
-                    setItemId('');
-                  }}
-                />
-              </label>
-              <label className="field">
-                <span>Tally stock item</span>
-                <select
-                  value={itemId}
-                  disabled={saving}
-                  onChange={(event) => setItemId(event.target.value)}
-                >
-                  <option value="">Choose a Tally stock item</option>
-                  {filtered.map((entry) => (
-                    <option key={entry.id} value={entry.id}>
-                      {entry.name} · {entry.unit} · {entry.externalId}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {!filtered.length && (
-                <p role="status">
-                  {items.length
-                    ? 'No items match this search.'
-                    : 'Refresh this company’s stock in Inventory to load its Tally items.'}
-                </p>
-              )}
-            </>
+            <p role="status">Refresh this company’s stock in Inventory to load its Tally items.</p>
           )}
           {item && (
             <PackForm

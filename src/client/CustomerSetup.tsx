@@ -88,7 +88,7 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
         <summary>Map listings and manage stock updates</summary>
         <p>
           In Inventory, select the company and seller account, then choose Map listing on the Tally
-          item. Search your imported listings by seller SKU, product title when available, FSN
+          item. Open Flipkart listing and search by seller SKU, product title when available, FSN
           (Flipkart product ID) or Flipkart listing ID. If Flipkart supplied no stock location,
           choose this seller’s pickup location or save the mapping and choose it later in Edit Set
           of. Check the product and warehouse before selecting a suggested listing. For Set of,
@@ -131,18 +131,20 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
         <summary>Match Flipkart orders to Tally bills</summary>
         <p>
           To see which recent Flipkart orders you have billed, open Order matching. Select the Tally
-          company and Flipkart account, choose your Flipkart sales bill ledger, and select the bill
-          field where you record an order or invoice number. You can also match manually. Preview
-          the matches and confirm the setup for each participating seller. Select Show unresolved
-          only to keep the remaining orders in view as you confirm each bill. Choose the tracking
-          start date after checking that earlier sales are in Tally. When an order needs a mapping,
-          choose Map listing and confirm the Tally item and Set of at that pickup location.
-          Stockbridge checks saved orders from your tracking date against the ledger. A verified
-          standard or self-ship sale can reserve unbilled units before dispatch. Stockbridge can
-          fill in the first proposed quantity whether the order arrives before or after mapping.
-          With company sync on, eligible listings sharing the Tally item can publish a lower
-          quantity. Held orders, returns and conflicting details need review. Existing listings keep
-          syncing while an order waits for its mapping, even if they share the same tyres.
+          company and Flipkart account. In Sales bill ledger, type part of the ledger name and
+          choose a match. Select the bill field where you record an order or invoice number. You can
+          also match manually. Preview the matches and confirm the setup for each participating
+          seller. Select Show unresolved only to keep the remaining orders in view as you confirm
+          each bill. Choose the tracking start date after checking that earlier sales are in Tally.
+          When an order needs a mapping, choose Map listing. In Tally stock item, type part of the
+          name or Tally ID, select the matching item, and confirm the Set of at that pickup
+          location. Stockbridge checks saved orders from your tracking date against the ledger. A
+          verified standard or self-ship sale can reserve unbilled units before dispatch.
+          Stockbridge can fill in the first proposed quantity whether the order arrives before or
+          after mapping. With company sync on, eligible listings sharing the Tally item can publish
+          a lower quantity. Held orders, returns and conflicting details need review. Existing
+          listings keep syncing while an order waits for its mapping, even if they share the same
+          tyres.
         </p>
       </details>
       <details className="guide-topic">

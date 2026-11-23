@@ -1824,6 +1824,62 @@ small {
 .billing-form .field {
   max-width: 38rem;
 }
+.searchable-picker-control,
+.searchable-picker-input {
+  position: relative;
+}
+.field.searchable-picker input {
+  padding-inline-end: 2.25rem;
+}
+.searchable-picker-input > .icon {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%) rotate(90deg);
+  pointer-events: none;
+}
+.searchable-picker-popup {
+  position: absolute;
+  z-index: 4;
+  inset: calc(100% + 4px) 0 auto;
+  max-height: min(16rem, 40vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--white);
+  box-shadow: 0 6px 18px #182d281a;
+}
+.modal .searchable-picker-popup {
+  position: relative;
+  inset: auto;
+  margin-top: 4px;
+}
+.searchable-picker-heading {
+  padding: 6px 8px;
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  font-weight: 600;
+}
+.searchable-picker-option,
+.searchable-picker-popup p {
+  padding: 8px;
+  margin: 0;
+  font-size: var(--font-body);
+  overflow-wrap: anywhere;
+}
+.searchable-picker-option {
+  border-radius: 4px;
+  cursor: pointer;
+}
+.searchable-picker-option[aria-selected='true'],
+.searchable-picker-option:hover {
+  color: var(--teal-dark);
+  background: var(--teal-light);
+}
 .billing-actions,
 .billing-filters,
 .billing-choice {
@@ -1913,7 +1969,8 @@ small {
   gap: 8px;
 }
 
-.field > span {
+.field > span,
+.field > label {
   font-size: var(--font-control);
   color: var(--text-strong);
   font-weight: 550;
@@ -2048,7 +2105,6 @@ small {
 }
 
 .mapping-picker-heading,
-.mapping-result,
 .mapping-listing-meta {
   display: flex;
   align-items: center;
@@ -2064,73 +2120,11 @@ small {
 }
 
 .mapping-picker-heading > span,
-.mapping-listing-meta,
-.mapping-no-results {
+.mapping-listing-meta {
   color: var(--muted);
   font-weight: 400;
   font-size: var(--font-caption);
   overflow-wrap: anywhere;
-}
-
-.mapping-picker .search-input {
-  min-width: 0;
-  max-width: none;
-}
-
-.mapping-picker input::-webkit-search-cancel-button {
-  appearance: none;
-}
-
-.mapping-results {
-  margin-top: 12px;
-  padding: 4px;
-  max-height: min(36vh, 320px);
-  overflow-y: auto;
-}
-
-.mapping-result-group + .mapping-result-group {
-  margin-top: 16px;
-}
-
-.mapping-result-group h3 {
-  margin-bottom: 6px;
-  font-size: var(--font-caption);
-  color: var(--text-strong);
-  letter-spacing: normal;
-}
-
-.mapping-result-group ul {
-  padding: 0;
-  margin: 0;
-  list-style: none;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-
-.mapping-result-group li + li {
-  border-top: 1px solid var(--line);
-}
-
-.mapping-result {
-  justify-content: space-between;
-  width: 100%;
-  padding: 10px 12px;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  border-radius: 7px;
-}
-
-.mapping-result:hover,
-.mapping-result:focus-visible {
-  background: var(--teal-light);
-}
-
-.mapping-result > .icon {
-  flex: none;
-  width: 14px;
-  height: 14px;
-  color: var(--teal);
 }
 
 .mapping-listing-details {
@@ -2150,22 +2144,11 @@ small {
 }
 
 .mapping-selected {
+  margin-top: 8px;
   border: 1px solid #a8cdc3;
   border-radius: 8px;
   background: var(--teal-light);
   padding: 12px;
-}
-
-.mapping-selected .mapping-picker-heading {
-  color: var(--teal-dark);
-}
-
-.mapping-more {
-  margin-top: 10px;
-}
-
-.mapping-no-results {
-  margin: 0;
 }
 
 .modal-actions {
