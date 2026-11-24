@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -19,6 +19,8 @@ export interface FlipkartCredentialStore {
   remove(): Promise<void>;
 }
 
+const readyMarker = '!';
+
 // The command is constant. Secret material is sent on stdin, never as arguments or environment.
 const protectionScript = `
 $ErrorActionPreference = 'Stop'
@@ -30,6 +32,8 @@ try {
   $data = [Convert]::FromBase64String($request.data)
   $entropy = [Convert]::FromBase64String($request.context)
   $scope = [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+  [Console]::Out.Write('${readyMarker}')
+  [Console]::Out.Flush()
   if ($request.operation -eq 'protect') {
     $result = [System.Security.Cryptography.ProtectedData]::Protect($data, $entropy, $scope)
   } elseif ($request.operation -eq 'unprotect') {
@@ -39,8 +43,36 @@ try {
 } catch { exit 1 }
 `;
 
+function startWindowsCredentialHelper() {
+  const executable = join(
+    process.env.SystemRoot ?? 'C:\\Windows',
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
+  return spawn(
+    executable,
+    [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      Buffer.from(protectionScript, 'utf16le').toString('base64'),
+    ],
+    { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] },
+  );
+}
+
+type CredentialChild = Pick<
+  ChildProcessWithoutNullStreams,
+  'stdin' | 'stdout' | 'stderr' | 'once' | 'kill'
+>;
+
 export class WindowsCredentialProtector implements CredentialProtector {
   readonly available = process.platform === 'win32';
+
+  constructor(private readonly startHelper: () => CredentialChild = startWindowsCredentialHelper) {}
 
   protect(value: Buffer, context: Buffer): Promise<Buffer> {
     return this.run('protect', value, context);
@@ -61,25 +93,9 @@ export class WindowsCredentialProtector implements CredentialProtector {
       );
     }
     return new Promise((accept, reject) => {
-      const executable = join(
-        process.env.SystemRoot ?? 'C:\\Windows',
-        'System32',
-        'WindowsPowerShell',
-        'v1.0',
-        'powershell.exe',
-      );
-      const child = spawn(
-        executable,
-        [
-          '-NoLogo',
-          '-NoProfile',
-          '-NonInteractive',
-          '-EncodedCommand',
-          Buffer.from(protectionScript, 'utf16le').toString('base64'),
-        ],
-        { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] },
-      );
+      const child = this.startHelper();
       let output = '';
+      let ready = false;
       let settled = false;
       const fail = () => {
         if (settled) return;
@@ -92,17 +108,31 @@ export class WindowsCredentialProtector implements CredentialProtector {
           ),
         );
       };
-      const timer = setTimeout(fail, 10_000);
+      let timer = setTimeout(fail, 60_000);
       child.once('error', fail);
       child.stdin.once('error', fail);
       child.stdout.on('data', (chunk: Buffer) => {
+        if (settled) return;
+        if (!ready) {
+          // PowerShell writes this single ASCII byte after its startup and request parsing.
+          if (chunk[0] !== readyMarker.charCodeAt(0)) return fail();
+          ready = true;
+          clearTimeout(timer);
+          timer = setTimeout(fail, 10_000);
+          chunk = chunk.subarray(1);
+        }
         output += chunk.toString('utf8');
         if (output.length > 128 * 1024) fail();
       });
       child.stderr.resume();
       child.once('close', (code) => {
         if (settled) return;
-        if (code !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(output) || output.length % 4 !== 0) {
+        if (
+          !ready ||
+          code !== 0 ||
+          !/^[A-Za-z0-9+/]+={0,2}$/u.test(output) ||
+          output.length % 4 !== 0
+        ) {
           fail();
           return;
         }

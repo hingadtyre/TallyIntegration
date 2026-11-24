@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
+import { PassThrough } from 'node:stream';
 import test, { type TestContext } from 'node:test';
 import {
   ProtectedFlipkartCredentialStore,
@@ -131,10 +133,83 @@ test('unavailable protection never falls back to plaintext storage', async (t) =
   assert.deepEqual(readdirSync(folder), []);
 });
 
+function startTestHelper(t: TestContext) {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const stdio: ChildProcessWithoutNullStreams['stdio'] = [stdin, stdout, stderr, null, null];
+  const child = Object.assign(new ChildProcess(), {
+    stdin,
+    stdout,
+    stderr,
+    stdio,
+    kill: t.mock.fn(() => true),
+  });
+  const protector = new WindowsCredentialProtector(() => child);
+  const result = protector.protect(Buffer.from('test value'), Buffer.from('test context'));
+  return { child, result };
+}
+
+const windowsOnly = { skip: process.platform !== 'win32' };
+
+test(
+  'the Windows helper can start slowly and return its ready marker with output',
+  windowsOnly,
+  async (t) => {
+    const { child, result } = startTestHelper(t);
+    t.mock.timers.tick(12_000);
+    assert.equal(child.kill.mock.callCount(), 0);
+    child.stdout.write('!Z');
+    child.stdout.write('m8=');
+    child.emit('close', 0);
+    assert.deepEqual(await result, Buffer.from('fo'));
+    t.mock.timers.tick(60_000);
+    assert.equal(child.kill.mock.callCount(), 0);
+  },
+);
+
+test('the Windows helper must signal readiness within 60 seconds', windowsOnly, async (t) => {
+  const { child, result } = startTestHelper(t);
+  const rejected = assert.rejects(result, /Windows could not protect or unlock/);
+  t.mock.timers.tick(59_999);
+  assert.equal(child.kill.mock.callCount(), 0);
+  t.mock.timers.tick(1);
+  assert.equal(child.kill.mock.callCount(), 1);
+  await rejected;
+});
+
+test('readiness starts a separate 10-second Windows operation deadline', windowsOnly, async (t) => {
+  const { child, result } = startTestHelper(t);
+  const rejected = assert.rejects(result, /Windows could not protect or unlock/);
+  t.mock.timers.tick(59_000);
+  child.stdout.write('!');
+  t.mock.timers.tick(9_999);
+  assert.equal(child.kill.mock.callCount(), 0);
+  t.mock.timers.tick(1);
+  assert.equal(child.kill.mock.callCount(), 1);
+  await rejected;
+});
+
+test(
+  'the Windows helper rejects missing, repeated and malformed output markers',
+  windowsOnly,
+  async (t) => {
+    for (const output of ['', 'Zm8=', '!!Zm8=', '!bad']) {
+      const { child, result } = startTestHelper(t);
+      const rejected = assert.rejects(result, /Windows could not protect or unlock/);
+      if (output) child.stdout.write(output);
+      child.emit('close', 0);
+      await rejected;
+      t.mock.timers.reset();
+    }
+  },
+);
+
 test(
   'Windows current-user DPAPI protects credentials and rejects another workspace context',
-  // One protect and two unprotect calls can each use the helper's 10-second deadline.
-  { skip: process.platform !== 'win32', timeout: 40_000 },
+  // Each of the three helpers has up to 60 seconds to start and 10 seconds to finish.
+  { ...windowsOnly, timeout: 220_000 },
   async (t) => {
     const folder = directory(t);
     const store = new ProtectedFlipkartCredentialStore(folder, new WindowsCredentialProtector());
