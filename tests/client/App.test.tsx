@@ -178,8 +178,10 @@ test('startup failure exposes the server error and a retry action', async (t) =>
 test('listing actions dismiss on an outside click, another row, and Escape', async (t) => {
   const state = initialState('demo', 'unused');
   t.mock.method(globalThis, 'fetch', async () => response(state));
-  render(<App />);
-  const first = await screen.findByLabelText('Actions for SAMPLE-CEAT-1-1');
+  await act(async () => {
+    render(<App />);
+  });
+  const first = screen.getByLabelText('Actions for SAMPLE-CEAT-1-1');
   const second = screen.getByLabelText('Actions for SAMPLE-CEAT-2-2');
   const firstMenu = first.closest('details')!;
   const secondMenu = second.closest('details')!;

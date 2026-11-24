@@ -150,8 +150,10 @@ test('seller selects their ledger, previews, confirms setup, and explicitly matc
   render(<App />);
   await screen.findByRole('heading', { name: 'Inventory' });
   assert.deepEqual(commands, []);
-  fireEvent.click(screen.getByRole('button', { name: 'Order matching' }));
-  const ledger = await screen.findByRole<HTMLInputElement>('combobox', {
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Order matching' }));
+  });
+  const ledger = screen.getByRole<HTMLInputElement>('combobox', {
     name: 'Sales bill ledger',
   });
   assert.equal(ledger.value, '');
