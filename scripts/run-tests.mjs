@@ -26,16 +26,23 @@ if (!sources.length || missing.length) {
   const compiled = sources
     .filter((file) => !requested.length || requested.some((selected) => matches(file, selected)))
     .map((file) => join(root, 'dist', 'tests', file.replace(/\.tsx?$/, '.js')));
-  // Browser simulations and Windows credential checks share the same CPU.
-  // Bound file-level parallelism so a busy test run can still start PowerShell on time.
+  // Give the real Windows credential helper a cold start before the browser simulations.
+  const credentialTests = join(root, 'dist', 'tests', 'server', 'flipkart-credentials.test.js');
+  const groups =
+    process.platform === 'win32' && compiled.includes(credentialTests)
+      ? [[credentialTests], compiled.filter((file) => file !== credentialTests)]
+      : [compiled];
   const runnerOptions =
     process.platform === 'win32'
       ? [`--test-concurrency=${Math.max(1, Math.min(4, availableParallelism() - 1))}`]
       : [];
-  const result = spawnSync(process.execPath, ['--test', ...runnerOptions, ...compiled], {
-    cwd: root,
-    stdio: 'inherit',
-  });
-  if (result.error) throw result.error;
-  process.exitCode = result.status ?? 1;
+  for (const files of groups) {
+    if (!files.length) continue;
+    const result = spawnSync(process.execPath, ['--test', ...runnerOptions, ...files], {
+      cwd: root,
+      stdio: 'inherit',
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0) process.exitCode = result.status ?? 1;
+  }
 }

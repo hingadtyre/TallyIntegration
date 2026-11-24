@@ -133,7 +133,8 @@ test('unavailable protection never falls back to plaintext storage', async (t) =
 
 test(
   'Windows current-user DPAPI protects credentials and rejects another workspace context',
-  { skip: process.platform !== 'win32', timeout: 20_000 },
+  // One protect and two unprotect calls can each use the helper's 10-second deadline.
+  { skip: process.platform !== 'win32', timeout: 40_000 },
   async (t) => {
     const folder = directory(t);
     const store = new ProtectedFlipkartCredentialStore(folder, new WindowsCredentialProtector());
