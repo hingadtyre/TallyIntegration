@@ -1,6 +1,12 @@
 import { useState } from 'react';
 import type { BillingReport, BillingRow } from '../../shared/billing-contracts.js';
 import { formatDateTime, formatUnits } from '../format.js';
+import { BilledOrders } from './BilledOrders.js';
+import {
+  TrackedBillOrders,
+  useTrackedBillHistory,
+  type TrackedBillScope,
+} from './TrackedBillOrders.js';
 
 const saleDate = new Intl.DateTimeFormat('en-IN', {
   dateStyle: 'medium',
@@ -19,42 +25,88 @@ interface Actions {
   busy: boolean;
   onMatch: (orderItemId: string, billId: string) => void;
   onUnmatch: (orderItemId: string) => void;
+  onFindBill?: (row: BillingRow) => void;
 }
 
 export function BillingResults({
   report,
   trackingFrom,
+  tracking,
   ...actions
-}: Actions & { report: BillingReport; trackingFrom?: string }) {
-  const [onlyOpen, setOnlyOpen] = useState(false);
-  const unresolved = report.rows.filter((row) => row.status !== 'matched');
-  const rows = onlyOpen ? unresolved : report.rows;
+}: Actions & { report: BillingReport | null; trackingFrom?: string; tracking?: TrackedBillScope }) {
+  const [filter, setFilter] = useState<'all' | 'unresolved' | 'billed'>('all');
+  const [otherOpen, setOtherOpen] = useState(false);
+  const history = useTrackedBillHistory(tracking, otherOpen || filter === 'billed');
+  const unresolved = report?.rows.filter((row) => row.status !== 'matched') ?? [];
+  const rows = filter === 'unresolved' ? unresolved : (report?.rows ?? []);
+  if (!report && !tracking) return null;
   return (
     <>
       <section className="panel billing-results">
         <div className="panel-heading">
           <div>
             <h2>Order items and bills</h2>
-            <p>
-              {saleDate.format(new Date(report.from))} through{' '}
-              {saleDate.format(new Date(report.to))} (India) · Checked{' '}
-              {formatDateTime(report.checkedAt)}
-            </p>
-            <p>
-              This preview covers recent seller-fulfilled standard and self-ship orders returned for
-              the selected period and sales bills from the selected ledger.
-            </p>
-            {report.period === 'tracking' &&
-              trackingFrom &&
-              Date.parse(report.from) > Date.parse(trackingFrom) && (
-                <p>
-                  Company tracking started on {saleDate.format(new Date(trackingFrom))}. This
-                  preview shows the most recent 30 Indian calendar days.
-                </p>
-              )}
+            {filter === 'billed' ? (
+              <p>
+                {tracking && trackingFrom
+                  ? 'Billed order items for this seller since ' +
+                    saleDate.format(new Date(trackingFrom)) +
+                    ' (India), plus any earlier billed items in the selected preview.'
+                  : 'Billed order items for this seller in the selected preview period.'}
+              </p>
+            ) : (
+              report && (
+                <>
+                  <p>
+                    {saleDate.format(new Date(report.from))} through{' '}
+                    {saleDate.format(new Date(report.to))} (India) · Checked{' '}
+                    {formatDateTime(report.checkedAt)}
+                  </p>
+                  <p>
+                    This preview covers recent seller-fulfilled standard and self-ship orders
+                    returned for the selected period and sales bills from the selected ledger.
+                  </p>
+                  {report.period === 'tracking' &&
+                    trackingFrom &&
+                    Date.parse(report.from) > Date.parse(trackingFrom) && (
+                      <p>
+                        Company tracking started on {saleDate.format(new Date(trackingFrom))}. This
+                        preview shows the most recent 30 Indian calendar days.
+                      </p>
+                    )}
+                </>
+              )
+            )}
           </div>
         </div>
-        {report.rows.length === 0 ? (
+        <div className="billing-filters">
+          {filter !== 'billed' && report && (
+            <strong>
+              {report.rows.length - unresolved.length} matched · {unresolved.length} unresolved
+            </strong>
+          )}
+          <label className="field">
+            <span>Order status</span>
+            <select
+              value={filter}
+              onChange={(event) => setFilter(event.target.value as typeof filter)}
+            >
+              <option value="all">All</option>
+              <option value="unresolved">Unresolved</option>
+              <option value="billed">Billed</option>
+            </select>
+          </label>
+        </div>
+        {filter === 'billed' ? (
+          <BilledOrders
+            report={report}
+            trackingFrom={tracking ? trackingFrom : undefined}
+            history={history}
+            busy={actions.busy}
+          />
+        ) : !report ? (
+          <p className="billing-filters">The selected order preview is unavailable.</p>
+        ) : report.rows.length === 0 ? (
           <div className="empty-state compact-empty">
             <h3>No order items in this preview</h3>
             <p>
@@ -63,19 +115,6 @@ export function BillingResults({
           </div>
         ) : (
           <>
-            <div className="billing-filters">
-              <strong>
-                {report.rows.length - unresolved.length} matched · {unresolved.length} unresolved
-              </strong>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={onlyOpen}
-                  onChange={(event) => setOnlyOpen(event.target.checked)}
-                />{' '}
-                Show unresolved only
-              </label>
-            </div>
             {rows.length > 0 ? (
               <div className="table-scroll">
                 <table className="billing-table" aria-label="Order and bill matches">
@@ -109,7 +148,7 @@ export function BillingResults({
           </>
         )}
       </section>
-      {report.stock.length > 0 && (
+      {report && report.stock.length > 0 && (
         <section className="panel billing-results">
           <div className="panel-heading">
             <div>
@@ -154,6 +193,16 @@ export function BillingResults({
           </div>
         </section>
       )}
+      {tracking && (
+        <TrackedBillOrders
+          scope={tracking}
+          report={report}
+          busy={actions.busy}
+          open={otherOpen}
+          onToggle={() => setOtherOpen(!otherOpen)}
+          history={history}
+        />
+      )}
     </>
   );
 }
@@ -165,6 +214,7 @@ function OrderRow({
   confirmed,
   onMatch,
   onUnmatch,
+  onFindBill,
 }: { row: BillingRow; showInvoice: boolean } & Actions) {
   const [selectedBill, setSelectedBill] = useState('');
   const candidate = row.candidates.find((bill) => bill.id === selectedBill);
@@ -243,6 +293,15 @@ function OrderRow({
             </div>
           )
         )}
+        {confirmed &&
+          onFindBill &&
+          (row.status === 'review' || row.status === 'unmatched') &&
+          row.baseUnits !== null &&
+          !row.manualBillId && (
+            <button className="text-button" disabled={busy} onClick={() => onFindBill(row)}>
+              Find Tally bill
+            </button>
+          )}
       </td>
     </tr>
   );

@@ -13,8 +13,10 @@ import type { Company, Snapshot } from '../shared/contracts.js';
 import { isVerifiedCancellation } from '../shared/stock-coverage.js';
 import {
   fingerprint,
+  isInspectedBillLink,
   matchBills,
   saleDay,
+  storeReviewedBillLink,
   type BillingEvidence,
   type BillingScope,
 } from './billing-matcher.js';
@@ -199,7 +201,7 @@ function saveDecision(
   const link = match.links.get(orderItemId)?.get(billId);
   if (!link || row?.status !== 'review' || !row.candidates.some((bill) => bill.id === billId))
     throw new InputError('Choose an available candidate from the current review.', 409);
-  data.links.push(link);
+  data.links.push(storeReviewedBillLink(link, randomUUID()));
   invalidateItem(link.itemId);
 }
 
@@ -216,6 +218,29 @@ export class BillingService {
   invalidate(accountId: string): void {
     for (const [key, session] of this.sessions)
       if (session.accountId === accountId) this.sessions.delete(key);
+  }
+
+  previewStartForOrder(scope: BillingScope, previewId: string, orderItemId: string): string {
+    const saved = this.store.readBilling();
+    const rule = configuredRule(saved, scope);
+    const session = currentReview(
+      this.sessions.get(JSON.stringify([scope.companyId, scope.accountId])),
+      previewId,
+      'match',
+      rule,
+    );
+    if (
+      !session.report.rows.some((row) => row.orderItemId === orderItemId) ||
+      session.savedDecisions !== decisionsDigest(saved, scope, session.report.rule.ledgerId) ||
+      session.tallyUrl !== this.store.read().settings.tallyUrl ||
+      !trackingPeriodCurrent(
+        session.report,
+        session.trackingFrom,
+        this.store.readStockTrackingStart(scope.companyId),
+      )
+    )
+      throw new InputError('Refresh the billing preview for this seller and order item.', 409);
+    return session.report.from;
   }
 
   async pendingOrders(
@@ -383,6 +408,7 @@ export class BillingService {
     input: Record<string, unknown>,
     token: () => Promise<string | null>,
     verifyAccess: () => void = () => {},
+    availability?: StockAvailabilityService,
   ): Promise<unknown> {
     const state = this.store.read();
     const company = requireCompany(state, input.companyId);
@@ -439,6 +465,36 @@ export class BillingService {
       token,
       verifyAccess,
     );
+    const reviewedOrders = new Set(evidence.orders.map((order) => order.orderItemId));
+    const inspectedInPreview = saved.links.some(
+      (link) =>
+        link.companyId === company.id &&
+        link.accountId === accountId &&
+        reviewedOrders.has(link.orderItemId) &&
+        isInspectedBillLink(link),
+    );
+    if (inspectedInPreview && availability) {
+      // This seller's short preview can contain an inspected voucher whose
+      // reference or stock is claimed by another seller outside the short period.
+      const bills = await availability.readBillEvidence(
+        company.id,
+        accountId,
+        undefined,
+        spec.from,
+      );
+      evidence.knownOrders = bills.coverage.orders;
+      evidence.knownBills = [...bills.vouchers.values()].flat();
+      if (rule?.ledgerId === spec.rule.ledgerId) {
+        const firstDay = saleDay(spec.from);
+        const lastDay = saleDay(spec.to);
+        evidence.bills = (bills.vouchers.get(accountId) ?? []).filter(
+          (bill) => bill.date >= firstDay && bill.date <= lastDay,
+        );
+      }
+      bills.verify();
+    } else if (trackingFrom) {
+      evidence.knownOrders = this.store.readStockCoverage(company.id)?.orders;
+    }
     if (state.mode === 'live') verifyAccess();
     const current = this.store.read();
     let decisions = this.store.readBilling();

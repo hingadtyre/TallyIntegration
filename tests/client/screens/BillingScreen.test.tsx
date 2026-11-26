@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type {
+  BillLookup,
+  BilledOrderItem,
   BillingReport,
   BillingRow,
   BillingRule,
@@ -63,6 +65,421 @@ const report: BillingReport = {
     },
   ],
 };
+
+const billLookup: BillLookup = {
+  reviewId: 'search-a',
+  orderDate: item.orderDate!,
+  orderItemId: item.orderItemId,
+  orderId: item.orderId,
+  sku: item.sku,
+  ledgerName: rule.ledgerName,
+  itemName: 'Sample tyre',
+  unit: 'tyres',
+  baseUnits: 2,
+  expectedReference: item.orderId,
+  field: 'reference',
+  bills: [
+    {
+      ...candidate,
+      lines: [{ itemName: 'Sample tyre', quantity: 2, unit: 'tyres' }],
+      referenceMismatch: true,
+      recordedReference: 'ODER-2',
+      issue: null,
+    },
+  ],
+};
+
+test('Billed searches the full verified history by order and bill, shares its read, and discards failed or stale results', async (t) => {
+  const from = '2026-08-01T00:00:00.000Z';
+  const saved: BillingRow = { ...item, status: 'matched', bill: candidate };
+  const trackingReport: BillingReport = {
+    ...report,
+    period: 'tracking',
+    rows: [saved, { ...saved, orderItemId: 'now-unresolved' }],
+  };
+  const earlier: BilledOrderItem = {
+    orderId: 'OD-HIST',
+    orderItemId: 'AUG-1',
+    orderDate: '2026-08-01T10:00:00.000Z',
+    sku: 'summer',
+    bill: { id: 'old', number: 'SALE-55', date: '2026-08-03' },
+    method: 'automatic',
+  };
+  const duplicateNumber = {
+    ...earlier,
+    orderItemId: 'AUG-2',
+    bill: { ...earlier.bill, id: 'old-2' },
+    method: 'seller-confirmed',
+  };
+  const currentItem = {
+    ...earlier,
+    orderItemId: item.orderItemId,
+    orderId: item.orderId,
+    orderDate: item.orderDate!,
+    bill: { ...candidate, number: 'CORRECT-4' },
+  };
+  let historyReads = 0;
+  let resolveLate!: (response: Response) => void;
+  t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    switch (String(url)) {
+      case '/api/billing/workspace':
+        return response({ rule, report: trackingReport, trackingFrom: from });
+      case '/api/billing/coverage':
+        return response({ from, current: true, checkedThrough: null });
+      case '/api/billing/pending':
+        return response({ trackingStarted: true, listings: [] });
+      case '/api/billing/tracked-bills':
+        assert.deepEqual(body, { companyId: 'company', accountId: 'seller' });
+        if (++historyReads === 2) return response({ error: 'Tally is offline.' }, 503);
+        if (historyReads === 3)
+          return new Promise<Response>((resolve) => {
+            resolveLate = resolve;
+          });
+        return response({
+          orders: [],
+          billed: historyReads === 1 ? [earlier, duplicateNumber, currentItem] : [currentItem],
+        });
+      default:
+        throw new Error('Unexpected request ' + url);
+    }
+  });
+  render(
+    <BillingScreen
+      companyId="company"
+      accountId="seller"
+      inventory={initialState('demo', 'unused')}
+      onSaveMapping={async () => assert.fail('Unexpected mapping')}
+      onAccountChange={assert.fail}
+      onConnect={assert.fail}
+    />,
+  );
+  const filter = await screen.findByLabelText('Order status');
+  assert.equal(historyReads, 0);
+  fireEvent.change(filter, { target: { value: 'billed' } });
+  const table = within(await screen.findByRole('table', { name: 'Billed order items' }));
+  assert.equal(table.getAllByRole('row').length, 4);
+  assert.equal(table.queryByText(candidate.number), null);
+  assert.equal(table.queryByText('now-unresolved'), null);
+  const input = screen.getByLabelText('Search by bill or order number');
+  fireEvent.change(input, { target: { value: '  le-55 ' } });
+  assert.equal(table.getAllByRole('row').length, 3);
+  assert.ok(table.getByText('Automatic'));
+  assert.ok(table.getByText('Seller-confirmed'));
+  fireEvent.change(input, { target: { value: 'od-hi' } });
+  assert.ok(table.getByText('AUG-1'));
+  fireEvent.change(input, { target: { value: 'aug-2' } });
+  assert.equal(table.getAllByRole('row').length, 2);
+  assert.ok(table.getByText('2026-08-03'));
+  fireEvent.change(input, { target: { value: 'not-an-order' } });
+  assert.ok(screen.getByText('No billed order items match your search.'));
+  fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Show other tracked orders' }));
+  assert.equal(historyReads, 1);
+  fireEvent.click(screen.getByRole('button', { name: 'Hide other tracked orders' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh billed orders' }));
+  await screen.findByText(/Could not check billed orders.*Tally is offline/);
+  assert.equal(screen.queryByRole('table', { name: 'Billed order items' }), null);
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh billed orders' }));
+  await waitFor(() => assert.equal(typeof resolveLate, 'function'));
+  fireEvent.change(filter, { target: { value: 'all' } });
+  fireEvent.change(filter, { target: { value: 'billed' } });
+  await screen.findByText('CORRECT-4');
+  await act(async () => resolveLate(response({ orders: [], billed: [earlier] })));
+  assert.equal(screen.queryByText('AUG-1'), null);
+  assert.equal(historyReads, 4);
+});
+
+test('Billed keeps genuinely earlier preview matches, works without a preview and searches beyond the first 50 items', async (t) => {
+  const history = Array.from({ length: 57 }, (_, index): BilledOrderItem => ({
+    orderId: 'OD-' + index,
+    orderItemId: 'history-' + index.toString().padStart(2, '0'),
+    orderDate: '2026-11-15',
+    sku: 'rubber',
+    bill: { ...candidate, number: 'TALLY-' + index },
+    method: 'automatic',
+  }));
+  t.mock.method(globalThis, 'fetch', async () => response({ orders: [], billed: history }));
+  const before: BillingRow = {
+    ...item,
+    status: 'matched',
+    manualBillId: candidate.id,
+    bill: candidate,
+    orderDate: '2026-11-01',
+  };
+  const props = {
+    trackingFrom: '2026-11-10',
+    tracking: {
+      companyId: 'company',
+      accountId: 'seller',
+      revision: 0,
+      onFind: () => assert.fail('Unexpected lookup'),
+      onRelease: () => assert.fail('Unexpected release'),
+    },
+    confirmed: true,
+    busy: false,
+    onMatch: assert.fail,
+    onUnmatch: assert.fail,
+  };
+  const view = render(<BillingResults {...props} report={{ ...report, rows: [before] }} />);
+  fireEvent.change(screen.getByLabelText('Order status'), { target: { value: 'billed' } });
+  await screen.findByText('Showing 50 of 58 billed order items');
+  const table = () => within(screen.getByRole('table', { name: 'Billed order items' }));
+  assert.equal(table().getAllByRole('row').length, 51);
+  const input = screen.getByLabelText('Search by bill or order number');
+  fireEvent.change(input, { target: { value: 'TALLY-56' } });
+  assert.ok(table().getByText('history-56'));
+  fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Show more billed orders' }));
+  assert.equal(table().getAllByRole('row').length, 59);
+  assert.ok(table().getByText(candidate.number));
+  fireEvent.change(input, { target: { value: 'history' } });
+  assert.equal(table().getAllByRole('row').length, 51);
+  view.rerender(<BillingResults {...props} report={null} />);
+  assert.equal(
+    screen.getByLabelText<HTMLInputElement>('Search by bill or order number').value,
+    'history',
+  );
+  assert.equal(table().queryByText(candidate.number), null);
+  view.rerender(
+    <BillingResults {...props} tracking={undefined} report={{ ...report, rows: [before] }} />,
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+  await waitFor(() => assert.equal(table().getAllByRole('row').length, 2));
+  assert.ok(table().getByText('Seller-confirmed'));
+  assert.ok(table().getByText(candidate.number));
+});
+
+test('finding a bill from a preview separates duplicate voucher numbers and requires a fresh mismatch acknowledgement', async (t) => {
+  const scope = { companyId: 'company', accountId: 'seller' };
+  const savedRule: BillingRule = { ...rule, field: 'reference' };
+  const currentReport = {
+    ...report,
+    rule: savedRule,
+    rows: [
+      item,
+      {
+        ...item,
+        orderItemId: 'needs-mapping',
+        status: 'unmapped',
+        baseUnits: null,
+        reason: 'Map this listing to a Tally stock item first.',
+        candidates: [],
+      },
+    ],
+  };
+  let searches = 0;
+  let links = 0;
+  let previews = 0;
+  t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    switch (String(url)) {
+      case '/api/billing/workspace':
+        return response({ rule: savedRule, report: currentReport });
+      case '/api/billing/coverage':
+        return response({ from: null, current: false, checkedThrough: null });
+      case '/api/billing/pending':
+        return response({ trackingStarted: false, listings: [] });
+      case '/api/billing/find-bill':
+        searches++;
+        assert.deepEqual(body, {
+          ...scope,
+          orderItemId: item.orderItemId,
+          billNumber: 'INV-4',
+          previewId: report.previewId,
+        });
+        return response({
+          ...billLookup,
+          reviewId: 'search-' + searches,
+          bills:
+            searches === 1
+              ? []
+              : [
+                  ...billLookup.bills,
+                  {
+                    ...billLookup.bills[0],
+                    id: 'wrong-stock',
+                    lines: [{ itemName: 'Other tyre', unit: 'tyres', quantity: 1 }],
+                    issue: 'The stock item differs from the order.',
+                  },
+                ],
+        });
+      case '/api/billing/link-bill':
+        links++;
+        assert.deepEqual(body, {
+          ...scope,
+          orderItemId: item.orderItemId,
+          billId: candidate.id,
+          reviewId: 'search-3',
+          acceptReferenceMismatch: true,
+        });
+        return response({ saved: true });
+      case '/api/billing/preview':
+        if (++previews === 1) return response({ error: 'Preview unavailable' }, 503);
+        return response({
+          ...currentReport,
+          rows: [{ ...item, status: 'matched', bill: candidate, manualBillId: candidate.id }],
+        });
+      default:
+        throw new Error('Unexpected request ' + url);
+    }
+  });
+  render(
+    <BillingScreen
+      {...scope}
+      inventory={initialState('demo', 'unused')}
+      onSaveMapping={async () => assert.fail('Unexpected mapping')}
+      onAccountChange={assert.fail}
+      onConnect={assert.fail}
+    />,
+  );
+  fireEvent.click(await screen.findByRole('button', { name: 'Find Tally bill' }));
+  const dialog = within(screen.getByRole('dialog'));
+  const unmappedRow = within(screen.getByText('needs-mapping').closest('tr')!);
+  assert.ok(unmappedRow.getByText('Map this listing to a Tally stock item first.'));
+  assert.equal(unmappedRow.queryByText('Find Tally bill'), null);
+  const input = dialog.getByRole('textbox', { name: 'Exact Tally bill number' });
+  fireEvent.change(input, { target: { value: ' INV-4 ' } });
+  fireEvent.click(dialog.getByRole('button', { name: 'Search bills' }));
+  await dialog.findByText(/No sales bill with this number/);
+  fireEvent.click(dialog.getByRole('button', { name: 'Recheck bill' }));
+  const select = await dialog.findByRole('combobox', { name: 'Matching Tally vouchers' });
+  assert.ok(dialog.getByRole('option', { name: /Tally voucher ID wrong-stock/ }));
+  fireEvent.change(select, { target: { value: 'wrong-stock' } });
+  assert.ok(dialog.getByText('The stock item differs from the order.'));
+  assert.ok(dialog.getByRole<HTMLButtonElement>('button', { name: 'Confirm bill link' }).disabled);
+  fireEvent.change(select, { target: { value: candidate.id } });
+  const comparison = within(dialog.getByRole('table', { name: 'Order and bill comparison' }));
+  assert.ok(comparison.getByText(item.orderId));
+  assert.ok(comparison.getByText('ODER-2'));
+  assert.ok(comparison.getByText('19 Nov 2026'));
+  assert.ok(comparison.getByText(candidate.date));
+  assert.ok(dialog.getByRole<HTMLButtonElement>('button', { name: 'Confirm bill link' }).disabled);
+  fireEvent.click(dialog.getByRole('checkbox'));
+  fireEvent.click(dialog.getByRole('button', { name: 'Recheck bill' }));
+  fireEvent.change(await dialog.findByRole('combobox', { name: 'Matching Tally vouchers' }), {
+    target: { value: candidate.id },
+  });
+  assert.equal(dialog.getByRole<HTMLInputElement>('checkbox').checked, false);
+  fireEvent.click(dialog.getByRole('checkbox'));
+  fireEvent.click(dialog.getByRole('button', { name: 'Confirm bill link' }));
+  await screen.findByText('Preview unavailable');
+  assert.ok(screen.getByText('Tally bill linked to ' + item.orderItemId + '.'));
+  assert.equal(screen.queryByRole('dialog'), null);
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh preview' }));
+  await screen.findByRole('button', { name: 'Release manual match' });
+  assert.equal(links, 1);
+});
+
+test('older tracked orders can be linked and released independently of the current preview', async (t) => {
+  const scope = { companyId: 'company', accountId: 'seller' };
+  const tracked = { ...report, period: 'tracking' as const };
+  const older = {
+    orderItemId: 'old-item',
+    orderId: 'old-order',
+    orderDate: '2026-08-01',
+    sku: 'old-sku',
+    status: 'reserved',
+    reason: 'Waiting for a matching bill.',
+  };
+  let linked = false;
+  let historyReads = 0;
+  let saves = 0;
+  let releases = 0;
+  t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    switch (String(url)) {
+      case '/api/billing/workspace':
+        return response({ rule, report: tracked, trackingFrom: older.orderDate });
+      case '/api/billing/coverage':
+        return response({ from: older.orderDate, current: true, checkedThrough: null });
+      case '/api/billing/pending':
+        return response({ trackingStarted: true, listings: [] });
+      case '/api/billing/tracked-bills':
+        historyReads++;
+        return response({
+          orders: [
+            {
+              ...older,
+              ...(linked && {
+                status: 'matched',
+                reason: 'Confirmed by seller.',
+                manualBillId: candidate.id,
+                manualBillNumber: candidate.number,
+                manualBillDate: candidate.date,
+                linkToken: 'release-a',
+              }),
+            },
+            { ...older, orderItemId: item.orderItemId },
+          ],
+        });
+      case '/api/billing/find-bill':
+        assert.deepEqual(body, {
+          ...scope,
+          orderItemId: older.orderItemId,
+          billNumber: candidate.number,
+        });
+        return response({
+          ...billLookup,
+          ...older,
+          field: 'manual',
+          bills: [{ ...billLookup.bills[0], referenceMismatch: false }],
+        });
+      case '/api/billing/link-bill':
+        assert.deepEqual(body, {
+          ...scope,
+          orderItemId: older.orderItemId,
+          billId: candidate.id,
+          reviewId: billLookup.reviewId,
+          acceptReferenceMismatch: false,
+        });
+        saves++;
+        linked = true;
+        return response({ saved: true });
+      case '/api/billing/release-bill':
+        assert.deepEqual(body, {
+          ...scope,
+          orderItemId: older.orderItemId,
+          billId: candidate.id,
+          linkToken: 'release-a',
+        });
+        releases++;
+        linked = false;
+        return response({ saved: true });
+      case '/api/billing/preview':
+        return response(tracked);
+      default:
+        throw new Error('Unexpected request ' + url);
+    }
+  });
+  render(
+    <BillingScreen
+      {...scope}
+      inventory={initialState('demo', 'unused')}
+      onSaveMapping={async () => assert.fail('Unexpected mapping')}
+      onAccountChange={assert.fail}
+      onConnect={assert.fail}
+    />,
+  );
+  const open = await screen.findByRole('button', { name: 'Show other tracked orders' });
+  assert.equal(historyReads, 0);
+  fireEvent.click(open);
+  const history = within(await screen.findByRole('table', { name: 'Other tracked orders' }));
+  assert.equal(history.queryByText(item.orderItemId), null);
+  fireEvent.click(history.getByRole('button', { name: 'Find Tally bill' }));
+  const dialog = within(screen.getByRole('dialog'));
+  fireEvent.change(dialog.getByLabelText('Exact Tally bill number'), {
+    target: { value: candidate.number },
+  });
+  fireEvent.click(dialog.getByRole('button', { name: 'Search bills' }));
+  fireEvent.click(await dialog.findByRole('button', { name: 'Confirm bill link' }));
+  await screen.findByText('Bill INV-4 · 2026-11-19');
+  fireEvent.click(await screen.findByRole('button', { name: 'Release manual match' }));
+  await screen.findByText('Manual confirmation released for old-item.');
+  const freshHistory = within(await screen.findByRole('table', { name: 'Other tracked orders' }));
+  assert.ok(freshHistory.getByRole('button', { name: 'Find Tally bill' }));
+  assert.deepEqual([historyReads, saves, releases], [3, 1, 1]);
+});
 
 test('the preview shows the listing and Tally quantities in their own units', () => {
   const rows = [
@@ -181,10 +598,10 @@ test('seller selects their ledger, previews, confirms setup, and explicitly matc
     (screen.getByRole('button', { name: 'Confirm billing setup' }) as HTMLButtonElement).disabled,
   );
   fireEvent.change(screen.getByLabelText('Order period'), { target: { value: '30' } });
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Show unresolved only' }));
+  fireEvent.change(screen.getByLabelText('Order status'), { target: { value: 'unresolved' } });
   fireEvent.click(screen.getByRole('button', { name: 'Confirm billing setup' }));
   const bill = await screen.findByLabelText('Choose bill for OI-82');
-  assert.ok(screen.getByRole('checkbox', { name: 'Show unresolved only', checked: true }));
+  assert.equal(screen.getByLabelText<HTMLSelectElement>('Order status').value, 'unresolved');
   assert.ok(screen.getByRole('option', { name: /Tally voucher ID voucher-a/ }));
   assert.ok(screen.getByRole('option', { name: /Tally voucher ID voucher-b/ }));
   const confirm = screen.getByRole('button', { name: 'Confirm bill match' }) as HTMLButtonElement;
@@ -193,7 +610,7 @@ test('seller selects their ledger, previews, confirms setup, and explicitly matc
   fireEvent.click(confirm);
   await screen.findByText('1 matched · 0 unresolved');
   assert.ok(screen.getByText('All order items in this preview have a matched bill.'));
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Show unresolved only', checked: true }));
+  fireEvent.change(screen.getByLabelText('Order status'), { target: { value: 'all' } });
   fireEvent.click(screen.getByRole('button', { name: 'Release manual match' }));
   await screen.findByText('0 matched · 1 unresolved');
   assert.deepEqual(commands, [

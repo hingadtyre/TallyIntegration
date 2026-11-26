@@ -14,6 +14,28 @@ export interface BillCandidate {
   date: string;
 }
 
+export interface BillLookupCandidate extends BillCandidate {
+  recordedReference: string | null;
+  lines: { itemName: string; unit: string; quantity: number }[];
+  referenceMismatch: boolean;
+  issue: string | null;
+}
+
+export interface BillLookup {
+  reviewId: string;
+  orderItemId: string;
+  orderId: string;
+  orderDate: string;
+  sku: string;
+  ledgerName: string;
+  itemName: string;
+  unit: string;
+  baseUnits: number | null;
+  expectedReference: string | null;
+  field: BillField;
+  bills: BillLookupCandidate[];
+}
+
 export interface BillingRow {
   orderItemId: string;
   orderId: string;
@@ -75,6 +97,33 @@ export interface PendingOrderResult {
   status: 'matched' | 'reserved' | 'review' | 'cancelled' | 'unmapped';
   reason: string;
   baseUnits: number | null;
+}
+
+export interface TrackedBillOrder {
+  orderItemId: string;
+  orderId: string;
+  orderDate: string;
+  sku: string;
+  status: PendingOrderResult['status'];
+  reason: string;
+  manualBillId?: string;
+  manualBillNumber?: string;
+  manualBillDate?: string;
+  linkToken?: string;
+}
+
+export interface BilledOrderItem {
+  orderId: string;
+  orderItemId: string;
+  orderDate: string;
+  sku: string;
+  bill: BillCandidate;
+  method: 'automatic' | 'seller-confirmed';
+}
+
+export interface TrackedBillHistory {
+  orders: TrackedBillOrder[];
+  billed: BilledOrderItem[];
 }
 
 export interface PendingListingCheck {

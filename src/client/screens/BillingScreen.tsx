@@ -3,6 +3,7 @@ import type {
   BillingReport,
   BillingRule,
   BillingWorkspace,
+  TrackedBillOrder,
 } from '../../shared/billing-contracts.js';
 import type { Snapshot } from '../../shared/contracts.js';
 import { errorMessage, requestJson } from '../api.js';
@@ -11,6 +12,7 @@ import { StockCoverageSetup } from './StockCoverageSetup.js';
 import { BillingSetup, fieldLabels, referenceLabels } from './BillingSetup.js';
 import { BillingListingMappings } from './BillingListingMappings.js';
 import type { SaveMapping } from './MappingDialog.js';
+import { FindTallyBill, type BillTarget } from './FindTallyBill.js';
 
 type Scope = { companyId: string; accountId: string };
 type MappingAccess = { inventory: Snapshot; onSaveMapping: SaveMapping };
@@ -138,11 +140,13 @@ function BillingReview({
   const [notice, setNotice] = useState('');
   const [requiresRefresh, setRequiresRefresh] = useState(false);
   const [trackingRevision, setTrackingRevision] = useState(0);
+  const [billReviewRevision, setBillReviewRevision] = useState(0);
   const [coverageSaving, setCoverageSaving] = useState(false);
   const [mappingBusy, setMappingBusy] = useState(false);
+  const [findOrder, setFindOrder] = useState<BillTarget | null>(null);
   const previewRequest = useRef<AbortController | null>(null);
   const { rule, report, trackingFrom } = workspace;
-  const locked = !!busy || coverageSaving || mappingBusy;
+  const locked = !!busy || coverageSaving || mappingBusy || !!findOrder;
   const periodChanged = !!report && days !== orderPeriod(report);
   const visibleReport = requiresRefresh || periodChanged ? null : report;
   const confirmed = !!(
@@ -173,6 +177,7 @@ function BillingReview({
       const controller = new AbortController();
       previewRequest.current = controller;
       setBusy('Reading orders and bills…');
+      setBillReviewRevision((value) => value + 1);
       setError('');
       setNotice('');
       setRequiresRefresh(true);
@@ -250,6 +255,7 @@ function BillingReview({
         billId,
       });
       setWorkspace(next);
+      setTrackingRevision((value) => value + 1);
       setNotice('Bill match saved.');
     });
   const unmatch = (orderItemId: string) =>
@@ -262,8 +268,36 @@ function BillingReview({
         orderItemId,
       });
       setWorkspace(next);
+      setTrackingRevision((value) => value + 1);
       setNotice('Manual confirmation released.');
     });
+  async function refreshBillDecision(message: string) {
+    setFindOrder(null);
+    setTrackingRevision((value) => value + 1);
+    if (rule) await preview(rule, days);
+    setNotice(message);
+  }
+  async function releaseTracked(order: TrackedBillOrder) {
+    if (locked || !order.manualBillId || !order.linkToken) return;
+    setBusy('Releasing match…');
+    setError('');
+    setNotice('');
+    try {
+      await requestJson<{ saved: true }>('/billing/release-bill', {
+        companyId,
+        accountId,
+        orderItemId: order.orderItemId,
+        billId: order.manualBillId,
+        linkToken: order.linkToken,
+      });
+      await refreshBillDecision('Manual confirmation released for ' + order.orderItemId + '.');
+    } catch (cause) {
+      setTrackingRevision((value) => value + 1);
+      setError(errorMessage(cause));
+    } finally {
+      setBusy('');
+    }
+  }
   const shownRule = report?.rule ?? rule;
   return (
     <div className="billing-layout">
@@ -392,7 +426,7 @@ function BillingReview({
           key={JSON.stringify(rule)}
           companyId={companyId}
           accountId={accountId}
-          disabled={!!busy || mappingBusy || (!!report && !confirmed)}
+          disabled={!!busy || mappingBusy || !!findOrder || (!!report && !confirmed)}
           onSavingChange={setCoverageSaving}
           onStart={startTracking}
         />
@@ -404,11 +438,12 @@ function BillingReview({
           accountId={accountId}
           inventory={inventory}
           report={visibleReport}
-          busy={!!busy || coverageSaving}
+          busy={!!busy || coverageSaving || !!findOrder}
           onCheckingChange={setMappingBusy}
           onSaveMapping={onSaveMapping}
           onRefreshPreview={async () => {
             if (report) await preview(report.rule, days);
+            else setBillReviewRevision((value) => value + 1);
           }}
         />
       )}
@@ -418,14 +453,46 @@ function BillingReview({
           for this company.
         </p>
       )}
-      {!editing && visibleReport && (
+      {!editing && (visibleReport || rule) && (
         <BillingResults
           report={visibleReport}
           trackingFrom={trackingFrom}
+          tracking={
+            rule && trackingFrom && (!report || confirmed)
+              ? {
+                  companyId,
+                  accountId,
+                  revision: trackingRevision + billReviewRevision,
+                  onFind: setFindOrder,
+                  onRelease: (order) => void releaseTracked(order),
+                }
+              : undefined
+          }
           confirmed={confirmed}
           busy={locked}
           onMatch={(order, bill) => void match(order, bill)}
           onUnmatch={(order) => void unmatch(order)}
+          onFindBill={
+            visibleReport
+              ? (row) => setFindOrder({ ...row, previewId: visibleReport.previewId })
+              : undefined
+          }
+        />
+      )}
+      {findOrder && rule && (
+        <FindTallyBill
+          companyId={companyId}
+          accountId={accountId}
+          order={findOrder}
+          ledgerName={rule.ledgerName}
+          onClose={() => setFindOrder(null)}
+          onRefreshOrder={() => {
+            setFindOrder(null);
+            void preview(rule, days);
+          }}
+          onSaved={() =>
+            void refreshBillDecision('Tally bill linked to ' + findOrder.orderItemId + '.')
+          }
         />
       )}
       {!editing && !busy && !visibleReport && (

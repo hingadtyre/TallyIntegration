@@ -3,7 +3,11 @@ import test from 'node:test';
 import type { FlipkartBillingOrder } from '../../src/adapters/flipkart-billing.js';
 import type { TallySalesBill } from '../../src/adapters/tally.js';
 import type { BillingRule } from '../../src/shared/billing-contracts.js';
-import { matchBills } from '../../src/server/billing-matcher.js';
+import {
+  matchBills,
+  storeReviewedBillLink,
+  type BillingEvidence,
+} from '../../src/server/billing-matcher.js';
 import { seedSampleMarketplace } from '../../src/server/marketplace-catalog.js';
 import { initialState } from '../../src/server/seed.js';
 import type { BillingData } from '../../src/server/storage/billing-records.js';
@@ -52,6 +56,22 @@ function fixture() {
     saved,
     match(orders = [order], bills = [bill]) {
       return matchBills(scope, rule, { orders, bills }, saved, state, catalogue.listings);
+    },
+    find(
+      billNumber = bill.number,
+      knownOrders: BillingEvidence['knownOrders'] = [],
+      bills = [bill],
+      knownBills: BillingEvidence['knownBills'] = [],
+    ) {
+      return matchBills(
+        scope,
+        rule,
+        { orders: [order], bills, knownOrders, knownBills },
+        saved,
+        state,
+        catalogue.listings,
+        { orderItemId: order.orderItemId, billNumber },
+      );
     },
   };
 }
@@ -235,4 +255,131 @@ test('a manual confirmation across a missing marketplace invoice number needs re
   assert.equal(changed.rows[0].status, 'review');
   assert.equal(changed.rows[0].bill, null);
   assert.equal(changed.stock[0].unmatchedUnits, 1);
+});
+
+test('an exact voucher-number lookup leaves ordinary matches alone and verifies a saved exception on later reads', () => {
+  const f = fixture();
+  f.order.orderId = 'FK-123';
+  f.bill.reference = 'FK-132';
+  const initial = f.find();
+  assert.deepEqual(initial.rows[0].candidates, []);
+  assert.equal(initial.rows[0].status, 'unmatched');
+  assert.deepEqual(f.find(f.bill.number.slice(0, -1)).voucherMatches, []);
+  const [chosen] = initial.voucherMatches;
+  assert.equal(chosen.reason, null);
+  assert.equal(chosen.actualReference, 'FK-132');
+  assert.equal(chosen.referenceMatches, false);
+  assert.equal(chosen.lines[0].quantity, 1);
+  assert.ok(chosen.link);
+  const saved = storeReviewedBillLink(chosen.link, 'first');
+  f.saved.links.push(saved);
+  assert.equal(f.match().rows[0].status, 'matched');
+  assert.equal(f.match().stock[0].unmatchedUnits, 0);
+  assert.equal(f.match().rows[0].manualBillId, f.bill.externalId);
+  f.state.listings[0].verified = false;
+  assert.equal(f.match().rows[0].status, 'review');
+  assert.equal(f.match().stock[0].previewAvailable, null);
+  f.state.listings[0].verified = true;
+  f.bill.reference = 'FK-123';
+  assert.equal(f.match().rows[0].status, 'review');
+  assert.equal(f.match().stock[0].unmatchedUnits, 1);
+  f.bill.reference = 'FK-132';
+  f.bill.lines.push({ itemExternalId: 'another-item', unit: 'ea', quantity: 2 });
+  assert.equal(f.match().rows[0].status, 'review');
+  f.bill.lines.pop();
+  f.saved.links.pop();
+  assert.equal(f.match().rows[0].status, 'unmatched');
+  assert.notEqual(
+    storeReviewedBillLink(f.find().voucherMatches[0].link!, 'second').fingerprint,
+    saved.fingerprint,
+  );
+});
+
+test('a competing order claim prevents a voucher-number exception and invalidates one already saved', () => {
+  const f = fixture();
+  f.bill.reference = 'FK-132';
+  const other = {
+    ...f.order,
+    orderItemId: 'line-2',
+    orderId: 'FK-132',
+    invoiceNumber: 'other-invoice',
+  };
+  const known = [{ accountId: 'another-seller', order: other }];
+  const eligible = f.find().voucherMatches[0].link!;
+  assert.match(f.find(f.bill.number, known).voucherMatches[0].reason!, /another known order/);
+  f.saved.links.push(eligible);
+  assert.equal(f.find(f.bill.number, known).rows[0].status, 'review');
+  const contested = f.match([f.order, other]);
+  assert.deepEqual(
+    contested.rows.map((row) => row.status),
+    ['review', 'review'],
+  );
+  assert.equal(contested.stock[0].unmatchedUnits, 2);
+  const extra = { ...f.bill, externalId: 'another-bill', reference: f.order.orderId };
+  assert.equal(f.match([f.order], [f.bill, extra]).rows[0].status, 'review');
+  assert.equal(f.find(f.bill.number, [], [f.bill], [extra]).rows[0].status, 'review');
+  f.saved.links.pop();
+  assert.match(
+    f.find(f.bill.number, [], [f.bill], [extra]).voucherMatches[0].reason!,
+    /Another voucher/,
+  );
+  assert.deepEqual(f.find(extra.number, [], [], [extra]).voucherMatches, []);
+});
+
+test('separate mapped items on the same Flipkart order can have distinct assignments in one voucher', () => {
+  const f = fixture();
+  f.bill.reference = 'wrong';
+  const sibling = {
+    ...f.order,
+    orderItemId: 'another-line',
+    listingId: 'another-listing',
+    sku: 'another-sku',
+  };
+  const listing = { ...f.catalogue.listings[0], id: sibling.listingId, sku: sibling.sku };
+  f.catalogue.listings.push(listing);
+  const target = f.state.listings.find(
+    (row) => row.sku === f.order.sku && row.location === f.order.locationId,
+  )!;
+  const mapped = {
+    ...target,
+    id: 'another-mapping',
+    marketplaceListingId: listing.id,
+    sku: listing.sku,
+    itemId: f.state.items[1].id,
+  };
+  f.state.listings.push(mapped);
+  const known = [{ accountId: f.scope.accountId, order: sibling }];
+  assert.ok(f.find(f.bill.number, known).voucherMatches[0].link);
+  mapped.itemId = f.stock.id;
+  assert.match(f.find(f.bill.number, known).voucherMatches[0].reason!, /another known order/);
+});
+
+test('voucher inspection explains stock, date, ownership and order status blockers without issuing an assignment', () => {
+  const f = fixture();
+  f.bill.reference = 'FK-132';
+  const checkBill = (bill: TallySalesBill, problem: RegExp) => {
+    const [choice] = f.find(bill.number, [], [bill]).voucherMatches;
+    assert.match(choice.reason!, problem);
+    assert.equal(choice.link, undefined);
+  };
+  checkBill({ ...f.bill, date: '2026-11-19' }, /before the order/);
+  checkBill({ ...f.bill, lines: [] }, /no line/);
+  checkBill({ ...f.bill, lines: [{ ...f.bill.lines[0], quantity: 3 }] }, /unit and quantity/);
+  checkBill({ ...f.bill, lines: [{ ...f.bill.lines[0], unit: 'pairs' }] }, /unit and quantity/);
+  checkBill({ ...f.bill, lines: [f.bill.lines[0], f.bill.lines[0]] }, /one line/);
+  for (const change of [
+    { stockDisposition: 'cancelled' as const },
+    { stockDisposition: 'uncertain' as const },
+    { eligibilityUnverified: true as const },
+    { stockIdentityConflict: true as const },
+    { quantity: 3 },
+  ]) {
+    const known = [{ accountId: f.scope.accountId, order: { ...f.order, ...change } }];
+    const [choice] = f.find(f.bill.number, known).voucherMatches;
+    assert.match(choice.reason!, /unverified or conflicting/);
+    assert.equal(choice.link, undefined);
+  }
+  const [choice] = f.find().voucherMatches;
+  f.saved.links.push({ ...choice.link!, accountId: 'second-seller' });
+  checkBill(f.bill, /already assigned/);
 });

@@ -3,6 +3,8 @@ import { test, type TestContext } from 'node:test';
 import type { FlipkartBillingOrder } from '../../src/adapters/flipkart-billing.js';
 import type { TallySalesBill, TallyStockItem } from '../../src/adapters/tally.js';
 import { BillingService } from '../../src/server/billing-service.js';
+import { BillLookupService } from '../../src/server/bill-lookup.js';
+import type { BillLookup, TrackedBillHistory } from '../../src/shared/billing-contracts.js';
 import { saleDay } from '../../src/server/billing-matcher.js';
 import { StockAvailabilityService } from '../../src/server/stock-availability.js';
 import { desiredStock } from '../../src/server/proposals.js';
@@ -107,10 +109,13 @@ function setup(t: TestContext, sellerPacks = [1]) {
           async readOrders() {
             throw new Error('Preview is not a stock source');
           },
-          async readStockOrders(token, from, to) {
+          async readStockOrders(token, from, to, includeInvoices) {
             if (source.unavailable === token) throw new Error('Offline');
             return structuredClone(
-              orders.get(token)!.filter((o) => o.orderDate >= from && o.orderDate <= to),
+              orders
+                .get(token)!
+                .filter((o) => o.orderDate >= from && o.orderDate <= to)
+                .map((o) => ({ ...o, invoiceNumber: includeInvoices ? o.invoiceNumber : null })),
             );
           },
         },
@@ -139,6 +144,7 @@ function setup(t: TestContext, sellerPacks = [1]) {
       }),
     );
   let service = makeService();
+  const lookup = new BillLookupService(f.store, service, new BillingService(f.store));
   const confirm = (date = yesterday) =>
     service.coverageCommand('/api/billing/coverage/start', {
       companyId,
@@ -155,6 +161,8 @@ function setup(t: TestContext, sellerPacks = [1]) {
     companyId,
     itemId,
     confirm,
+    billCommand: (action: string, input: Record<string, unknown> = {}, seller = 'seller-0') =>
+      lookup.command('/api/billing/' + action, { companyId, ...input }, seller),
     available: (batch?: object, target = itemId) => service.forItem(companyId, target, batch),
     preview: () => service.forItem(companyId, itemId, undefined, true),
     review: () => service.reviewOrders(companyId, 'seller-0'),
@@ -198,6 +206,191 @@ function setup(t: TestContext, sellerPacks = [1]) {
     },
   };
 }
+
+test('an older mapped sale can be looked up, linked across previews, revalidated and released', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-01T08:00:00Z') });
+  const s = setup(t);
+  s.confirm();
+  await s.available();
+  const order = s.orders.get('seller-0')![0];
+  const bill = { ...s.bill(), reference: 'purchase-typo' };
+  s.orders.set('seller-0', []);
+  t.mock.timers.setTime(Date.parse('2026-08-25T08:00:00Z'));
+  await s.refreshHistory();
+  t.mock.timers.setTime(Date.parse('2026-09-08T08:00:00Z'));
+  s.bills.set('seller-0', [bill]);
+  const history = () => s.billCommand('tracked-bills') as Promise<TrackedBillHistory>;
+  const tracked = async () => (await history()).orders[0];
+  const search = async () =>
+    s.billCommand('find-bill', {
+      orderItemId: order.orderItemId,
+      billNumber: bill.number,
+    }) as Promise<BillLookup>;
+  const confirm = (review: BillLookup, acceptReferenceMismatch: boolean) =>
+    s.billCommand('link-bill', {
+      orderItemId: order.orderItemId,
+      billId: bill.externalId,
+      reviewId: review.reviewId,
+      acceptReferenceMismatch,
+    });
+  const release = (linkToken: string, seller?: string) =>
+    s.billCommand(
+      'release-bill',
+      {
+        orderItemId: order.orderItemId,
+        billId: bill.externalId,
+        linkToken,
+      },
+      seller,
+    );
+  const coverage = s.f.store.readStockCoverage(s.companyId);
+  const original = s.f.store.read();
+  assert.equal((await tracked()).status, 'reserved');
+  assert.deepEqual((await history()).billed, []);
+  const first = await search();
+  assert.deepEqual(first.bills[0], {
+    id: bill.externalId,
+    number: bill.number,
+    date: bill.date,
+    recordedReference: bill.reference,
+    lines: [{ itemName: 'Tyre', unit: 'ea', quantity: 1 }],
+    referenceMismatch: true,
+    issue: null,
+  });
+  assert.equal(first.expectedReference, order.orderId);
+  await assert.rejects(confirm(first, false), /Confirm the different/);
+  s.bills.set('seller-0', [{ ...bill, narration: 'changed between requests' }]);
+  await assert.rejects(confirm(first, true), /changed/);
+  assert.equal(s.f.store.readBilling().links.length, 0);
+  await confirm(await search(), true);
+  const linked = await tracked();
+  assert.equal(linked.status, 'matched');
+  assert.equal(linked.manualBillId, bill.externalId);
+  assert.equal(linked.manualBillNumber, bill.number);
+  assert.equal(linked.manualBillDate, bill.date);
+  assert.ok(linked.linkToken);
+  assert.deepEqual((await history()).billed, [
+    {
+      orderId: order.orderId,
+      orderItemId: order.orderItemId,
+      orderDate: order.orderDate,
+      sku: order.sku,
+      bill: { id: bill.externalId, number: bill.number, date: bill.date },
+      method: 'seller-confirmed',
+    },
+  ]);
+  assert.deepEqual(s.f.store.readStockCoverage(s.companyId), coverage);
+  assert.deepEqual(s.f.store.read(), original);
+  assert.equal((await s.available()).reservedUnits, 0);
+  await assert.rejects(release(linked.linkToken, 'seller-1'), /match changed/);
+  s.bills.set('seller-0', []);
+  assert.equal((await tracked()).status, 'review');
+  assert.deepEqual((await history()).billed, []);
+  await assert.rejects(s.available(), /confirmation needs review/);
+  await release(linked.linkToken);
+  assert.equal((await tracked()).status, 'reserved');
+  s.bills.set('seller-0', [{ ...bill, narration: 'changed between requests' }]);
+  await confirm(await search(), true);
+  await assert.rejects(release(linked.linkToken), /match changed/);
+});
+
+test('Billed verifies retained automatic matches per seller and per order item beyond 30 days', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-01T08:00:00Z') });
+  const s = setup(t, [1, 1]);
+  s.f.store.updateBilling((data) => {
+    for (const rule of data.rules) rule.reference = 'orderItemId';
+  });
+  const sale = s.orders.get('seller-0')![0];
+  s.orders.get('seller-0')!.push({ ...sale, orderItemId: 'unbilled-sibling' });
+  const first = { ...s.bill(0, 'voucher-a'), number: 'FK/1001', reference: sale.orderItemId };
+  const second = { ...s.bill(1, 'voucher-b'), number: 'FK/1002', reference: sale.orderItemId };
+  s.bills.set('seller-0', [first]);
+  s.bills.set('seller-1', [second]);
+  const history = (seller = 'seller-0') =>
+    s.billCommand('tracked-bills', {}, seller) as Promise<TrackedBillHistory>;
+  assert.deepEqual(await history(), { orders: [], billed: [] });
+  s.confirm();
+  await s.refreshHistory();
+  s.orders.clear();
+  s.orders.set('seller-0', []);
+  s.orders.set('seller-1', []);
+  t.mock.timers.setTime(Date.parse('2026-08-22T08:00:00Z'));
+  await s.refreshHistory();
+  t.mock.timers.setTime(Date.parse('2026-09-08T08:00:00Z'));
+  const saved = s.f.store.readStockCoverage(s.companyId);
+  const selected = await history();
+  assert.deepEqual(selected.billed, [
+    {
+      orderItemId: sale.orderItemId,
+      orderId: sale.orderId,
+      orderDate: sale.orderDate,
+      sku: sale.sku,
+      bill: { id: first.externalId, number: first.number, date: first.date },
+      method: 'automatic',
+    },
+  ]);
+  assert.deepEqual(
+    selected.orders.map((o) => o.orderItemId),
+    ['unbilled-sibling'],
+  );
+  assert.deepEqual(
+    (await history('seller-1')).billed.map((row) => row.bill.number),
+    [second.number],
+  );
+  assert.deepEqual(s.f.store.readStockCoverage(s.companyId), saved);
+  // Each seller's own match can initially look exact, but a competing claim
+  // on the same voucher/item downgrades both when the company reconciles them.
+  s.bills.set('seller-1', [first]);
+  assert.deepEqual((await history()).billed, []);
+  assert.deepEqual((await history('seller-1')).billed, []);
+  s.bills.set('seller-1', [second]);
+  s.bills.set('seller-0', [{ ...first, lines: [{ ...first.lines[0], quantity: 2 }] }]);
+  assert.deepEqual((await history()).billed, []);
+});
+
+test('voucher assignment checks competing sellers, new evidence, and expiry before saving', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-01T08:00:00Z') });
+  const s = setup(t, [1, 1]);
+  s.confirm();
+  const bill = { ...s.bill(), reference: 'mistyped' };
+  const other = s.orders.get('seller-1')![0];
+  const search = async () =>
+    s.billCommand('find-bill', {
+      orderItemId: 'line',
+      billNumber: bill.number,
+    }) as Promise<BillLookup>;
+  const confirm = (review: BillLookup) =>
+    s.billCommand('link-bill', {
+      orderItemId: 'line',
+      billId: bill.externalId,
+      reviewId: review.reviewId,
+      acceptReferenceMismatch: true,
+    });
+  s.bills.set('seller-0', [bill]);
+  s.source.unavailable = 'seller-1';
+  await assert.rejects(search(), /could not verify/i);
+  s.source.unavailable = '';
+  const review = await search();
+  s.bills.set('seller-0', [{ ...bill, narration: 'Order ' + other.orderId }]);
+  await assert.rejects(confirm(review), /changed/);
+  assert.match((await search()).bills[0].issue ?? '', /another known order/);
+  s.bills.set('seller-0', [bill]);
+  const expires = await search();
+  t.mock.timers.tick(600_001);
+  await assert.rejects(confirm(expires), /expired/);
+  assert.equal(s.f.store.readBilling().links.length, 0);
+  await confirm(await search());
+  assert.equal((await s.available()).reservedUnits, 1);
+  other.invoiceNumber = bill.reference;
+  await assert.rejects(s.available(), /review/);
+  assert.equal(
+    s.f.store.readStockCoverage(s.companyId)!.orders.find((e) => e.accountId === 'seller-1')!.order
+      .invoiceNumber,
+    bill.reference,
+  );
+  other.invoiceNumber = null;
+  await assert.rejects(s.available(), /review/);
+});
 
 test('a restock can publish five and the matching Tally sale leaves five available', async (t) => {
   const s = setup(t);

@@ -134,19 +134,27 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           company and Flipkart account. In Sales bill ledger, type part of the ledger name and
           choose a match. Select the bill field where you record an order or invoice number. You can
           also match manually. Preview the matches and confirm the setup for each participating
-          seller. Select Show unresolved only to keep the remaining orders in view as you confirm
-          each bill. Choose the tracking start date after checking that earlier sales are in Tally.
-          The bill check then starts at the saved date and covers up to the last 30 days. Choose a
-          different period to investigate a particular sale. Review starting stock opens the saved
-          date. Confirm a change to refresh the results, or choose Cancel to discard it. When an
-          order needs a mapping, choose Map listing. In Tally stock item, type part of the name or
-          Tally ID, select the matching item, and confirm the Set of at that pickup location.
-          Stockbridge checks saved orders from your tracking date against the ledger. A verified
-          standard or self-ship sale can reserve unbilled units before dispatch. Stockbridge can
-          fill in the first proposed quantity whether the order arrives before or after mapping.
-          With company sync on, eligible listings sharing the Tally item can publish a lower
-          quantity. Held orders, returns and conflicting details need review. Existing listings keep
-          syncing while an order waits for its mapping, even if they share the same tyres.
+          seller. Select Unresolved to work through orders still awaiting a match. To look up a
+          recorded sale, select Billed and search by Flipkart order number, order item ID or Tally
+          bill number. Each item shows its bill date and how it was matched. This also covers older
+          orders tracked for this seller.
+        </p>
+        <p>
+          If the Flipkart reference was mistyped, choose Find Tally bill beside the order and enter
+          the Tally bill number. Check the stock item and quantity before confirming the link. Use
+          Release manual match to undo it. Choose the tracking start date after checking that
+          earlier sales are in Tally. The bill check then starts at the saved date and covers up to
+          the last 30 days. Choose a different period to investigate a particular sale. Review
+          starting stock opens the saved date. Confirm a change to refresh the results, or choose
+          Cancel to discard it. When an order needs a mapping, choose Map listing. In Tally stock
+          item, type part of the name or Tally ID, select the matching item, and confirm the Set of
+          at that pickup location. Stockbridge checks saved orders from your tracking date against
+          the ledger. A verified standard or self-ship sale can reserve unbilled units before
+          dispatch. Stockbridge can fill in the first proposed quantity whether the order arrives
+          before or after mapping. With company sync on, eligible listings sharing the Tally item
+          can publish a lower quantity. Held orders, returns and conflicting details need review.
+          Existing listings keep syncing while an order waits for its mapping, even if they share
+          the same tyres.
         </p>
       </details>
       <details className="guide-topic">

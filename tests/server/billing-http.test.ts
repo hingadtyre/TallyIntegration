@@ -8,12 +8,95 @@ import { BillingService } from '../../src/server/billing-service.js';
 import { saleDay } from '../../src/server/billing-matcher.js';
 import { marketplaceData } from '../support/marketplace-fixture.js';
 import type {
+  BillLookup,
   BillingReport,
   BillingWorkspace,
   PendingListingCheck,
   PendingListings,
 } from '../../src/shared/billing-contracts.js';
 import { close, listen, serverFixture } from '../support/server-fixture.js';
+
+test('finds a posted voucher for one preview order and verifies a reference exception without changing the seller rule', async (t) => {
+  const f = serverFixture(t);
+  const markets = new MarketplaceService(f.store, f.folder);
+  const app = createApp(f.service, f.folder, undefined, undefined, markets);
+  const address = await listen(app);
+  t.after(async () => {
+    await close(app);
+    markets.stop();
+    await markets.idle();
+  });
+  const scope = { companyId: 'demo-a', accountId: 'flipkart-primary' };
+  const post = (action: string, input: Record<string, unknown>) =>
+    fetch(address + '/api/billing/' + action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Stockbridge-Request': '1' },
+      body: JSON.stringify({ ...scope, ...input }),
+    });
+  const settings = {
+    ledgerId: 'sample-sales-demo-a',
+    field: 'reference',
+    reference: 'orderItemId',
+    days: 7,
+  };
+  const preview = async () => {
+    const response = await post('preview', settings);
+    assert.equal(response.status, 200);
+    return (await response.json()) as BillingReport;
+  };
+  const setup = await post('confirm', { previewId: (await preview()).previewId });
+  assert.equal(setup.status, 200);
+  const { report, rule } = (await setup.json()) as BillingWorkspace;
+  const initialMarket = f.store.readMarketplace();
+  const search = async (orderItemId: string) => {
+    const response = await post('find-bill', {
+      orderItemId,
+      billNumber: 'SAMPLE-INV-1',
+      previewId: report!.previewId,
+    });
+    assert.equal(response.status, 200);
+    return (await response.json()) as BillLookup;
+  };
+  // Both orders use the same stock and quantity. The printed bill identifies the first sale.
+  const wrong = await search('SAMPLE-LINE-2');
+  assert.ok(wrong.bills[0]?.issue);
+  const selected = await search('SAMPLE-LINE-1');
+  assert.equal(selected.expectedReference, 'SAMPLE-LINE-1');
+  const bill = selected.bills[0];
+  assert.equal(bill.recordedReference, 'SAMPLE-ORDER-1');
+  assert.equal(bill.referenceMismatch, true);
+  assert.equal(bill.issue, null);
+  const selection = {
+    orderItemId: selected.orderItemId,
+    billId: bill.id,
+    reviewId: selected.reviewId,
+  };
+  assert.ok(
+    (await post('link-bill', { ...selection, acceptReferenceMismatch: false })).status >= 400,
+  );
+  assert.deepEqual(f.store.readBilling().links, []);
+  const reviewed = await search(selected.orderItemId);
+  const saved = await post('link-bill', {
+    ...selection,
+    reviewId: reviewed.reviewId,
+    acceptReferenceMismatch: true,
+  });
+  assert.equal(saved.status, 200);
+  const after = await preview();
+  assert.equal(after.rows[0].status, 'matched');
+  assert.equal(after.rows[0].manualBillId, bill.id);
+  assert.equal(after.rows[1].status, 'unmatched');
+  assert.equal(after.stock[0].unmatchedUnits, 1);
+  const undo = await post('unmatch', {
+    previewId: after.previewId,
+    orderItemId: selected.orderItemId,
+  });
+  assert.equal(undo.status, 200);
+  const released = (await undo.json()) as BillingWorkspace;
+  assert.equal(released.report!.stock[0].unmatchedUnits, 2);
+  assert.deepEqual(released.rule, rule);
+  assert.deepEqual(f.store.readMarketplace(), initialMarket);
+});
 
 test('seller selects a ledger, previews, confirms and corrects a bill without publishing stock', async (t) => {
   const f = serverFixture(t);

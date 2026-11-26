@@ -39,6 +39,7 @@ import {
 } from './marketplace-publication.js';
 import { desiredStock } from './proposals.js';
 import { StockAvailabilityService } from './stock-availability.js';
+import { BillLookupService } from './bill-lookup.js';
 import { MarketplaceStockRecovery } from './marketplace-stock-recovery.js';
 import { checkManualKeepBack } from './marketplace-keep-back.js';
 import type { Store } from './store.js';
@@ -76,6 +77,7 @@ export class MarketplaceService {
   private readonly sellerDecisions = new Map<string, number>();
   private readonly billing: BillingService;
   private readonly availability: StockAvailabilityService;
+  private readonly billLookup: BillLookupService;
   private readonly orderListeners = new Set<(companyId: string, batch?: object) => void>();
   private readonly recovery: MarketplaceStockRecovery;
   private stopped = false;
@@ -107,6 +109,7 @@ export class MarketplaceService {
     );
     if (dependencies.legacyConnection)
       this.connections.set('flipkart-primary', dependencies.legacyConnection);
+    this.billLookup = new BillLookupService(store, this.availability, this.billing);
     this.recovery = new MarketplaceStockRecovery(
       store,
       this.client,
@@ -298,6 +301,7 @@ export class MarketplaceService {
     this.verifiedAccounts.delete(accountId);
     this.verificationRevision.set(accountId, (this.verificationRevision.get(accountId) ?? 0) + 1);
     this.billing.invalidate(accountId);
+    this.billLookup.invalidate(accountId);
   }
 
   runLegacyCommand(
@@ -781,6 +785,18 @@ export class MarketplaceService {
         this.billing.pendingOrders(this.availability, input, account.id, path.endsWith('/recheck')),
       );
     }
+    if (
+      [
+        '/api/billing/tracked-bills',
+        '/api/billing/find-bill',
+        '/api/billing/link-bill',
+        '/api/billing/release-bill',
+      ].includes(path)
+    ) {
+      return this.serial('billing:' + account.id, () =>
+        this.billLookup.command(path, input, account.id),
+      );
+    }
     // A long period of order history must not delay an urgent stock correction.
     // Revalidate seller ownership if credentials or catalogue access change meanwhile.
     return this.serial('billing:' + account.id, () =>
@@ -789,6 +805,7 @@ export class MarketplaceService {
         input,
         () => this.verifiedToken(account.id),
         this.sellerGuard(account.id),
+        this.availability,
       ),
     );
   }
