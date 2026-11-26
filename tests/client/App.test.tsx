@@ -1599,3 +1599,53 @@ test('an unsaved edit survives collapse, changing filters and a stock change tha
   assert.equal(input().value, '5');
   assert.equal(confirmation.mock.callCount(), 2);
 });
+
+test('a pending Inventory review stays with the screen and seller that requested it', async (t) => {
+  const state = initialState('demo', 'unused');
+  const listing = state.listings[0];
+  state.accounts.push({ ...state.accounts[0], id: 'other-seller', name: 'Other seller' });
+  state.proposals = [
+    {
+      listingId: listing.id,
+      quantity: 3,
+      calculated: 3,
+      itemVersion: 1,
+      listingVersion: 1,
+      ruleVersion: 'complete-packs-v1',
+      createdAt: new Date().toISOString(),
+      stale: false,
+      edited: false,
+    },
+  ];
+  let finish!: (response: Response) => void;
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    if (url === '/api/state') return response(state);
+    assert.equal(url, '/api/review');
+    return new Promise<Response>((resolve) => {
+      finish = resolve;
+    });
+  });
+  render(<App />);
+  const prepare = await screen.findByRole('button', { name: /Review changes/ });
+  fireEvent.click(prepare);
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  await act(async () =>
+    finish(response({ id: 'review', companyId: 'demo-a', rows: [], publishingEnabled: true })),
+  );
+  assert.equal(document.querySelector('dialog[open]'), null);
+  fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+  const dialog = screen.getByRole('dialog', { name: 'Review proposed stock' });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close dialog' }));
+  fireEvent.click(prepare);
+  fireEvent.change(screen.getByLabelText('Seller account'), { target: { value: 'other-seller' } });
+  await act(async () =>
+    finish(
+      response({ id: 'old-seller-review', companyId: 'demo-a', rows: [], publishingEnabled: true }),
+    ),
+  );
+  assert.equal(document.querySelector('dialog[open]'), null);
+  assert.equal(
+    (screen.getByLabelText('Seller account') as HTMLSelectElement).value,
+    'other-seller',
+  );
+});

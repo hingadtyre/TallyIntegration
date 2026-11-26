@@ -4,11 +4,12 @@ import {
   type FlipkartListingsClient,
 } from '../adapters/flipkart-listings.js';
 import type { Snapshot } from '../shared/contracts.js';
-import type {
-  MarketplaceApplyResult,
-  MarketplaceChange,
-  MarketplaceEdit,
-  MarketplaceListing,
+import {
+  isKnownMarketplaceLocationStatus,
+  type MarketplaceApplyResult,
+  type MarketplaceChange,
+  type MarketplaceEdit,
+  type MarketplaceListing,
 } from '../shared/marketplace-contracts.js';
 import { recordActivity } from './activity.js';
 import {
@@ -124,15 +125,14 @@ function validateStockPolicy(
   edit: MarketplaceEdit,
 ): void {
   if (edit.kind !== 'stock') return;
-  if (
-    !listing.locations.some(
-      (location) => location.id === edit.locationId && location.quantity !== null,
-    )
-  )
+  const location = listing.locations.find((row) => row.id === edit.locationId);
+  if (!location || location.quantity === null)
     throw new InputError(
       'Refresh the listing to obtain a known stock quantity for this location.',
       409,
     );
+  if (!isKnownMarketplaceLocationStatus(location.status))
+    throw new InputError('Refresh the listing to verify this stock location’s status.', 409);
   for (const row of policyRows(state, listing, edit.locationId)) {
     if (row.policy === 'limited' && (row.remaining === null || edit.quantity > row.remaining))
       throw new InputError(

@@ -248,6 +248,9 @@ test('malformed XML, Tally errors and entity declarations never become an empty 
     '<ENVELOPE>',
     '<ENVELOPE><HEADER><STATUS>0</STATUS></HEADER></ENVELOPE>',
     envelope('<LINEERROR>Failed</LINEERROR>'),
+    envelope(
+      companyXml + '<LINEERROR>Partial result</LINEERROR><LINEERROR>Read failed</LINEERROR>',
+    ),
     '<!DOCTYPE ENVELOPE [<!ENTITY private SYSTEM "file:///private">]><ENVELOPE/>',
   ]) {
     await withServer(

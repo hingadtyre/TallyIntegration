@@ -1,24 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { render, screen, fireEvent, response } from '../../support/client-dom.js';
+import { render, screen, fireEvent, response, act } from '../../support/client-dom.js';
 import { App } from '../../../src/client/App.js';
 import { initialState } from '../../../src/server/seed.js';
 import type { Settings } from '../../../src/shared/contracts.js';
 
 test('settings retain edits after rejection and show confirmed values after a successful retry', async (t) => {
   let state = initialState('demo', 'saved-backups');
-  const submitted: Settings[] = [];
+  const submitted: Partial<Settings>[] = [];
   t.mock.method(
     globalThis,
     'fetch',
     async (input: string | URL | Request, options?: RequestInit) => {
       if (String(input) === '/api/state') return response(state);
       assert.equal(String(input), '/api/settings');
-      const { settings } = JSON.parse(String(options?.body)) as { settings: Settings };
-      submitted.push(settings);
+      const { changes } = JSON.parse(String(options?.body)) as { changes: Partial<Settings> };
+      submitted.push(changes);
       if (submitted.length === 1)
         return response({ error: 'The backup folder is not writable.' }, 400);
-      state = { ...state, settings };
+      state = { ...state, settings: { ...state.settings, ...changes } };
       return response(state);
     },
   );
@@ -40,7 +40,7 @@ test('settings retain edits after rejection and show confirmed values after a su
   assert.equal(screen.queryByRole('alert'), null);
   assert.equal(submitted.length, 2);
   assert.deepEqual(submitted[1], {
-    ...initialState('demo', 'new-backups').settings,
+    backupFolder: 'new-backups',
     tallySeconds: 45,
   });
   assert.ok(screen.getByText(/Uses the saved folder: new-backups/));
@@ -82,4 +82,37 @@ test('a verified backup remains successful when the follow-up activity refresh f
   assert.deepEqual(commands, ['/api/backup']);
   assert.equal(stateReads, 2);
   assert.ok(screen.getByText(/Uses the saved folder: saved-backups/));
+});
+
+test('saving one edited setting preserves polled changes to untouched fields', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const state = initialState('demo', 'saved-backups');
+  let saved: Partial<Settings> | undefined;
+  t.mock.method(globalThis, 'fetch', async (path: string, options?: RequestInit) => {
+    if (path === '/api/settings') {
+      saved = (JSON.parse(String(options?.body)) as { changes: Partial<Settings> }).changes;
+      state.settings = { ...state.settings, ...saved };
+    }
+    return response(state);
+  });
+  render(<App />);
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  const interval = screen.getByRole('spinbutton', { name: /Tally stock/ }) as HTMLInputElement;
+  fireEvent.change(interval, { target: { value: '' } });
+  assert.equal(interval.value, '');
+  fireEvent.change(interval, { target: { value: '54' } });
+  state.settings.backupFolder = 'updated-backups';
+  await act(async () => t.mock.timers.tick(15000));
+  assert.equal(
+    (screen.getByRole('textbox', { name: /Backup folder/ }) as HTMLInputElement).value,
+    'updated-backups',
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+  await act(async () => {});
+  assert.deepEqual(saved, { tallySeconds: 54 });
+  assert.equal(
+    (screen.getByRole('button', { name: 'Save settings' }) as HTMLButtonElement).disabled,
+    true,
+  );
 });

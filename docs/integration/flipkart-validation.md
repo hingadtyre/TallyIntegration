@@ -4,6 +4,8 @@
 
 ## Order evidence for Tally billing review
 
+If Flipkart supplies a malformed return-to-origin add-on, the order remains unverified for bill matching and stock reconciliation. A cancellation with this ambiguity cannot release the reservation. Refresh order evidence before relying on the line.
+
 Stockbridge reads order lines using [shipment search](https://flipkart.github.io/fk-api-platform-docs/docs/mp-api_versioned/search-pre-dispatch-shipment-post) and its [documented pagination](https://flipkart.github.io/fk-api-platform-docs/docs/mp-api_versioned/search-pre-dispatch-shipment-get). Each review covers up to 31 days of order dates for the selected account. Search requests explicitly select seller fulfilment (`NON_FBF`) and query normal and self-ship shipments separately before and after dispatch. The reader excludes held, cancelled, return and replacement lines. Express and other fulfilment profiles are outside this review. A page failure, inconsistent order-item identity or search reaching the provider limit invalidates the review. An empty result only describes the requested scope. See the [seller dispatch and search limits](https://seller.flipkart.com/api-docs/order-api-docs/v3/PostShipmentSearch.html).
 
 The import keeps the order ID, order-item ID, listing ID, exact SKU, dispatch location, quantity and order date. Repeated observations of the same line count once. For invoice-reference reviews, eligible packed or later shipment lines can also receive a confirmed invoice number. The [seller invoice reference](https://seller.flipkart.com/api-docs/order-api-docs/OMAPIRef.html#get-v3-shipments-shipmentids-invoices) documents JSON invoice numbers and order-item membership, while the [current invoice API](https://flipkart.github.io/fk-api-platform-docs/docs/mp-api_versioned/get-invoices-pdf-from-esi) describes PDF. Stockbridge requests JSON and accepts a number only when both the shipment and order line agree. Unissued invoices and PDF-only responses leave the invoice reference unavailable. The reader never generates a label or invoice.
@@ -114,6 +116,8 @@ No authenticated requests were made during documentation review.
 The adapter uses fixed production HTTPS endpoints, bearer authorization, redirect rejection, a 15-second request deadline and a 2 MiB response bound. Errors discard upstream response content and transport messages. The 18 focused mocked adapter tests passed during this delivery; they do not establish live compatibility.
 
 ## Apply, policies and recovery
+
+Direct stock edits in Marketplaces require a known quantity and an enabled or disabled pickup location. If the pickup status is unknown, refresh the listing before editing it. This also applies when entering zero at a mapped location because that action can pause Tally sync.
 
 Before an Inventory stock update, the fresh detail response must confirm an active listing and enabled destination. A missing or unrecognized listing status blocks the update even when the previous import showed Active. Flipkart documents the status and archive values in [listing details](https://flipkart.github.io/fk-api-platform-docs/docs/mp-api_versioned/get-listing-details).
 

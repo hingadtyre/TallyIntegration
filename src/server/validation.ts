@@ -1,5 +1,10 @@
 import type { Company, Listing, Snapshot } from '../shared/contracts.js';
 
+export function isRecentObservation(observedAt: string, maximumAge: number): boolean {
+  const age = Date.now() - Date.parse(observedAt);
+  return age >= 0 && age <= maximumAge;
+}
+
 export class InputError extends Error {
   constructor(
     message: string,

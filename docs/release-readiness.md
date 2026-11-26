@@ -4,6 +4,12 @@
 
 This is the readiness checklist for the first customer delivery. The [approved architecture](design/architecture.md#customer-release-completion) defines the required behavior; [README](../README.md) describes the delivered build; [customer setup](customer-setup.md) describes the available operating steps. Test fixtures establish local behavior, not a live Tally or Flipkart connection.
 
+## Local flow verification on 26 November 2026
+
+The development build on `dahinger-flow-audit` passed all 543 application tests, formatting, lint and the production build. In Chrome, two dashboard tabs saved different polling intervals and both values persisted. Publishing a simulated zero changed one sample location from five to zero, paused that location and preserved the quantities and sync settings of the other listings. All six dashboard screens opened without horizontal page overflow at 320, 390 and 1,440 pixels.
+
+The extracted Windows package passed all 24 checks, including same-PC upgrade, recovery after a dashboard port conflict, offline restore and restart. The local receipt is `releases/verify-pilot-ndDwaQ/verification.json`. The tested ZIP was built from uncommitted changes based on `1eff02d0` and has SHA-256 `b34c183b446f68d6234becae6b9311feda890414b8ca336b3608b4b691dc379e`. Customer-machine acceptance with the seller’s Tally books and Flipkart account remains pending.
+
 ## Pre-dispatch reservation pilot on 23 November 2026
 
 Use `Stockbridge-Pilot-0.1.0-2026-11-23T13-08-16-490Z-a39a3c0c-dirty-win-x64.zip` for the supervised pilot. It contains the local feature changes based on `a39a3c0c`. All 510 application tests and 24 extracted-package checks passed. In the simulated seller workflow, one unbilled set of four against eight Tally tyres left one pack to propose with the tyre minimum off. Mapping after the order arrived reduced the marketplace quantity from five to one. An order first seen after mapping also created the missing proposal. A cancellation for another shipment stayed in review. Saving an individual or bulk zero draft during review preserved the pending order check and sent no stock. The package upgrade and restart checks used an isolated Windows workspace. Verification with the seller's Tally books and live automatic stock publication is still pending.

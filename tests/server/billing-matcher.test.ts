@@ -97,6 +97,29 @@ test('stock preview deducts an unbilled order across purchases and releases it a
   assert.deepEqual(preview([f.bill]), ['review', 5, 2, 3]);
 });
 
+test('a second voucher referencing the same sale with a conflicting stock deduction requires reconciliation', () => {
+  const f = fixture();
+  const conflicting = {
+    ...f.bill,
+    externalId: 'second-voucher',
+    lines: [{ ...f.bill.lines[0], quantity: 2 }],
+  };
+  const row = f.match([f.order], [f.bill, conflicting]).rows[0];
+  assert.equal(row.status, 'review');
+  assert.equal(row.bill, null);
+  assert.deepEqual(row.candidates, []);
+  const sibling = { ...f.order, orderItemId: 'OI-2', quantity: 2 };
+  const orders = [f.order, sibling];
+  const initial = f.match(orders, [f.bill, conflicting]);
+  f.saved.links.push(initial.links.get(f.order.orderItemId)!.get(f.bill.externalId)!);
+  assert.equal(f.match(orders, [f.bill, conflicting]).rows[0].status, 'matched');
+  const unexplained = { ...conflicting, lines: [{ ...f.bill.lines[0], quantity: 3 }] };
+  const disputed = f.match(orders, [f.bill, unexplained]).rows[0];
+  assert.equal(disputed.status, 'review');
+  assert.equal(disputed.bill, null);
+  assert.deepEqual(disputed.candidates, []);
+});
+
 test('exact fields and delimited narration distinguish similar references and missing invoice numbers', () => {
   const f = fixture();
   f.rule.field = 'number';

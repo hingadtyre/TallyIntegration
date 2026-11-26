@@ -19,6 +19,7 @@ export function useWorkspace() {
   const [state, setState] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [pollError, setPollError] = useState('');
   const [notice, setNotice] = useState('');
   const mounted = useRef(false);
   const actionInFlight = useRef(false);
@@ -36,10 +37,13 @@ export function useWorkspace() {
       try {
         const next = await requestJson<Snapshot>('/state', undefined, abort.signal);
         // A slow observation must not replace a newer successful command response.
-        if (!abort.signal.aborted && generation === snapshotGeneration.current) setState(next);
+        if (!abort.signal.aborted && generation === snapshotGeneration.current) {
+          setState(next);
+          setPollError('');
+        }
       } catch (cause) {
         if (!abort.signal.aborted && generation === snapshotGeneration.current)
-          setError(errorMessage(cause));
+          setPollError(errorMessage(cause));
       } finally {
         pollInFlight = false;
       }
@@ -66,6 +70,7 @@ export function useWorkspace() {
       snapshotGeneration.current++;
       setBusy(label);
       setError('');
+      setPollError('');
       setNotice('');
       try {
         const value = await operation();
@@ -234,7 +239,7 @@ export function useWorkspace() {
   return {
     state,
     busy,
-    error,
+    error: error || pollError,
     notice,
     mutate,
     calculate,
@@ -245,7 +250,10 @@ export function useWorkspace() {
     tryAutomation,
     publishReview,
     backUpNow,
-    dismissError: () => setError(''),
+    dismissError: () => {
+      setError('');
+      setPollError('');
+    },
     dismissNotice: () => setNotice(''),
   };
 }

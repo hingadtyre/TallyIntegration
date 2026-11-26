@@ -13,6 +13,26 @@ const dashboardHeaders = {
   'X-Stockbridge-Request': '1',
 };
 
+test('two dashboard windows can save different settings before the next refresh', async (t) => {
+  const f = fixture(t);
+  const app = createApp(f.service, f.folder);
+  const address = await listen(app);
+  t.after(() => close(app));
+  const post = (changes: unknown) =>
+    fetch(address + '/api/settings', {
+      method: 'POST',
+      headers: dashboardHeaders,
+      body: JSON.stringify({ changes }),
+    });
+  assert.equal((await post({ tallySeconds: 51 })).status, 200);
+  assert.equal((await post({ marketplaceSeconds: 401 })).status, 200);
+  assert.equal((await post({ tallySeconds: 2, marketplaceSeconds: 99 })).status, 400);
+  assert.equal((await post({ unknownField: true })).status, 400);
+  const { settings } = f.store.read();
+  assert.equal(settings.tallySeconds, 51);
+  assert.equal(settings.marketplaceSeconds, 401);
+});
+
 test('item keep-back saves by company and version, queues only eligible siblings and survives restart', async (t) => {
   const f = fixture(t);
   f.store.update((state) => {

@@ -91,3 +91,27 @@ test('an all-company refresh shows partial results and a failed selected company
   assert.equal(result.current.notice, '');
   assert.deepEqual(result.current.state?.items, state.items);
 });
+
+test('a recovered poll clears its own warning and preserves an unrelated failed command', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const state = initialState('demo', 'unused');
+  let unavailable = true;
+  t.mock.method(globalThis, 'fetch', async (path: string) => {
+    if (path !== '/api/state') return response({ error: 'Could not save the draft.' }, 400);
+    return unavailable ? response({ error: 'Cannot read inventory.' }, 503) : response(state);
+  });
+  const { result } = renderHook(() => useWorkspace());
+  await act(async () => {});
+  assert.equal(result.current.error, 'Cannot read inventory.');
+  unavailable = false;
+  await act(async () => t.mock.timers.tick(15000));
+  assert.equal(result.current.error, '');
+  await act(async () => {
+    await result.current.mutate('/proposals', {}, 'Saving', 'Saved');
+  });
+  unavailable = true;
+  await act(async () => t.mock.timers.tick(15000));
+  unavailable = false;
+  await act(async () => t.mock.timers.tick(15000));
+  assert.equal(result.current.error, 'Could not save the draft.');
+});

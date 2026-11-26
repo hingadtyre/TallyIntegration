@@ -30,6 +30,28 @@ const shipment = {
 };
 const empty = () => Response.json({ hasMore: false, shipments: [] });
 
+test('malformed return add-ons cannot verify a sale or release a cancelled order', async () => {
+  const client = new FlipkartBillingClient({
+    request: async (_url, options) => {
+      const { filter } = JSON.parse(String(options?.body));
+      if (filter.shipmentTypes[0] !== 'NORMAL' || filter.hold === true) return empty();
+      const cancelled = filter.cancellationType === 'buyerCancellation';
+      if (!cancelled && filter.type !== 'preDispatch') return empty();
+      const item = {
+        ...baseItem,
+        ...(cancelled && { orderItemId: 'cancelled', status: 'CANCELLED', cancellationDate: to }),
+        add_ons: [{ is_rto: 'true' }],
+      };
+      return Response.json({ hasMore: false, shipments: [{ ...shipment, orderItems: [item] }] });
+    },
+  });
+  const orders = await client.readStockOrders(token, from, to);
+  assert.equal(orders.length, 2);
+  for (const order of orders) assert.equal(order.stockDisposition, 'uncertain');
+  const [sale] = await client.readOrders(token, from, to);
+  assert.equal(sale.eligibilityUnverified, true);
+});
+
 test('verified pre-dispatch stock and billing orders accept an omitted or null courier return', async () => {
   const client = new FlipkartBillingClient({
     request: async (_url, options) => {

@@ -1,15 +1,31 @@
 import { useState, type FormEvent } from 'react';
-import type { Snapshot } from '../../shared/contracts.js';
+import type { Settings, Snapshot } from '../../shared/contracts.js';
 import type { Workspace } from '../useWorkspace.js';
 import { Icon } from '../components.js';
 
 export function SettingsScreen({ state, workspace }: { state: Snapshot; workspace: Workspace }) {
-  const [settings, setSettings] = useState(state.settings);
+  const [edits, setEdits] = useState<Partial<Record<keyof Settings, string>>>({});
+  const settings = { ...state.settings, ...edits };
+  const hasEdits = Object.keys(edits).length > 0;
+  function edit(field: keyof Settings, value: string) {
+    setEdits((current) => {
+      const next = { ...current, [field]: value };
+      if (String(state.settings[field]) === value) delete next[field];
+      return next;
+    });
+  }
   const { busy, mutate, backUpNow } = workspace;
   async function saveSettings(event: FormEvent) {
     event.preventDefault();
-    const result = await mutate('/settings', { settings }, 'Saving settings', 'Settings saved.');
-    if (result.ok) setSettings(result.value.settings);
+    if (!hasEdits || busy) return;
+    const changes = Object.fromEntries(
+      Object.entries(edits).map(([field, value]) => [
+        field,
+        typeof state.settings[field as keyof Settings] === 'number' ? Number(value) : value,
+      ]),
+    );
+    const result = await mutate('/settings', { changes }, 'Saving settings', 'Settings saved.');
+    if (result.ok) setEdits({});
   }
   return (
     <>
@@ -31,10 +47,11 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
           <label className="field">
             <span>Connection address</span>
             <input
+              disabled={busy === 'Saving settings'}
               type="url"
               required
               value={settings.tallyUrl}
-              onChange={(event) => setSettings({ ...settings, tallyUrl: event.target.value })}
+              onChange={(event) => edit('tallyUrl', event.target.value)}
             />
             <small>Keep Tally open with the required company loaded.</small>
           </label>
@@ -52,14 +69,14 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
               <span>Tally stock</span>
               <div className="input-with-unit">
                 <input
+                  disabled={busy === 'Saving settings'}
                   type="number"
                   min="5"
+                  max="86400"
                   step="1"
                   required
                   value={settings.tallySeconds}
-                  onChange={(event) =>
-                    setSettings({ ...settings, tallySeconds: Number(event.target.value) })
-                  }
+                  onChange={(event) => edit('tallySeconds', event.target.value)}
                 />
                 <span>seconds</span>
               </div>
@@ -69,14 +86,14 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
               <span>Marketplace stock</span>
               <div className="input-with-unit">
                 <input
+                  disabled={busy === 'Saving settings'}
                   type="number"
                   min="30"
+                  max="86400"
                   step="1"
                   required
                   value={settings.marketplaceSeconds}
-                  onChange={(event) =>
-                    setSettings({ ...settings, marketplaceSeconds: Number(event.target.value) })
-                  }
+                  onChange={(event) => edit('marketplaceSeconds', event.target.value)}
                 />
                 <span>seconds</span>
               </div>
@@ -89,14 +106,14 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
               <span>Listing metadata</span>
               <div className="input-with-unit">
                 <input
+                  disabled={busy === 'Saving settings'}
                   type="number"
                   min="60"
+                  max="86400"
                   step="1"
                   required
                   value={settings.catalogSeconds}
-                  onChange={(event) =>
-                    setSettings({ ...settings, catalogSeconds: Number(event.target.value) })
-                  }
+                  onChange={(event) => edit('catalogSeconds', event.target.value)}
                 />
                 <span>seconds</span>
               </div>
@@ -115,8 +132,10 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
           <label className="field">
             <span>Backup folder</span>
             <input
+              disabled={busy === 'Saving settings'}
+              required
               value={settings.backupFolder}
-              onChange={(event) => setSettings({ ...settings, backupFolder: event.target.value })}
+              onChange={(event) => edit('backupFolder', event.target.value)}
             />
             <small>
               Enter a full folder path, such as C:\Stockbridge Backups. Save settings to apply a
@@ -142,7 +161,7 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
         </section>
         <div className="settings-save">
           <p>Enable automatic stock updates for each company in Inventory.</p>
-          <button className="button primary" type="submit" disabled={!!busy}>
+          <button className="button primary" type="submit" disabled={!!busy || !hasEdits}>
             <Icon name="check" />
             {busy === 'Saving settings' ? 'Saving…' : 'Save settings'}
           </button>

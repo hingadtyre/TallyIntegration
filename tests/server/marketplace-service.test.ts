@@ -2471,6 +2471,19 @@ test('price Apply preserves companion price and leaves stock/pause policies unch
   assert.ok(f.store.read().listings.every((row) => !row.paused));
 });
 
+test('applying stock at a location with unknown status preserves sync and records no attempt', async (t) => {
+  const { f, account } = await mappedInventory(t);
+  Object.assign(f.remote.get('seller-a')![0].locations[0], { quantity: 0, status: 'UNKNOWN' });
+  await f.service.refresh(account.id);
+  const row = f.store.read().listings.find((entry) => entry.itemId !== null)!;
+  assert.equal(row.paused, false);
+  for (const quantity of [0, 2])
+    await assert.rejects(f.stock(account.id, quantity), /location’s status/);
+  assert.equal(f.store.read().listings.find((entry) => entry.id === row.id)!.paused, false);
+  assert.equal(f.store.readMarketplace().changes.length, 0);
+  assert.equal(f.writes.length, 0);
+});
+
 test('fresh read conflicts prevent overwriting stock changed since the editor opened', async (t) => {
   const f = fixture(t);
   const account = await f.add();

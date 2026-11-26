@@ -238,7 +238,8 @@ export function App() {
 
           <div hidden={screen !== 'inventory'}>
             <InventoryScreen
-              key={companyId + ':' + inventoryReset}
+              key={JSON.stringify([companyId, accountId, inventoryReset])}
+              active={screen === 'inventory'}
               state={state}
               companyId={companyId}
               accountId={accountId}

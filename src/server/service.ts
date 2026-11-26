@@ -791,6 +791,19 @@ export class InventoryService {
     return this.snapshot();
   }
 
+  changeSettings(changes: unknown): Snapshot {
+    const current = this.store.read().settings;
+    if (
+      !changes ||
+      typeof changes !== 'object' ||
+      Array.isArray(changes) ||
+      !Object.keys(changes).length ||
+      Object.keys(changes).some((key) => !Object.hasOwn(current, key))
+    )
+      throw new InputError('Choose at least one valid setting to change.');
+    return this.settings({ ...current, ...changes });
+  }
+
   settings(input: unknown): Snapshot {
     const sourceChanged = saveSettings(this.store, input);
     if (sourceChanged) {

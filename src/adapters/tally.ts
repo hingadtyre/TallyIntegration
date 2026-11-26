@@ -91,7 +91,8 @@ function hasFailure(value: unknown): boolean {
   if (!node) return Array.isArray(value) && value.some(hasFailure);
   return Object.entries(node).some(
     ([key, child]) =>
-      (['LINEERROR', 'ERROR', 'ERRORMSG', 'EXCEPTION'].includes(key) && text(child) !== '') ||
+      (['LINEERROR', 'ERROR', 'ERRORMSG', 'EXCEPTION'].includes(key) &&
+        (Array.isArray(child) ? child : [child]).some((message) => text(message) !== '')) ||
       hasFailure(child),
   );
 }

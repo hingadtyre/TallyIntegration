@@ -17,6 +17,10 @@ export interface MarketplaceAccount extends MarketplaceAccountRecord {
   connection: FlipkartConnectionStatus;
 }
 
+export function isKnownMarketplaceLocationStatus(status: string): status is 'ENABLED' | 'DISABLED' {
+  return status === 'ENABLED' || status === 'DISABLED';
+}
+
 export interface MarketplaceLocation {
   id: string;
   quantity: number | null;

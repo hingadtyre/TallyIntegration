@@ -17,7 +17,7 @@ import { invalidateReservationDrafts, queueOrderProposal } from './proposals.js'
 import { mappedSaleItem, mappedSaleListing, stockConfiguration } from './stock-configuration.js';
 import type { BillingSources } from './billing-service.js';
 import type { Store } from './store.js';
-import { InputError, requireText } from './validation.js';
+import { InputError, isRecentObservation, requireText } from './validation.js';
 
 const day = 86_400_000;
 const nowIso = () => new Date().toISOString();
@@ -838,9 +838,9 @@ export class StockAvailabilityService {
             throw hold(
               'The Tally business date changed during the order check. Refresh the company and retry.',
             );
-          if (Date.now() - Date.parse(to) > 120_000)
+          if (!isRecentObservation(to, 120_000))
             throw hold(
-              'The order check is over two minutes old. Retry, or reconcile older sales and confirm a more recent starting date in Order matching.',
+              'The order check is outside the current two-minute window. Retry, or reconcile older sales and confirm a more recent starting date in Order matching.',
             );
           const current = verify().items.get(itemId);
           if (
@@ -858,7 +858,7 @@ export class StockAvailabilityService {
             const vouchers = await readVouchers();
             const verifyBills = () => {
               verify();
-              if (saleDay(to) !== saleDay(nowIso()) || Date.now() - Date.parse(to) > 600_000)
+              if (saleDay(to) !== saleDay(nowIso()) || !isRecentObservation(to, 600_000))
                 throw hold('This bill check expired. Find the bill again.');
             };
             verifyBills();

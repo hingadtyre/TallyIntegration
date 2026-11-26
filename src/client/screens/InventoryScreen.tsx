@@ -19,6 +19,7 @@ import { AutomationDialog } from './AutomationDialog.js';
 import { CalculationFeedback } from './CalculationFeedback.js';
 
 interface InventoryScreenProps {
+  active: boolean;
   state: Snapshot;
   companyId: string;
   accountId: string;
@@ -28,8 +29,9 @@ interface InventoryScreenProps {
   onOpenConnections: () => void;
 }
 
-/** App keys this screen by company: switching company clears only inventory view state. */
+/** App keys this screen by company and seller so pending reviews stay in their original scope. */
 export function InventoryScreen({
+  active,
   state,
   companyId,
   accountId,
@@ -627,7 +629,7 @@ export function InventoryScreen({
             : 'Publishing updates stock on Flipkart for the reviewed destinations.'}
         </p>
       </div>
-      {review && (
+      {active && review && (
         <ReviewDialog
           key={review.id}
           state={state}
@@ -637,7 +639,7 @@ export function InventoryScreen({
           onReviewLatest={(ids) => openReview(ids, review.companyId)}
         />
       )}
-      {automationReview && !company?.automation && (
+      {active && automationReview && !company?.automation && (
         <AutomationDialog
           initial={automationReview.preview}
           startWithTrial={automationReview.trial}

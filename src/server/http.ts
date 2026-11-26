@@ -148,6 +148,10 @@ async function runCommand(
     case '/api/review':
       return service.prepareReview(input.companyId, input.listingIds);
     case '/api/settings':
+      if ('changes' in input) {
+        if ('settings' in input) throw new InputError('Send either settings or the edited fields.');
+        return service.changeSettings(input.changes);
+      }
       return service.settings(input.settings);
     case '/api/mappings':
       return service.mapAndCalculate(input);

@@ -1,7 +1,8 @@
-import type {
-  MarketplaceListing,
-  MarketplaceListingStatus,
-  MarketplaceLocation,
+import {
+  isKnownMarketplaceLocationStatus,
+  type MarketplaceListing,
+  type MarketplaceListingStatus,
+  type MarketplaceLocation,
 } from '../shared/marketplace-contracts.js';
 
 const apiRoot = 'https://api.flipkart.net/sellers/listings/v3';
@@ -322,7 +323,7 @@ export class FlipkartListingsClient {
     if (
       !identity(locationId) ||
       (!(confirmedPickup && listing.status === 'ACTIVE' && listing.locations.length === 0) &&
-        (locations.length !== 1 || !['ENABLED', 'DISABLED'].includes(locations[0].status)))
+        (locations.length !== 1 || !isKnownMarketplaceLocationStatus(locations[0].status)))
     ) {
       throw new FlipkartListingError('Refresh this listing to verify the selected stock location.');
     }

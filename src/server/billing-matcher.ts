@@ -14,6 +14,7 @@ import type { Listing, Snapshot, StockItem } from '../shared/contracts.js';
 import type { MarketplaceListing } from '../shared/marketplace-contracts.js';
 import type { BillingData, BillingLink } from './storage/billing-records.js';
 import { hasConfirmedPickup } from './marketplace-catalog.js';
+import { isRecentObservation } from './validation.js';
 
 export interface BillingScope {
   companyId: string;
@@ -270,6 +271,8 @@ export function matchBills(
   const claims = new Map<string, number>();
   const orderGroup = new Map<string, string>();
   const groupSizes = new Map<string, number>();
+  const expectedDeductions = new Set<string>();
+  const differentDeductions = new Map<string, Set<string>>();
   const stockItems = new Map<string, { item: Snapshot['items'][number]; rows: BillingRow[] }>();
   const sharedLedger = saved.rules.some(
     (r) =>
@@ -296,12 +299,16 @@ export function matchBills(
   );
   const items = new Map(state.items.map((i) => [i.id, i]));
   const billsByStock = new Map<string, TallySalesBill[]>();
-  const billsByItem = new Map<string, TallySalesBill[]>();
+  const billsByItemReference = new Map<string, TallySalesBill[]>();
   for (const bill of evidence.bills) {
     for (const line of bill.lines) {
-      const itemBills = billsByItem.get(line.itemExternalId);
-      if (itemBills) itemBills.push(bill);
-      else billsByItem.set(line.itemExternalId, [bill]);
+      if (rule.field !== 'manual') {
+        const reference = rule.field === 'narration' ? null : bill[rule.field].trim();
+        const itemReference = JSON.stringify([line.itemExternalId, reference]);
+        const itemBills = billsByItemReference.get(itemReference);
+        if (itemBills) itemBills.push(bill);
+        else billsByItemReference.set(itemReference, [bill]);
+      }
       const signature = JSON.stringify([line.itemExternalId, line.unit, line.quantity]);
       const bucket = billsByStock.get(signature);
       if (bucket) bucket.push(bill);
@@ -375,6 +382,8 @@ export function matchBills(
     const units = order.quantity * mapping.packSize;
     if (!Number.isSafeInteger(units) || units <= 0) continue;
     row.baseUnits = units;
+    const referenceGroup = orderGroup.get(order.orderItemId);
+    if (referenceGroup) expectedDeductions.add(JSON.stringify([referenceGroup, item.unit, units]));
     row.status = 'unmatched';
     row.reason = 'No corresponding sales bill found in this review.';
     const choices = new Map<string, BillingLink>();
@@ -462,30 +471,40 @@ export function matchBills(
       row.reason = sharedLedger
         ? 'This ledger is shared by seller accounts. Confirm the bill.'
         : 'Select the corresponding sales bill.';
-    } else if (
-      row.status === 'unmatched' &&
-      rule.field !== 'manual' &&
-      billsByItem
-        .get(item.externalId)
-        ?.some(
-          (bill) =>
-            bill.date >= saleDay(order.orderDate) &&
-            hasReference(rule, bill, order) &&
-            bill.lines.some(
-              (line) =>
-                line.itemExternalId === item.externalId &&
-                (line.unit !== item.unit || line.quantity !== units),
-            ),
-        )
-    ) {
-      row.status = 'review';
-      row.reason =
-        'A bill references this sale with a different quantity or unit. Reconcile the stock deduction before publishing.';
     }
+    if (!referenceGroup) continue;
+    const deductions = new Set<string>();
+    const reference = rule.field === 'narration' ? null : order[rule.reference];
+    for (const bill of billsByItemReference.get(JSON.stringify([item.externalId, reference])) ??
+      []) {
+      if (bill.date < saleDay(order.orderDate) || !hasReference(rule, bill, order)) continue;
+      for (const line of bill.lines) {
+        if (
+          line.itemExternalId === item.externalId &&
+          (line.unit !== item.unit || line.quantity !== units)
+        )
+          deductions.add(JSON.stringify([referenceGroup, line.unit, line.quantity]));
+      }
+    }
+    if (deductions.size) differentDeductions.set(order.orderItemId, deductions);
   }
   for (const row of rows) {
     const matches = exact.get(row.orderItemId);
     const group = orderGroup.get(row.orderItemId);
+    // Only a verified sibling quantity under the same reference and stock item
+    // can explain a second voucher with a different deduction.
+    const different = differentDeductions.get(row.orderItemId);
+    if (
+      different &&
+      (row.status === 'unmatched' || [...different].some((key) => !expectedDeductions.has(key)))
+    ) {
+      row.status = 'review';
+      row.bill = null;
+      row.candidates = [];
+      row.reason =
+        'A bill references this sale with a different quantity or unit. Reconcile the stock deduction before publishing.';
+      continue;
+    }
     if (
       row.status === 'review' &&
       !sharedLedger &&
@@ -575,8 +594,10 @@ export function matchBills(
         company?.lastSuccess &&
         !company.stockIssue &&
         item.observedAt &&
-        Date.now() - Date.parse(item.observedAt) <=
-          Math.max(120_000, state.settings.tallySeconds * 3000));
+        isRecentObservation(
+          item.observedAt,
+          Math.max(120_000, state.settings.tallySeconds * 3000),
+        ));
     const physical = evidence.balances
       ? (evidence.balances.find((i) => i.externalId === item.externalId && i.unit === item.unit)
           ?.physical ?? null)

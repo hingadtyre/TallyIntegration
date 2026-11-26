@@ -44,8 +44,8 @@ const listing = (id = 'seller-a'): MarketplaceListingView => ({
   mrp: 1200,
   sellingPrice: 1000,
   locations: [
-    { id: 'warehouse-1', quantity: 4, status: 'ACTIVE' },
-    { id: 'warehouse-2', quantity: 7, status: 'ACTIVE' },
+    { id: 'warehouse-1', quantity: 4, status: 'ENABLED' },
+    { id: 'warehouse-2', quantity: 7, status: 'DISABLED' },
   ],
   observedAt: '2026-11-18T10:00:00Z',
   version: 3,
@@ -1197,4 +1197,56 @@ test('a retained listing with no current observation blocks edits but keeps unce
     true,
   );
   assert.ok(screen.getByRole('button', { name: 'Check result' }));
+});
+
+test('stock editors require a known pickup status, leaving other locations and prices available', async (t) => {
+  const item = listing();
+  item.locations[0].status = 'UNKNOWN';
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) =>
+    baseResponse(input, item),
+  );
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  const row = within(screen.getByRole('row', { name: /Marketplace tyre/ }));
+  assert.equal(
+    (row.getByRole('button', { name: /Edit stock.*warehouse-1/ }) as HTMLButtonElement).disabled,
+    true,
+  );
+  assert.equal(
+    (row.getByRole('button', { name: /Edit stock.*warehouse-2/ }) as HTMLButtonElement).disabled,
+    false,
+  );
+  assert.equal(
+    (row.getByRole('button', { name: /Edit MRP/ }) as HTMLButtonElement).disabled,
+    false,
+  );
+  assert.ok(row.getByText(/verify this pickup location before editing stock/));
+});
+
+test('a catalogue refresh that removes the last page returns to the last available page', async (t) => {
+  let total = 21;
+  const requests: number[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    if (url === '/api/marketplaces') return response({ accounts: [account()] });
+    if (url === '/api/marketplaces/refresh') {
+      total = 18;
+      return response({ account: account() });
+    }
+    const number = Number(new URL(url, 'http://localhost').searchParams.get('page'));
+    requests.push(number);
+    return response({
+      ...page(),
+      total,
+      page: number,
+      listings: number === 2 && total <= 20 ? [] : [listing()],
+    });
+  });
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  await screen.findByText('Page 2 of 2');
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh listings' }));
+  await screen.findByText('Page 1 of 1');
+  assert.ok(screen.getByText('Marketplace tyre'));
+  assert.deepEqual(requests, [1, 2, 2, 1]);
 });

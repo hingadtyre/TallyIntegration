@@ -218,6 +218,13 @@ test('aged stock blocks proposals and review even while the Tally connection rem
     /Tally stock is stale/,
   );
   assert.deepEqual(f.service.snapshot(), before);
+  f.store.update((state) => {
+    state.items[0].observedAt = new Date(Date.now() + 3_600_000).toISOString();
+  });
+  assert.throws(
+    () => f.service.calculate('tally:company-a', ['live-listing']),
+    /Tally stock is stale/,
+  );
 });
 
 test('calculation is limited to its explicit company scope and failed scope is atomic', (t) => {

@@ -222,6 +222,7 @@ function verifyLocationDetailLine(
     incomplete();
   const detailReturn = hasReturnAddOn(detail);
   if (
+    detailReturn === undefined ||
     (detailReturn && !hasReturnAddOn(item)) ||
     (missingCourierReturnAllowed && detailReturn !== false)
   )
@@ -287,6 +288,7 @@ function collectShipment(
     let eligibilityUnverified =
       shipment.hold !== false ||
       replacement !== false ||
+      returnAddOn === undefined ||
       (item.courierReturn !== false && !preDispatchWithoutCourierReturn) ||
       !saleStatuses.has(status);
     if (excluded.has(id)) continue;
@@ -316,6 +318,7 @@ function collectShipment(
         item.isReplacement !== true &&
         item.is_replacement !== true &&
         item.courierReturn === false &&
+        returnAddOn === false &&
         !returnEvidence
       )
         disposition = 'cancelled';

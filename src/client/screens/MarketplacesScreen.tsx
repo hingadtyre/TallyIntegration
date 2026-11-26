@@ -8,6 +8,7 @@ import type {
   MarketplaceListingView,
   MarketplacePage,
 } from '../../shared/marketplace-contracts.js';
+import { isKnownMarketplaceLocationStatus } from '../../shared/marketplace-contracts.js';
 import { errorMessage, requestJson } from '../api.js';
 import { Icon, ResumeSyncButton } from '../components.js';
 import { formatDateTime as time, formatRemainingSales } from '../format.js';
@@ -320,6 +321,11 @@ function MarketplaceListings({
       .listings(account.id, query.search, query.status, query.page, controller.signal)
       .then((result) => {
         if (!controller.signal.aborted && generation === request.current) {
+          const lastPage = Math.max(1, Math.ceil(result.total / result.pageSize));
+          if (query.page > lastPage) {
+            setQuery((current) => ({ ...current, page: lastPage }));
+            return;
+          }
           setData(result);
           setRowErrors({});
         }
@@ -762,6 +768,8 @@ function MarketplaceListingRow({
         <div className="marketplace-locations">
           {listing.locations.length === 0 && <span>Flipkart supplied no stock location.</span>}
           {listing.locations.map((location) => {
+            const stockVerified =
+              isKnownMarketplaceLocationStatus(location.status) && location.quantity !== null;
             const policy = listing.stockPolicies.find((item) => item.locationId === location.id);
             return (
               <div key={location.id}>
@@ -775,7 +783,8 @@ function MarketplaceListingRow({
                     pending ||
                     resuming ||
                     !!failure?.uncertain ||
-                    !listing.observedAt
+                    !listing.observedAt ||
+                    !stockVerified
                   }
                   aria-label={`Edit stock for ${listing.sku} at ${location.id}`}
                   onClick={() => onEdit({ listing, kind: 'stock', locationId: location.id })}
@@ -783,6 +792,11 @@ function MarketplaceListingRow({
                   <strong>{location.quantity ?? 'Not available'}</strong>
                   <Icon name="edit" />
                 </button>
+                {!stockVerified && (
+                  <small>
+                    Refresh listings to verify this pickup location before editing stock.
+                  </small>
+                )}
                 <small>
                   {policy?.companyName ?? 'Not mapped to Tally'}
                   {policy?.policy === 'limited' && ` · ${formatRemainingSales(policy.remaining)}`}

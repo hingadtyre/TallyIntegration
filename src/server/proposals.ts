@@ -1,6 +1,6 @@
 import { availableForMarketplaces, calculateStock } from '../domain/stock-policy.js';
 import type { Listing, Proposal, Snapshot, StockItem } from '../shared/contracts.js';
-import { InputError } from './validation.js';
+import { InputError, isRecentObservation } from './validation.js';
 
 function ruleVersion(state: Snapshot, listing: Listing): string {
   const useTyreFloor = listing.tyreFloor ?? state.mode === 'demo';
@@ -23,9 +23,8 @@ export function requireStockSource(
     throw new InputError(
       'Refresh the Flipkart package count and review Set of before calculating.',
     );
-  const observedAt = Date.parse(item.observedAt);
   const maximumAge = Math.max(120_000, state.settings.tallySeconds * 3000);
-  const stale = !Number.isFinite(observedAt) || Date.now() - observedAt > maximumAge;
+  const stale = !isRecentObservation(item.observedAt, maximumAge);
   const company = state.companies.find((row) => row.id === item.companyId);
   if (
     state.mode === 'live' &&
