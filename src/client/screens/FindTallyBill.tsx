@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { BillLookup, BillingRow } from '../../shared/billing-contracts.js';
 import { errorMessage, requestJson } from '../api.js';
 import { Modal } from '../components.js';
+import { formatIndiaDay } from '../format.js';
 import { fieldLabels } from './BillingSetup.js';
 
 export type BillTarget = Pick<BillingRow, 'orderItemId' | 'orderId' | 'sku'> & {
@@ -155,11 +156,6 @@ export function FindTallyBill({
       {error && (
         <div className="message error" role="alert">
           {error}
-          {order.previewId && (
-            <button className="text-button" disabled={!!busy} onClick={onRefreshOrder}>
-              Close and refresh preview
-            </button>
-          )}
         </div>
       )}
       {lookup && lookup.bills.length === 0 && (
@@ -182,7 +178,8 @@ export function FindTallyBill({
             <option value="">Choose a voucher</option>
             {lookup.bills.map((candidate) => (
               <option key={candidate.id} value={candidate.id}>
-                {candidate.number} · {candidate.date} · Tally voucher ID {candidate.id}
+                {candidate.number} · {formatIndiaDay(candidate.date)} · Tally voucher ID{' '}
+                {candidate.id}
               </option>
             ))}
           </select>
@@ -210,13 +207,8 @@ export function FindTallyBill({
                 </tr>
                 <tr>
                   <th scope="row">Date in India</th>
-                  <td data-label="Order date">
-                    {new Date(lookup.orderDate).toLocaleDateString('en-IN', {
-                      timeZone: 'Asia/Kolkata',
-                      dateStyle: 'medium',
-                    })}
-                  </td>
-                  <td data-label="Bill date">{bill.date}</td>
+                  <td data-label="Order date">{formatIndiaDay(lookup.orderDate)}</td>
+                  <td data-label="Bill date">{formatIndiaDay(bill.date)}</td>
                 </tr>
                 <tr>
                   <th scope="row">Stock item and quantity</th>
@@ -272,6 +264,11 @@ export function FindTallyBill({
             </button>
           </div>
         </>
+      )}
+      {(error || bill?.issue) && (
+        <button className="text-button" disabled={!!busy} onClick={onRefreshOrder}>
+          {order.previewId ? 'Close and refresh preview' : 'Close and refresh tracked orders'}
+        </button>
       )}
     </Modal>
   );

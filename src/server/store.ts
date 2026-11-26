@@ -3,6 +3,8 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import type { Snapshot } from '../shared/contracts.js';
+import type { BillingFulfilment } from '../shared/billing-contracts.js';
+import type { FlipkartBillingOrder } from '../adapters/flipkart-billing.js';
 import {
   isVerifiedCancellation,
   isVerifiedSale,
@@ -10,6 +12,7 @@ import {
 } from '../shared/stock-coverage.js';
 import { backupDatabase } from './storage/backup.js';
 import { readBilling, writeBilling, type BillingData } from './storage/billing-records.js';
+import { readBillingOrders, saveBillingOrderObservations } from './storage/billing-orders.js';
 import { prepareDatabase } from './storage/migrations.js';
 import {
   readMarketplace,
@@ -122,11 +125,15 @@ export class Store {
    * commit together. Existing conversions and stale baselines require review. */
   updateMapping(
     listingId: unknown,
-    change: (market: MarketplaceData, state: Snapshot) => void,
+    change: (
+      market: MarketplaceData,
+      state: Snapshot,
+      baselines: { coverage: StockSyncCoverage; current: boolean }[],
+    ) => void,
   ): void {
     this.updateMarketplace((market, state) => {
       const listing = state.listings.find((row) => row.id === listingId);
-      if (!listing || (listing.itemId && listing.location)) return change(market, state);
+      if (!listing || (listing.itemId && listing.location)) return change(market, state, []);
       const previous = { ...listing };
       const billing = readBilling(this.database);
       const baselines: { coverage: StockSyncCoverage; current: boolean }[] = [];
@@ -140,7 +147,7 @@ export class Store {
               stockConfiguration(state, market, billing, rule.companyId).signature,
           });
       }
-      change(market, state);
+      change(market, state, baselines);
       if (
         !listing.itemId ||
         (previous.itemId &&
@@ -199,6 +206,37 @@ export class Store {
     }
   }
 
+  readBillingOrders(
+    companyId: string,
+    accountId: string,
+    from: string,
+    to: string,
+    orderItemId?: string,
+  ) {
+    return readBillingOrders(this.database, companyId, accountId, from, to, orderItemId);
+  }
+
+  saveBillingOrders(
+    companyId: string,
+    accountId: string,
+    group: BillingFulfilment,
+    orders: FlipkartBillingOrder[],
+  ): void {
+    this.saveBillingOrderObservations(
+      companyId,
+      accountId,
+      orders.map((order) => ({ group, order })),
+    );
+  }
+
+  saveBillingOrderObservations(
+    companyId: string,
+    accountId: string,
+    observations: { group: BillingFulfilment; order: FlipkartBillingOrder }[],
+  ): void {
+    saveBillingOrderObservations(this.database, companyId, accountId, observations);
+  }
+
   updateBilling(change: (data: BillingData, state: Snapshot) => void): void {
     this.database.exec('BEGIN IMMEDIATE');
     try {
@@ -219,6 +257,23 @@ export class Store {
       .prepare('SELECT from_at FROM stock_coverage WHERE company_id = ?')
       .get(companyId);
     return row && String(row.from_at);
+  }
+
+  readBillingTrackingStart(companyId: string): string | undefined {
+    const stockFrom = this.readStockTrackingStart(companyId);
+    if (stockFrom) return stockFrom;
+    const row = this.database
+      .prepare('SELECT from_at FROM billing_tracking_dates WHERE company_id = ?')
+      .get(companyId);
+    return row && String(row.from_at);
+  }
+
+  saveBillingTrackingStart(companyId: string, from: string): void {
+    this.database
+      .prepare(
+        'INSERT INTO billing_tracking_dates(company_id, from_at) VALUES (?, ?) ON CONFLICT(company_id) DO UPDATE SET from_at = excluded.from_at',
+      )
+      .run(companyId, from);
   }
 
   readStockCoverage(companyId: string): StockSyncCoverage | null {

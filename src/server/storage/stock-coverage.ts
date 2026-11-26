@@ -2,15 +2,24 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { StockCoverageOrder, StockSyncCoverage } from '../../shared/stock-coverage.js';
 import { InvalidStoredState } from './validation.js';
 
-function checkedOrder(value: unknown): StockCoverageOrder {
+export function checkedOrder(
+  value: unknown,
+  scope: 'stock' | 'billing' = 'stock',
+): StockCoverageOrder {
   const order = value as Partial<StockCoverageOrder> | null;
   if (
     !order ||
     typeof order !== 'object' ||
-    [order.orderItemId, order.orderId, order.sku, order.listingId, order.locationId].some(
+    [order.orderItemId, order.orderId, order.sku, order.listingId].some(
       (id) => typeof id !== 'string' || !id.trim(),
     ) ||
+    typeof order.locationId !== 'string' ||
+    (!order.locationId.trim() && (scope === 'stock' || !order.eligibilityUnverified)) ||
     (order.invoiceNumber !== null && typeof order.invoiceNumber !== 'string') ||
+    (order.invoiceLookup !== undefined &&
+      order.invoiceLookup !== 'failed' &&
+      order.invoiceLookup !== 'no-number' &&
+      order.invoiceLookup !== 'unsupported-format') ||
     !Number.isSafeInteger(order.quantity) ||
     Number(order.quantity) <= 0 ||
     typeof order.orderDate !== 'string' ||

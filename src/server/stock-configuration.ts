@@ -1,5 +1,5 @@
 import type { FlipkartBillingOrder } from '../adapters/flipkart-billing.js';
-import type { Snapshot } from '../shared/contracts.js';
+import { billingOnlyMapping, type Snapshot } from '../shared/contracts.js';
 import type { BillingData } from './storage/billing-records.js';
 import type { MarketplaceData } from './storage/marketplace-records.js';
 import { fingerprint } from './billing-matcher.js';
@@ -33,38 +33,40 @@ export function stockConfiguration(
   }
   // Only source identities and conversion rules belong in the baseline. Ordinary
   // stock, listing metadata and refresh times can change on every poll.
-  const mappingKeys = bindings
-    .map((l) => {
-      const item = items.get(l.itemId!)!;
-      const remote = (catalogue.get(JSON.stringify([l.accountId, l.sku])) ?? []).filter((r) =>
-        l.skuMappingId ? r.id === l.skuMappingId : r.locations.some((loc) => loc.id === l.location),
-      );
-      return JSON.stringify([
-        l.id,
-        l.accountId,
-        l.sku,
-        l.location,
-        l.itemId,
-        item?.companyId,
-        item?.externalId,
-        item?.unit,
-        l.packSize,
-        l.packSource,
-        l.packConfirmedAt,
-        l.sourceScope,
-        l.verified,
-        remote.map((r) => JSON.stringify([r.id, r.productId, r.sellerId])).sort(),
-      ]);
-    })
-    .sort();
+  const mappingKeys: string[] = [];
+  const billingOnlyKeys: string[] = [];
+  for (const l of bindings) {
+    const item = items.get(l.itemId!)!;
+    const remote = (catalogue.get(JSON.stringify([l.accountId, l.sku])) ?? []).filter((r) =>
+      l.skuMappingId ? r.id === l.skuMappingId : r.locations.some((loc) => loc.id === l.location),
+    );
+    const key = JSON.stringify([
+      l.id,
+      l.accountId,
+      l.sku,
+      l.location,
+      l.itemId,
+      item?.companyId,
+      item?.externalId,
+      item?.unit,
+      l.packSize,
+      l.packSource,
+      l.packConfirmedAt,
+      l.sourceScope,
+      l.verified,
+      remote.map((r) => JSON.stringify([r.id, r.productId, r.sellerId])).sort(),
+    ]);
+    (billingOnlyMapping(l) ? billingOnlyKeys : mappingKeys).push(key);
+  }
   const signature = fingerprint([
     company.id,
     state.settings.tallyUrl,
     accounts.map((id) => [id, market.accounts.find((a) => a.id === id)?.sellerId]),
     rules.map((r) => JSON.stringify([r.accountId, r.ledgerId, r.field, r.reference])).sort(),
-    mappingKeys,
+    mappingKeys.sort(),
   ]);
   const reviewState = fingerprint([
+    billingOnlyKeys.sort(),
     billing.links
       .filter((link) => link.companyId === companyId || accounts.includes(link.accountId))
       .map((link) => JSON.stringify(link))
@@ -92,6 +94,7 @@ export function mappedSaleListing(
   ctx: ReturnType<typeof stockConfiguration>,
   accountId: string,
   order: FlipkartBillingOrder,
+  purpose: 'stock' | 'billing' = 'stock',
 ) {
   const destinations = ctx.bindings.filter(
     (l) => l.accountId === accountId && l.sku === order.sku && l.location === order.locationId,
@@ -107,7 +110,9 @@ export function mappedSaleListing(
         hasConfirmedPickup(destination, l)),
   );
   return destination.verified &&
-    (ctx.state.mode !== 'live' || destination.sourceScope === 'company') &&
+    (billingOnlyMapping(destination)
+      ? purpose === 'billing'
+      : ctx.state.mode !== 'live' || destination.sourceScope === 'company') &&
     remote.length === 1 &&
     remote[0].observedAt &&
     remote[0].id === order.listingId
@@ -119,6 +124,7 @@ export function mappedSaleItem(
   ctx: ReturnType<typeof stockConfiguration>,
   accountId: string,
   order: FlipkartBillingOrder,
+  purpose: 'stock' | 'billing' = 'stock',
 ) {
-  return mappedSaleListing(ctx, accountId, order)?.itemId ?? null;
+  return mappedSaleListing(ctx, accountId, order, purpose)?.itemId ?? null;
 }

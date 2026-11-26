@@ -460,6 +460,64 @@ test('schema six keeps observed orders and treats every older uncertain request 
   assert.equal(reopened.read().listings[0].tyreFloor, state.listings[0].tyreFloor);
 });
 
+test('schema thirteen retains the stock start and keeps billing-only observations across a restart', (t) => {
+  const f = fixture(t);
+  const state = legacyState(f.directory);
+  const [first, second] = state.companies;
+  const accountId = state.accounts[0].id;
+  const from = '2026-10-31T18:30:00.000Z';
+  queryFile(f.file, (db) => {
+    createSchema(db, 13);
+    db.exec('PRAGMA user_version = 13');
+    writeSnapshot(db, state);
+    db.prepare('INSERT INTO stock_coverage VALUES (?, ?, ?, NULL)').run(first.id, from, 'stock');
+    db.prepare('INSERT INTO billing_rules VALUES (?, ?, ?, ?, ?, ?)').run(
+      second.id,
+      accountId,
+      'ledger',
+      'Sales',
+      'reference',
+      'orderId',
+    );
+  });
+  const store = f.open();
+  assert.ok(store.migrationBackupPath);
+  queryFile(store.migrationBackupPath, (db) =>
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version, 13),
+  );
+  assert.equal(store.readBillingTrackingStart(first.id), from);
+  store.saveBillingTrackingStart(second.id, from);
+  const order = {
+    orderItemId: 'warehouse-item',
+    orderId: 'buyer-order',
+    listingId: 'listing',
+    sku: 'SKU',
+    locationId: '',
+    quantity: 1,
+    invoiceNumber: null,
+    orderDate: '2026-11-01T01:00:00.000Z',
+    eligibilityUnverified: true as const,
+  };
+  assert.throws(
+    () =>
+      store.saveBillingOrders(second.id, accountId, 'fbf', [
+        order,
+        { ...order, orderItemId: 'bad', quantity: 0 },
+      ]),
+    InvalidStoredState,
+  );
+  assert.deepEqual(store.readBillingOrders(second.id, accountId, from, order.orderDate), []);
+  store.saveBillingOrders(second.id, accountId, 'fbf', [order, order]);
+  const reopened = f.open();
+  assert.equal(reopened.readBillingTrackingStart(second.id), from);
+  assert.equal(reopened.readStockCoverage(second.id), null);
+  assert.deepEqual(reopened.readBillingOrders(second.id, accountId, from, order.orderDate), [
+    { group: 'fbf', order },
+  ]);
+  assert.deepEqual(reopened.readBillingOrders(first.id, accountId, from, order.orderDate), []);
+  assert.deepEqual(reopened.readBillingOrders(second.id, accountId, from, from), []);
+});
+
 test('invalid legacy data is rejected before changing or backing up the source', (t) => {
   const f = fixture(t);
   const invalid = legacyState(f.directory);

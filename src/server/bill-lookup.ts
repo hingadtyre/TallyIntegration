@@ -3,6 +3,7 @@ import type { BillLookup, TrackedBillHistory } from '../shared/billing-contracts
 import { isVerifiedSale } from '../shared/stock-coverage.js';
 import {
   fingerprint,
+  isInspectedBillLink,
   matchBills,
   storeReviewedBillLink,
   type BillingScope,
@@ -10,6 +11,8 @@ import {
 import type { BillingService } from './billing-service.js';
 import { invalidateReservationDrafts } from './proposals.js';
 import type { CompanyBillEvidence, StockAvailabilityService } from './stock-availability.js';
+import { mappedSaleItem } from './stock-configuration.js';
+import type { ExpandedBillEvidence, TrackedBillingService } from './tracked-billing.js';
 import type { BillingData, BillingLink } from './storage/billing-records.js';
 import type { Snapshot } from '../shared/contracts.js';
 import type { Store } from './store.js';
@@ -34,7 +37,11 @@ function invalidateBillStock(state: Snapshot, link: BillingLink) {
   if (item) invalidateReservationDrafts(state, new Set([item.id]));
 }
 
-function trackedOrders(evidence: CompanyBillEvidence, scope: BillingScope): TrackedBillHistory {
+function trackedOrders(
+  evidence: CompanyBillEvidence,
+  scope: BillingScope,
+  expanded?: ExpandedBillEvidence,
+): TrackedBillHistory {
   const { ctx } = evidence;
   const links = new Map(
     ctx.billing.links
@@ -44,7 +51,12 @@ function trackedOrders(evidence: CompanyBillEvidence, scope: BillingScope): Trac
   const vouchers = new Map(
     evidence.vouchers.get(scope.accountId)?.map((bill) => [bill.externalId, bill]),
   );
-  const history: TrackedBillHistory = { orders: [], billed: [] };
+  const history: TrackedBillHistory = {
+    orders: [],
+    billed: [],
+    ...(expanded && { check: expanded.check }),
+  };
+  const failed = expanded?.failedGroups.get(scope.accountId);
   for (const { accountId, itemId, order, result, match } of evidence.orders) {
     if (
       accountId !== scope.accountId ||
@@ -57,27 +69,79 @@ function trackedOrders(evidence: CompanyBillEvidence, scope: BillingScope): Trac
       orderDate: order.orderDate,
       sku: order.sku,
     };
-    if (result.status === 'matched' && match) history.billed.push({ ...identity, ...match });
+    const groups = expanded?.groupsByOrder.get(order.orderItemId);
+    // Legacy stock receipts did not distinguish standard from self-ship.
+    const checked = groups?.size
+      ? expanded!.observed.has(order.orderItemId) ||
+        [...groups].every((group) => !failed?.has(group))
+      : !failed?.has('standard') && !failed?.has('selfShip');
     const saved = links.get(order.orderItemId);
+    const uncheckedClaim =
+      result.status === 'matched' &&
+      ((itemId && expanded?.uncheckedItems.get(itemId)) ||
+        (saved &&
+          isInspectedBillLink(saved) &&
+          expanded?.check.complete === false &&
+          'Retry the incomplete fulfilment checks to verify the previously linked Tally bill.'));
+    const stockGroup = groups?.size
+      ? [...groups].every((group) => group === 'standard' || group === 'selfShip')
+      : expanded?.stockOrders.has(order.orderItemId);
+    const billingOnly =
+      expanded &&
+      result.status === 'reserved' &&
+      (!expanded.stockOrders.has(order.orderItemId) ||
+        !mappedSaleItem(ctx, accountId, order) ||
+        !stockGroup);
+    if (checked && !uncheckedClaim && result.status === 'matched' && match)
+      history.billed.push({ ...identity, ...match });
     const bill = saved && vouchers.get(saved.billId);
-    if (
-      !saved &&
-      (!itemId ||
-        !isVerifiedSale(order) ||
-        result.baseUnits === null ||
-        (result.status !== 'reserved' && result.status !== 'review'))
-    )
-      continue;
+    const stockMapping =
+      !expanded ||
+      (expanded.stockCoverageFrom && order.orderDate >= expanded.stockCoverageFrom && stockGroup);
     history.orders.push({
       ...identity,
-      status: result.status,
-      reason: result.reason,
+      ...(groups?.size === 1 && { fulfilment: [...groups][0] }),
+      ...(checked &&
+        !saved &&
+        result.status === 'unmapped' &&
+        isVerifiedSale(order) &&
+        order.listingId &&
+        order.locationId && {
+          mapping: {
+            listingId: order.listingId,
+            location: order.locationId,
+            purpose: stockMapping ? 'stock' : 'billing',
+          },
+        }),
+      status: !checked || uncheckedClaim ? 'review' : billingOnly ? 'unmatched' : result.status,
+      reason: !checked
+        ? 'The current fulfilment check is incomplete. Retry to verify this saved order.'
+        : uncheckedClaim
+          ? uncheckedClaim
+          : expanded && !order.locationId
+            ? 'Flipkart did not provide the location needed to verify the listing. Check the order location in Flipkart, then refresh tracked orders.'
+            : expanded && (!order.listingId || !order.sku)
+              ? 'Check the listing ID and seller SKU for this order in Flipkart, then refresh tracked orders.'
+              : result.status === 'unmapped' && !isVerifiedSale(order)
+                ? 'Verify the sale status and listing identity in Flipkart before mapping this order.'
+                : billingOnly
+                  ? 'No verified Tally bill was found for this sale.'
+                  : expanded && result.status === 'cancelled'
+                    ? 'Flipkart confirmed this order was cancelled before dispatch.'
+                    : result.reason,
+      canFindBill:
+        checked &&
+        !saved &&
+        !!itemId &&
+        isVerifiedSale(order) &&
+        result.baseUnits !== null &&
+        (result.status === 'reserved' || result.status === 'review'),
       ...(saved && { manualBillId: saved.billId, linkToken: fingerprint(saved) }),
       ...(bill && { manualBillNumber: bill.number, manualBillDate: bill.date }),
     });
   }
   history.orders.sort(
-    (a, b) => a.orderDate.localeCompare(b.orderDate) || a.orderItemId.localeCompare(b.orderItemId),
+    (a, b) => b.orderDate.localeCompare(a.orderDate) || a.orderItemId.localeCompare(b.orderItemId),
   );
   history.billed.sort(
     (a, b) =>
@@ -88,7 +152,11 @@ function trackedOrders(evidence: CompanyBillEvidence, scope: BillingScope): Trac
   return history;
 }
 
-function inspectBill(evidence: CompanyBillEvidence, search: Search) {
+function inspectBill(
+  evidence: CompanyBillEvidence,
+  search: Search,
+  expanded?: ExpandedBillEvidence,
+) {
   const { ctx, coverage } = evidence;
   const rule = ctx.rules.find((r) => r.accountId === search.accountId);
   if (!rule) throw conflict('Confirm bill matching for this company and seller first.');
@@ -101,6 +169,8 @@ function inspectBill(evidence: CompanyBillEvidence, search: Search) {
     );
   const item = target.itemId ? ctx.items.get(target.itemId) : undefined;
   if (!item || !isVerifiedSale(target.order)) throw conflict(target.result.reason);
+  const incomplete = expanded?.check.complete === false;
+  const uncheckedClaim = expanded?.uncheckedItems.get(item.id);
   const { rows, voucherMatches } = matchBills(
     { companyId: search.companyId, accountId: search.accountId },
     rule,
@@ -128,7 +198,13 @@ function inspectBill(evidence: CompanyBillEvidence, search: Search) {
   const bills = voucherMatches
     .sort((a, b) => a.bill.id.localeCompare(b.bill.id))
     .map((m) => {
-      if (!m.reason && m.link) links.set(m.bill.id, m.link);
+      const issue =
+        m.reason ??
+        uncheckedClaim ??
+        (incomplete
+          ? 'Retry the incomplete fulfilment checks before confirming a bill. Another order could claim it.'
+          : null);
+      if (!issue && m.link) links.set(m.bill.id, m.link);
       return {
         ...m.bill,
         recordedReference: m.actualReference,
@@ -141,7 +217,7 @@ function inspectBill(evidence: CompanyBillEvidence, search: Search) {
             unit: line.unit,
             quantity: line.quantity,
           })),
-        issue: m.reason,
+        issue,
       };
     });
   const result: Omit<BillLookup, 'reviewId'> = {
@@ -174,9 +250,11 @@ export class BillLookupService {
     private readonly store: Store,
     private readonly availability: StockAvailabilityService,
     private readonly billing: BillingService,
+    private readonly tracked?: TrackedBillingService,
   ) {}
 
   invalidate(accountId: string) {
+    this.tracked?.invalidate(accountId);
     for (const [key, review] of this.reviews) {
       if (review.search.accountId === accountId) this.reviews.delete(key);
     }
@@ -187,14 +265,20 @@ export class BillLookupService {
       search.previewId
         ? this.billing.previewStartForOrder(search, search.previewId, search.orderItemId)
         : undefined;
-    const evidence = await this.availability.readBillEvidence(
-      search.companyId,
-      search.accountId,
-      search.orderItemId,
-      previewStart(),
-    );
+    const expanded =
+      this.tracked && this.store.readBillingTrackingStart(search.companyId)
+        ? await this.tracked.check(search, {}, { previewFrom: previewStart() })
+        : undefined;
+    const evidence =
+      expanded?.evidence ??
+      (await this.availability.readBillEvidence(
+        search.companyId,
+        search.accountId,
+        search.orderItemId,
+        previewStart(),
+      ));
     previewStart();
-    const match = inspectBill(evidence, search);
+    const match = inspectBill(evidence, search, expanded);
     evidence.verify();
     return { evidence, match };
   }
@@ -205,12 +289,19 @@ export class BillLookupService {
     const key = JSON.stringify([companyId, accountId]);
     if (path === '/api/billing/tracked-bills') {
       if (
-        !this.store.readStockTrackingStart(companyId) ||
+        !this.store.readBillingTrackingStart(companyId) ||
         !this.store
           .readBilling()
           .rules.some((r) => r.companyId === companyId && r.accountId === accountId)
-      )
+      ) {
+        if (input.retryGroup !== undefined || input.checkId !== undefined)
+          throw conflict('The billing scope changed. Refresh tracked orders.');
         return { orders: [], billed: [] } satisfies TrackedBillHistory;
+      }
+      if (this.tracked) {
+        const expanded = await this.tracked.check(scope, input);
+        return trackedOrders(expanded.evidence, scope, expanded);
+      }
       const evidence = await this.availability.readBillEvidence(companyId, accountId);
       return trackedOrders(evidence, scope);
     }

@@ -30,6 +30,243 @@ const shipment = {
 };
 const empty = () => Response.json({ hasMore: false, shipments: [] });
 
+test('billing fulfilment groups cover each documented profile and shipment type once and retain exceptional orders', async () => {
+  const types = ['NORMAL', 'SELF', 'EXPRESS'];
+  for (const [group, profile, alias, expectedTypes] of [
+    ['standard', 'NON_FBF', 'Seller_Fulfilment', ['NORMAL']],
+    ['selfShip', 'NON_FBF', 'Seller_Fulfilment', ['SELF']],
+    ['express', 'NON_FBF', 'Seller_Fulfilment', ['EXPRESS']],
+    ['smart', 'FBF_LITE', 'Smart_Fulfilment', types],
+    ['fbf', 'FBF', 'Flipkart_Fulfilment', types],
+  ] as const) {
+    const searches: string[] = [];
+    const client = new FlipkartBillingClient({
+      request: async (_url, options) => {
+        const { filter } = JSON.parse(String(options?.body));
+        assert.deepEqual(filter.serviceProfiles, [profile]);
+        assert.deepEqual(filter.orderDate, { from, to });
+        assert.equal(filter.shipmentTypes.length, 1);
+        if (filter.type === 'postDispatch')
+          assert.deepEqual(filter.states, [
+            'PICKUP_COMPLETE',
+            'SHIPPED',
+            'DELIVERED',
+            'COMPLETED',
+            'RETURN_REQUESTED',
+            'RETURNED',
+          ]);
+        const kind = filter.shipmentTypes[0];
+        const partition = [kind, filter.type, filter.cancellationType ?? filter.hold ?? ''].join(
+          '/',
+        );
+        searches.push(partition);
+        const status =
+          filter.type === 'cancelled'
+            ? 'CANCELLED'
+            : filter.type === 'postDispatch'
+              ? 'RETURNED'
+              : 'PACKED';
+        return Response.json({
+          hasMore: false,
+          shipments: [
+            {
+              ...shipment,
+              shipmentType: kind,
+              hold: filter.hold ?? false,
+              orderItems: [
+                {
+                  ...baseItem,
+                  orderItemId: partition,
+                  status,
+                  serviceProfile: filter.hold ? profile : alias,
+                  ...(status === 'CANCELLED' && { cancellationDate: to }),
+                },
+              ],
+            },
+          ],
+        });
+      },
+    });
+    const rows = await client.readFulfilmentOrders(token, from, to, group);
+    const expected = expectedTypes.flatMap((kind) => [
+      kind + '/preDispatch/true',
+      kind + '/preDispatch/false',
+      kind + '/postDispatch/',
+      kind + '/cancelled/buyerCancellation',
+      kind + '/cancelled/sellerCancellation',
+      kind + '/cancelled/marketplaceCancellation',
+    ]);
+    assert.deepEqual(searches.sort(), expected.sort());
+    assert.equal(rows.length, searches.length);
+    for (const row of rows) {
+      const disposition = row.orderItemId.endsWith('/preDispatch/false')
+        ? undefined
+        : /\/(?:buyerCancellation|marketplaceCancellation)$/.test(row.orderItemId)
+          ? 'cancelled'
+          : 'uncertain';
+      assert.equal(row.stockDisposition, disposition, row.orderItemId);
+    }
+  }
+});
+
+test('an expanded group requires the correct profile, shipment type and every continuation before reporting its count', async () => {
+  const smart = {
+    ...shipment,
+    shipmentType: 'EXPRESS',
+    orderItems: [{ ...baseItem, serviceProfile: 'Smart_Fulfilment' }],
+  };
+  for (const continuation of [
+    new Response('', { status: 403 }),
+    Response.json({ hasMore: false, shipments: [{ ...smart, shipmentType: 'SELF' }] }),
+    Response.json({ hasMore: false, shipments: [{ ...smart, orderItems: [baseItem] }] }),
+  ]) {
+    const client = new FlipkartBillingClient({
+      request: async (url, options) => {
+        if (String(url).includes('next_token=')) return continuation;
+        const { filter } = JSON.parse(String(options?.body));
+        if (filter.type !== 'preDispatch' || filter.hold || filter.shipmentTypes[0] !== 'EXPRESS')
+          return empty();
+        return Response.json({
+          hasMore: true,
+          nextPageUrl: '?next_token=smart',
+          shipments: [smart],
+        });
+      },
+    });
+    await assert.rejects(
+      client.readFulfilmentOrders(token, from, to, 'smart'),
+      FlipkartBillingError,
+    );
+  }
+});
+
+test('a warehouse order can recover its pickup and invoice from the exact shipment across service profile aliases', async () => {
+  const warehouseItem = { ...baseItem, serviceProfile: 'Flipkart_Fulfilment' };
+  const client = new FlipkartBillingClient({
+    request: async (url, options) => {
+      if (String(url).includes('shipmentIds='))
+        return Response.json({
+          shipments: [{ ...shipment, orderItems: [{ ...warehouseItem, serviceProfile: 'FBF' }] }],
+        });
+      if (String(url).endsWith('/invoices'))
+        return Response.json({
+          invoices: [
+            {
+              shipmentId: shipment.shipmentId,
+              invoiceNumber: 'WAREHOUSE-42',
+              orderItems: [{ orderItemId: baseItem.orderItemId }],
+            },
+          ],
+        });
+      const { filter } = JSON.parse(String(options?.body));
+      if (filter.type !== 'preDispatch' || filter.hold || filter.shipmentTypes[0] !== 'NORMAL')
+        return empty();
+      return Response.json({
+        hasMore: false,
+        shipments: [{ ...shipment, locationId: undefined, orderItems: [warehouseItem] }],
+      });
+    },
+  });
+  const [order] = await client.readFulfilmentOrders(token, from, to, 'fbf', true);
+  assert.equal(order.invoiceNumber, 'WAREHOUSE-42');
+  assert.equal(order.locationId, shipment.locationId);
+  assert.equal(order.eligibilityUnverified, undefined);
+});
+
+test('a billing group displays an identified warehouse order without a pickup for review', async () => {
+  const noPickup = {
+    ...shipment,
+    locationId: null,
+    orderItems: [{ ...baseItem, serviceProfile: 'Flipkart_Fulfilment' }],
+  };
+  const client = new FlipkartBillingClient({
+    request: async (url, options) => {
+      if (String(url).includes('shipmentIds=')) return Response.json({ shipments: [noPickup] });
+      const { filter } = JSON.parse(String(options?.body));
+      if (filter.type !== 'preDispatch' || filter.hold || filter.shipmentTypes[0] !== 'NORMAL')
+        return empty();
+      return Response.json({ hasMore: false, shipments: [noPickup] });
+    },
+  });
+  const [row] = await client.readFulfilmentOrders(token, from, to, 'fbf');
+  assert.equal(row.orderItemId, baseItem.orderItemId);
+  assert.equal(row.locationId, '');
+  assert.equal(row.eligibilityUnverified, true);
+  assert.equal(row.stockDisposition, 'uncertain');
+});
+
+test('tracked shipments survive denied invoice access and an invalid invoice batch cannot supply partial evidence', async () => {
+  const shipments = Array.from({ length: 26 }, (_, index) => ({
+    ...shipment,
+    shipmentId: 'shipment-' + index,
+    orderItems: [{ ...baseItem, orderItemId: 'item-' + index }],
+  }));
+  let denied = true;
+  let remainingHasInvoice = true;
+  const client = new FlipkartBillingClient({
+    request: async (url, options) => {
+      if (String(url).endsWith('/invoices')) {
+        if (String(url).includes('shipment-0,')) {
+          if (denied) return new Response(null, { status: 403 });
+          return Response.json({
+            invoices: [
+              {
+                shipmentId: 'shipment-0',
+                invoiceNumber: 'SUSPECT',
+                orderItems: [{ orderItemId: 'item-0' }],
+              },
+              {
+                shipmentId: 'wrong-shipment',
+                invoiceNumber: 'BAD',
+                orderItems: [{ orderItemId: 'item-1' }],
+              },
+            ],
+          });
+        }
+        return Response.json({
+          invoices: remainingHasInvoice
+            ? [
+                {
+                  shipmentId: 'shipment-25',
+                  invoiceNumber: 'FK-25',
+                  orderItems: [{ orderItemId: 'item-25' }],
+                },
+              ]
+            : [],
+        });
+      }
+      if (String(url).includes('next_token=invoice-test'))
+        return Response.json({ hasMore: false, shipments: shipments.slice(20) });
+      const { filter } = JSON.parse(String(options?.body));
+      if (filter.type === 'preDispatch' && !filter.hold && filter.shipmentTypes[0] === 'NORMAL')
+        return Response.json({
+          hasMore: true,
+          nextPageUrl: '?next_token=invoice-test',
+          shipments: shipments.slice(0, 20),
+        });
+      return empty();
+    },
+  });
+  const read = () => client.readFulfilmentOrders(token, from, to, 'standard', true);
+  const fresh = await read();
+  assert.equal(fresh.length, 26);
+  for (const row of fresh.slice(0, 25)) {
+    assert.equal(row.invoiceNumber, null);
+    assert.equal(row.invoiceLookup, 'failed');
+    assert.equal(row.eligibilityUnverified, undefined);
+  }
+  assert.equal(fresh[25].invoiceNumber, 'FK-25');
+  assert.equal(fresh[25].invoiceLookup, undefined);
+  await assert.rejects(client.readStockOrders(token, from, to, true), /rejected access/);
+  denied = false;
+  remainingHasInvoice = false;
+  const retried = await read();
+  assert.equal(retried[0].invoiceNumber, null);
+  assert.equal(retried[0].invoiceLookup, 'failed');
+  assert.equal(retried[25].invoiceNumber, null);
+  assert.equal(retried[25].invoiceLookup, 'no-number');
+});
+
 test('malformed return add-ons cannot verify a sale or release a cancelled order', async () => {
   const client = new FlipkartBillingClient({
     request: async (_url, options) => {
@@ -446,6 +683,25 @@ test('a partial search, unsafe cursor, repeated cursor or contradictory line rej
     partial.readOrders(token, from, to),
     (error) => error instanceof Error && !error.message.includes('Customer payload'),
   );
+});
+
+test('missing and PDF-only invoices preserve readable tracked shipments without a permission error', async () => {
+  for (const status of [200, 404, 406, 415]) {
+    const client = new FlipkartBillingClient({
+      request: async (url, options) => {
+        if (String(url).endsWith('/invoices'))
+          return new Response(null, { status, headers: { 'content-type': 'application/pdf' } });
+        const { filter } = JSON.parse(String(options?.body));
+        return filter.type === 'preDispatch' && !filter.hold
+          ? Response.json({ hasMore: false, shipments: [shipment] })
+          : empty();
+      },
+    });
+    const [row] = await client.readFulfilmentOrders(token, from, to, 'standard', true);
+    assert.equal(row.orderItemId, baseItem.orderItemId);
+    assert.equal(row.invoiceNumber, null);
+    assert.equal(row.invoiceLookup, status === 404 ? 'no-number' : 'unsupported-format');
+  }
 });
 
 test('an unavailable JSON invoice has no reference and an invoice for a different shipment never matches', async () => {

@@ -250,6 +250,96 @@ test('duplicate reference claimants and shared ledgers require human attribution
   assert.equal(f.match().rows[0].candidates.length, 0);
 });
 
+test('a retained sibling can contest the preview voucher without contributing an extra preview row or units', () => {
+  const f = fixture();
+  const sibling = { ...f.order, orderItemId: 'OI-2', quantity: 2 };
+  const preview = (order: FlipkartBillingOrder, accountId = f.scope.accountId) =>
+    matchBills(
+      f.scope,
+      f.rule,
+      { orders: [f.order], bills: [f.bill], knownOrders: [{ accountId, order }] },
+      f.saved,
+      f.state,
+      f.catalogue.listings,
+    );
+  const contested = preview(sibling);
+  assert.deepEqual(
+    contested.rows.map((row) => [row.orderItemId, row.status, row.bill]),
+    [[f.order.orderItemId, 'review', null]],
+  );
+  assert.equal(contested.stock[0].unmatchedUnits, 1);
+  assert.equal(preview({ ...sibling, stockDisposition: 'cancelled' }).rows[0].status, 'matched');
+  assert.equal(preview(sibling, 'another-seller').rows[0].status, 'matched');
+  assert.equal(preview(f.order).rows[0].status, 'matched');
+  assert.equal(preview({ ...f.order, stockIdentityConflict: true }).rows[0].status, 'review');
+  const branch = f.catalogue.listings.find((row) => row.sku === 'SAMPLE-BRANCH-1')!;
+  const branchSale = {
+    ...sibling,
+    listingId: branch.id,
+    sku: branch.sku,
+    locationId: branch.locations[0].id,
+  };
+  assert.equal(preview(branchSale).rows[0].status, 'matched');
+  const confirmed = contested.links.get(f.order.orderItemId)!.get(f.bill.externalId)!;
+  f.saved.links.push(confirmed);
+  assert.equal(preview(sibling).rows[0].status, 'matched');
+});
+
+test('a retained order with an unverified invoice can contest an otherwise matching preview bill or seller choice', () => {
+  const f = fixture();
+  f.rule.reference = 'invoiceNumber';
+  f.bill.reference = f.order.invoiceNumber!;
+  const sibling: FlipkartBillingOrder = {
+    ...f.order,
+    orderId: 'warehouse-order',
+    orderItemId: 'warehouse-line',
+    invoiceNumber: null,
+    invoiceLookup: 'failed',
+  };
+  const preview = (order: FlipkartBillingOrder, accountId = f.scope.accountId) =>
+    matchBills(
+      f.scope,
+      f.rule,
+      {
+        orders: [f.order],
+        knownOrders: [{ accountId, order }],
+        bills: [f.bill],
+      },
+      f.saved,
+      f.state,
+      f.catalogue.listings,
+    );
+  const blocked = preview(sibling);
+  assert.deepEqual(
+    blocked.rows.map((row) => [row.status, row.bill, row.candidates]),
+    [['review', null, []]],
+  );
+  assert.equal(blocked.stock[0].unmatchedUnits, 1);
+  const valid = preview({ ...sibling, quantity: 2 });
+  assert.equal(valid.rows[0].bill?.id, f.bill.externalId);
+  f.saved.links.push(valid.links.get(f.order.orderItemId)!.get(f.bill.externalId)!);
+  assert.equal(preview(sibling).rows[0].status, 'review');
+  assert.equal(
+    preview({ ...sibling, orderDate: '2026-11-21T12:00:00Z' }).rows[0].status,
+    'matched',
+  );
+  f.saved.links.length = 0;
+  f.bill.reference = '';
+  assert.deepEqual(preview(sibling).rows[0].candidates, []);
+  assert.equal(
+    preview({ ...sibling, invoiceNumber: 'other', invoiceLookup: undefined }).rows[0].candidates
+      .length,
+    1,
+  );
+  const peer = 'another-seller';
+  f.saved.rules.push({ ...f.scope, ...f.rule, accountId: peer });
+  f.state.listings.push({ ...f.state.listings[0], id: 'peer-mapping', accountId: peer });
+  f.catalogue.listings.push({ ...f.catalogue.listings[0], accountId: peer });
+  f.rule.field = 'manual';
+  assert.deepEqual(preview(sibling, peer).rows[0].candidates, []);
+  assert.equal(preview({ ...sibling, quantity: 2 }, peer).rows[0].candidates.length, 1);
+});
+
 test('a shared order reference on two lines for the same stock item cannot identify a partial bill by coincident quantity', () => {
   const f = fixture();
   const orders = [f.order, { ...f.order, orderItemId: 'OI-2', quantity: 2 }];
@@ -347,6 +437,24 @@ test('a competing order claim prevents a voucher-number exception and invalidate
     /Another voucher/,
   );
   assert.deepEqual(f.find(extra.number, [], [], [extra]).voucherMatches, []);
+});
+
+test('an old invoice lookup failure on a returned order still protects its known references', () => {
+  const f = fixture();
+  f.bill.reference = 'seller-entered';
+  const returned: FlipkartBillingOrder = {
+    ...f.order,
+    orderId: 'returned-order',
+    orderItemId: 'returned-item',
+    invoiceNumber: 'returned-invoice',
+    invoiceLookup: 'failed',
+    stockDisposition: 'uncertain',
+    eligibilityUnverified: true,
+  };
+  const known = [{ accountId: f.scope.accountId, order: returned }];
+  assert.ok(f.find(f.bill.number, known).voucherMatches[0].link);
+  f.bill.narration = 'Recorded for returned-invoice';
+  assert.match(f.find(f.bill.number, known).voucherMatches[0].reason!, /another known order/);
 });
 
 test('separate mapped items on the same Flipkart order can have distinct assignments in one voucher', () => {

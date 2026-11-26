@@ -28,6 +28,7 @@ import {
 } from './storage/marketplace-records.js';
 import { createSchema, CURRENT_SCHEMA_VERSION, schemaVersion } from './storage/schema.js';
 import { verifyStockCoverage } from './storage/stock-coverage.js';
+import { verifyBillingOrders } from './storage/billing-orders.js';
 
 type WorkspaceMode = Snapshot['mode'];
 
@@ -90,6 +91,7 @@ function readCheckedSnapshot(database: DatabaseSync, mode: WorkspaceMode): Snaps
   const snapshot = readSnapshot(database);
   if (version >= 3) readMarketplace(database);
   if (version >= 6) verifyStockCoverage(database);
+  if (version >= 14) verifyBillingOrders(database);
   if (snapshot.mode !== mode)
     throw new Error('The backup and destination must use the same live or demo workspace mode.');
   return snapshot;

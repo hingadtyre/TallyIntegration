@@ -170,13 +170,30 @@ export interface MappingInput {
   listingId: string;
   pickupLocation?: string;
   itemId: string;
-  orderSource?: { companyId: string; accountId: string; listingId: string; locationId: string };
+  orderSource?: {
+    companyId: string;
+    accountId: string;
+    listingId: string;
+    locationId: string;
+    orderItemId?: string;
+  };
   keepPaused?: boolean;
   expectedUnit?: string;
   confirmPackEvidence: boolean;
   packSource?: 'packages' | 'manual';
   packSize?: number;
   listingVersion?: number;
-  sourceScope?: 'company';
+  sourceScope?: 'company' | null;
   tyreFloor?: boolean;
+}
+
+/** A seller confirmed the conversion for billing while leaving the stock source unconfirmed. */
+export function billingOnlyMapping(listing: Listing): boolean {
+  return (
+    listing.sourceScope === null &&
+    !!listing.packSource &&
+    !!listing.packConfirmedAt &&
+    !!listing.skuMappingId &&
+    !!listing.location
+  );
 }

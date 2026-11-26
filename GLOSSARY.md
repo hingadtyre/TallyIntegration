@@ -51,6 +51,9 @@ Flipkart’s identifier for a seller’s offer. Stockbridge also uses the seller
 The association identifying which Tally stock item supplies a marketplace listing.
 _Avoid_: Creating a Tally product, creating a marketplace listing
 
+**Billing-only mapping**:
+The seller’s association of a marketplace listing and pickup location with the Tally stock item and pack size to look for on a sales bill. The seller can separately confirm the stock source before using the listing for stock updates.
+
 **Pack size**:
 The number of base units of the mapped Tally stock item consumed by one sold listing unit. For a pair of tyres stocked individually, the pack size is two. The seller calls this **Set of** in Inventory.
 
@@ -135,4 +138,4 @@ A Tally stock item with no associated listing in the marketplace account current
 A seller’s marketplace listing whose stock source at a particular pickup location has yet to be linked to a Tally stock item. Several orders for that listing and location can wait for one stock mapping.
 
 **Order tracking start date**:
-The Indian calendar day from which a Tally company begins accounting for orders from its participating Flipkart sellers. The seller confirms that all earlier relevant sales have already been recorded in Tally.
+The Indian calendar day from which a Tally company checks orders from its participating Flipkart sellers. A seller can save this date for bill matching alone. Confirming starting stock also establishes that all earlier relevant sales were recorded in Tally and identifies which orders can reserve units.

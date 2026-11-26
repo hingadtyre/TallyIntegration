@@ -5,11 +5,12 @@ import type {
   PendingListingGroup,
   PendingListings,
   PendingOrderResult,
+  TrackedBillOrder,
 } from '../../shared/billing-contracts.js';
 import type { Listing, Snapshot } from '../../shared/contracts.js';
 import { errorMessage, requestJson } from '../api.js';
 import { Modal } from '../components.js';
-import { formatDateTime, formatUnits } from '../format.js';
+import { formatDateTime, formatIndiaDay, formatUnits } from '../format.js';
 import { SearchablePicker } from '../SearchablePicker.js';
 import { PackForm, type SaveMapping } from './MappingDialog.js';
 
@@ -53,11 +54,14 @@ function findDestination(
   inventory: Snapshot,
   accountId: string,
   group: Destination,
+  requireIdentity = false,
 ): { listing?: Listing; issue?: string } {
   const matches = inventory.listings.filter(
     (row) =>
       row.accountId === accountId &&
-      (row.marketplaceListingId ?? row.skuMappingId ?? group.listingId) === group.listingId &&
+      (row.marketplaceListingId ??
+        (requireIdentity ? undefined : (row.skuMappingId ?? group.listingId))) ===
+        group.listingId &&
       row.sku === group.sku &&
       !!group.location &&
       (row.location === group.location ||
@@ -344,6 +348,11 @@ export function BillingListingMappings({
                       {row.orderItemId} · {resultLabels[row.status]}
                     </strong>
                     {row.baseUnits !== null && ` · ${formatUnits(row.baseUnits, 'Tally')}`}
+                    {row.bill && (
+                      <p>
+                        Tally bill {row.bill.number} · {formatIndiaDay(row.bill.date)}
+                      </p>
+                    )}
                     <p>{row.reason}</p>
                   </li>
                 ))}
@@ -394,12 +403,85 @@ function checkSummary(rows: PendingOrderResult[]) {
   return parts.join(' · ');
 }
 
+export function TrackedListingMapping({
+  order,
+  inventory,
+  companyId,
+  accountId,
+  busy,
+  onSaveMapping,
+  onMapped,
+}: {
+  order: TrackedBillOrder;
+  inventory: Snapshot;
+  companyId: string;
+  accountId: string;
+  busy: boolean;
+  onSaveMapping: SaveMapping;
+  onMapped: () => void | Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!order.mapping) return null;
+  const group = { ...order.mapping, sku: order.sku };
+  const { listing, issue } = findDestination(inventory, accountId, group, true);
+  const company = inventory.companies.find((entry) => entry.id === companyId);
+  const seller = inventory.accounts.find((entry) => entry.id === accountId);
+  if (issue) return <span>{issue}</span>;
+  if (!listing || !seller)
+    return (
+      <span>
+        Refresh this seller’s listings in Marketplaces and verify the listing and pickup location.
+      </span>
+    );
+  if (
+    !company ||
+    (listing.itemId &&
+      !inventory.items.some((i) => i.id === listing.itemId && i.companyId === companyId))
+  )
+    return <span>Check the Tally company for this mapping in Inventory.</span>;
+  if (listing.itemId && listing.location)
+    return (
+      <span>
+        Review this listing’s Set of and pickup location in Inventory, then refresh tracked orders.
+      </span>
+    );
+  return (
+    <>
+      <button className="button secondary" disabled={busy} onClick={() => setOpen(true)}>
+        {listing.itemId ? 'Confirm order pickup' : 'Map listing'}
+      </button>
+      {open && (
+        <OrderMappingDialog
+          inventory={inventory}
+          company={company}
+          accountId={accountId}
+          seller={seller.name}
+          group={group}
+          orderItemId={order.orderItemId}
+          billingOnly={order.mapping.purpose === 'billing'}
+          onClose={() => setOpen(false)}
+          onSave={async (input) => {
+            const saved = await onSaveMapping(input);
+            if (saved.ok) {
+              setOpen(false);
+              await onMapped();
+            }
+            return saved;
+          }}
+        />
+      )}
+    </>
+  );
+}
+
 function OrderMappingDialog({
   inventory,
   company,
   accountId,
   seller,
   group,
+  orderItemId,
+  billingOnly,
   onClose,
   onSave,
 }: {
@@ -407,13 +489,15 @@ function OrderMappingDialog({
   company: Snapshot['companies'][number];
   accountId: string;
   seller: string;
-  group: Group;
+  group: Destination;
+  orderItemId?: string;
+  billingOnly?: boolean;
   onClose: () => void;
   onSave: SaveMapping;
 }) {
   const [itemId, setItemId] = useState('');
   const [saving, setSaving] = useState(false);
-  const { listing, issue } = findDestination(inventory, accountId, group);
+  const { listing, issue } = findDestination(inventory, accountId, group, !!orderItemId);
   const items = inventory.items.filter((item) => item.companyId === company.id);
   const item = items.find((entry) => entry.id === (listing?.itemId || itemId));
   return (
@@ -474,6 +558,8 @@ function OrderMappingDialog({
                 accountId,
                 marketplaceListingId: group.listingId,
                 location: group.location,
+                orderItemId,
+                billingOnly,
               }}
               onSave={async (input) => {
                 setSaving(true);

@@ -824,6 +824,7 @@ async function verifyPilot(zip) {
           db.prepare("INSERT INTO listings (id,account_id,sku,title,location,item_id,pack_size,pack_evidence,verified,policy,remaining,paused,version,sort_order) SELECT 'paused-pilot',?,'pilot-sku','Pilot tyre','test location',id,1,'test fixture',1,'limited',2,1,1,0 FROM stock_items LIMIT 1").run(process.argv[1]);
           if (db.prepare('PRAGMA table_info(stock_items)').all().some(row => row.name === 'keep_back_units')) db.exec('ALTER TABLE stock_items DROP COLUMN keep_back_units');
           if (db.prepare('PRAGMA table_info(listings)').all().some(row => row.name === 'order_proposal_pending')) db.exec('ALTER TABLE listings DROP COLUMN order_proposal_pending');
+          db.exec('DROP TABLE IF EXISTS billing_orders; DROP TABLE IF EXISTS billing_tracking_dates');
           db.exec('DROP TABLE sku_mappings; PRAGMA user_version = 10');
           db.close();
         `;

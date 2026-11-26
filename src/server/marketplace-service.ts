@@ -40,6 +40,7 @@ import {
 import { desiredStock } from './proposals.js';
 import { StockAvailabilityService } from './stock-availability.js';
 import { BillLookupService } from './bill-lookup.js';
+import { TrackedBillingService } from './tracked-billing.js';
 import { MarketplaceStockRecovery } from './marketplace-stock-recovery.js';
 import { checkManualKeepBack } from './marketplace-keep-back.js';
 import type { Store } from './store.js';
@@ -78,6 +79,7 @@ export class MarketplaceService {
   private readonly billing: BillingService;
   private readonly availability: StockAvailabilityService;
   private readonly billLookup: BillLookupService;
+  private readonly trackedBilling: TrackedBillingService;
   private readonly orderListeners = new Set<(companyId: string, batch?: object) => void>();
   private readonly recovery: MarketplaceStockRecovery;
   private stopped = false;
@@ -94,22 +96,33 @@ export class MarketplaceService {
       this.availableStock(companyId, itemId, undefined, true),
     );
     this.billing = new BillingService(store, dependencies.billingSources);
+    const billingAccess = async (id: string) => {
+      const verify = this.sellerGuard(id);
+      const token = await this.verifiedToken(id);
+      verify();
+      return { token, verify };
+    };
     this.availability = new StockAvailabilityService(
       store,
       dependencies.billingSources,
-      async (id) => {
-        const verify = this.sellerGuard(id);
-        const token = await this.verifiedToken(id);
-        verify();
-        return { token, verify };
-      },
+      billingAccess,
       (companyId, batch) => {
         for (const listener of this.orderListeners) listener(companyId, batch);
       },
     );
     if (dependencies.legacyConnection)
       this.connections.set('flipkart-primary', dependencies.legacyConnection);
-    this.billLookup = new BillLookupService(store, this.availability, this.billing);
+    this.trackedBilling = new TrackedBillingService(
+      store,
+      dependencies.billingSources,
+      billingAccess,
+    );
+    this.billLookup = new BillLookupService(
+      store,
+      this.availability,
+      this.billing,
+      this.trackedBilling,
+    );
     this.recovery = new MarketplaceStockRecovery(
       store,
       this.client,
@@ -778,7 +791,11 @@ export class MarketplaceService {
 
   async billingCommand(path: string, input: Record<string, unknown>) {
     const account = this.account(input.accountId);
-    if (path === '/api/billing/coverage' || path === '/api/billing/coverage/start')
+    if (
+      path === '/api/billing/coverage' ||
+      path === '/api/billing/coverage/start' ||
+      path === '/api/billing/tracking/start'
+    )
       return this.availability.coverageCommand(path, input);
     if (path === '/api/billing/pending' || path === '/api/billing/pending/recheck') {
       return this.serial('stock-evidence:' + requireText(input.companyId, 'Tally company'), () =>
@@ -806,6 +823,7 @@ export class MarketplaceService {
         () => this.verifiedToken(account.id),
         this.sellerGuard(account.id),
         this.availability,
+        this.trackedBilling,
       ),
     );
   }

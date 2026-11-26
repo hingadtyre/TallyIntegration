@@ -1892,6 +1892,29 @@ small {
   justify-content: space-between;
   padding: 12px var(--panel-inset);
 }
+.billing-filters .field:has(input[type='search']) {
+  flex: 1 1 17rem;
+  max-width: 26rem;
+}
+.fulfilment-check {
+  margin: 0 var(--panel-inset) 16px;
+}
+.fulfilment-check dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+}
+.fulfilment-check dt,
+.fulfilment-check small {
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+}
+.fulfilment-check dd {
+  margin: 4px 0 0;
+}
+.fulfilment-check small {
+  display: block;
+}
 .billing-results .panel-heading p,
 .billing-results small,
 .billing-form p {
@@ -3472,8 +3495,29 @@ small {
   .billing-table td:first-child {
     grid-column: 1/-1;
   }
+  .billing-table tbody th[scope='row'] {
+    grid-column: 1 / -1;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .tracked-orders-table td:empty {
+    display: none;
+  }
+  .tracked-orders-table tr:has(> td:last-child:empty) td:nth-child(2) {
+    grid-column: 1 / -1;
+  }
   .billing-choice select {
     max-width: 100%;
+  }
+}
+@media (max-width: 520px) {
+  .billing-table tbody tr:has(> th[scope='row']),
+  .tracked-orders-table tbody tr {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .billing-filters .field {
+    width: 100%;
   }
 }
 @media (max-width: 720px) {

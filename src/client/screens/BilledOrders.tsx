@@ -1,40 +1,20 @@
 import { useMemo, useState } from 'react';
 import type { BilledOrderItem, BillingReport } from '../../shared/billing-contracts.js';
-import type { useTrackedBillHistory } from './TrackedBillOrders.js';
-
-const indiaDate = new Intl.DateTimeFormat('en-IN', {
-  dateStyle: 'medium',
-  timeZone: 'Asia/Kolkata',
-});
+import { formatIndiaDay } from '../format.js';
 const pageSize = 50;
 
-export function BilledOrders({
-  report,
-  trackingFrom,
-  history,
-  busy,
-}: {
-  report: BillingReport | null;
-  trackingFrom?: string;
-  history: ReturnType<typeof useTrackedBillHistory>;
-  busy: boolean;
-}) {
+export function BilledOrders({ report }: { report: BillingReport }) {
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(pageSize);
-  const { current, refresh } = history;
   function changeQuery(value: string) {
     setQuery(value);
     setLimit(pageSize);
   }
-  const tracked = current?.history?.billed;
   const ordered = useMemo(() => {
-    const byOrderItem = new Map<string, BilledOrderItem>();
-    const start = trackingFrom ? Date.parse(trackingFrom) : undefined;
-    for (const row of report?.rows ?? []) {
+    const billed: BilledOrderItem[] = [];
+    for (const row of report.rows) {
       if (row.status !== 'matched' || !row.bill) continue;
-      // The company-wide check can find competing claims beyond the seller's preview.
-      if (start !== undefined && (!row.orderDate || Date.parse(row.orderDate) >= start)) continue;
-      byOrderItem.set(row.orderItemId, {
+      billed.push({
         orderId: row.orderId,
         orderItemId: row.orderItemId,
         orderDate: row.orderDate ?? '',
@@ -43,12 +23,11 @@ export function BilledOrders({
         method: row.manualBillId === row.bill.id ? 'seller-confirmed' : 'automatic',
       });
     }
-    for (const order of tracked ?? []) byOrderItem.set(order.orderItemId, order);
-    return [...byOrderItem.values()].sort(
+    return billed.sort(
       (a, b) =>
         b.orderDate.localeCompare(a.orderDate) || a.orderItemId.localeCompare(b.orderItemId),
     );
-  }, [report, tracked, trackingFrom]);
+  }, [report]);
   const search = query.trim().toLowerCase();
   const matches = useMemo(
     () =>
@@ -78,22 +57,7 @@ export function BilledOrders({
             Clear search
           </button>
         )}
-        {trackingFrom && (
-          <button className="button secondary" disabled={busy || !current} onClick={refresh}>
-            Refresh billed orders
-          </button>
-        )}
       </div>
-      {trackingFrom && !current && (
-        <p role="status" className="billing-filters">
-          Checking billed orders since tracking started…
-        </p>
-      )}
-      {trackingFrom && current?.error && (
-        <p role="alert" className="message error">
-          Could not check billed orders since tracking started. {current.error}
-        </p>
-      )}
       {matches.length > 0 ? (
         <>
           <p className="billing-filters">
@@ -116,14 +80,12 @@ export function BilledOrders({
                     <td>
                       <strong>{row.orderItemId}</strong>
                       <small>Order ID {row.orderId}</small>
-                      {row.orderDate && (
-                        <small>Ordered {indiaDate.format(new Date(row.orderDate))}</small>
-                      )}
+                      {row.orderDate && <small>Ordered {formatIndiaDay(row.orderDate)}</small>}
                     </td>
                     <td data-label="SKU">{row.sku}</td>
                     <td data-label="Tally bill">
                       <strong>{row.bill.number}</strong>
-                      <small>{row.bill.date}</small>
+                      <small>{formatIndiaDay(row.bill.date)}</small>
                     </td>
                     <td data-label="Match method">
                       {row.method === 'seller-confirmed' ? 'Seller-confirmed' : 'Automatic'}
@@ -145,13 +107,11 @@ export function BilledOrders({
           )}
         </>
       ) : (
-        (!trackingFrom || current?.history) && (
-          <p className="billing-filters" role="status">
-            {search
-              ? 'No billed order items match your search.'
-              : 'No billed order items were found.'}
-          </p>
-        )
+        <p className="billing-filters" role="status">
+          {search
+            ? 'No billed order items match your search.'
+            : 'No billed order items were found.'}
+        </p>
       )}
     </>
   );

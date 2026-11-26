@@ -228,7 +228,8 @@ export function verifyOrderMapping(
   companyId: string,
   location: unknown,
   orderSource: unknown,
-): void {
+  existingPickup = false,
+): string {
   if (!orderSource || typeof orderSource !== 'object')
     throw new InputError('Choose an order from Order matching.');
   const source = orderSource as Record<string, unknown>;
@@ -237,7 +238,7 @@ export function verifyOrderMapping(
   );
   const [remote] = matches;
   if (
-    (listing.itemId !== null && !!listing.location) ||
+    (!existingPickup && listing.itemId !== null && !!listing.location) ||
     source.companyId !== companyId ||
     source.accountId !== listing.accountId ||
     typeof location !== 'string' ||
@@ -249,6 +250,7 @@ export function verifyOrderMapping(
     (listing.skuMappingId && listing.skuMappingId !== remote.id) ||
     !(
       remote.locations.some((entry) => entry.id === location) ||
+      (existingPickup && hasConfirmedPickup(listing, remote)) ||
       (listing.skuMappingId === remote.id &&
         pickupChoices(market.listings, remote).includes(location))
     )
@@ -257,6 +259,7 @@ export function verifyOrderMapping(
       'The order listing, seller, pickup location or Tally company changed. Reopen the order mapping.',
       409,
     );
+  return remote.id;
 }
 
 export function seedSampleMarketplace(data: MarketplaceData, state: Snapshot): void {

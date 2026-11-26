@@ -3,7 +3,7 @@ import { saleDay } from '../domain/sale-day.js';
 import type { FlipkartBillingOrder } from '../adapters/flipkart-billing.js';
 import type { TallySalesBill, TallyStockItem } from '../adapters/tally.js';
 import { availableForMarketplaces } from '../domain/stock-policy.js';
-import { isVerifiedSale } from '../shared/stock-coverage.js';
+import { isVerifiedCancellation, isVerifiedSale } from '../shared/stock-coverage.js';
 import type {
   BillCandidate,
   BillingReport,
@@ -43,11 +43,39 @@ export function fingerprint(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
+export function usesInvoiceNumber(rule: BillingRule): boolean {
+  return rule.field !== 'manual' && rule.reference === 'invoiceNumber';
+}
+
+export function billItemKey(billId: string, itemExternalId: string) {
+  return JSON.stringify([billId, itemExternalId]);
+}
+
+export const competingInvoiceMessage =
+  'Another order could claim this Tally bill. Retry the Flipkart invoice check to verify the matching sale.';
+
+function mappedUnits(order: FlipkartBillingOrder, mapping?: Listing) {
+  if (
+    !mapping?.verified ||
+    !mapping.packSize ||
+    (mapping.packSource === 'packages' &&
+      (!mapping.packageAvailable || mapping.packageCount !== mapping.packSize))
+  )
+    return null;
+  const units = order.quantity * mapping.packSize;
+  return Number.isSafeInteger(units) && units > 0 ? units : null;
+}
+
 // A reference or voucher number is an identifier. Free-text narration may
 // surround it with words, but OD-12 must never match part of OD-123 or X/OD-12.
 function hasReference(rule: BillingRule, bill: TallySalesBill, order: FlipkartBillingOrder) {
   const id = order[rule.reference];
-  if (!id || rule.field === 'manual') return false;
+  if (
+    !id ||
+    rule.field === 'manual' ||
+    (rule.reference === 'invoiceNumber' && order.invoiceLookup === 'failed')
+  )
+    return false;
   const text = bill[rule.field].trim();
   if (rule.field !== 'narration') return text === id;
   return mentionsIdentifier(text, id);
@@ -176,6 +204,15 @@ function inspectVoucher(
   ) {
     candidate.reason = 'The voucher’s stock item is already assigned to another order.';
   } else if (
+    knownOrders.some(
+      ({ order: known }) => known.invoiceLookup === 'failed' && isVerifiedSale(known),
+    )
+  ) {
+    // Inspecting a voucher checks all its reference fields against the other
+    // orders, including their Flipkart invoice numbers.
+    candidate.reason =
+      'Retry the Flipkart invoice check before confirming this voucher. Its references could belong to another order.';
+  } else if (
     knownOrders.some((entry) => {
       if (entry.accountId === scope.accountId) {
         if (entry.order.orderItemId === order.orderItemId) return false;
@@ -262,6 +299,7 @@ export function matchBills(
   stock: BillingReport['stock'];
   links: Map<string, Map<string, BillingLink>>;
   voucherMatches: VoucherMatch[];
+  unverifiedBillItems: Set<string>;
 } {
   const rows: BillingRow[] = [];
   const voucherMatches: VoucherMatch[] = [];
@@ -280,22 +318,19 @@ export function matchBills(
       r.accountId !== scope.accountId &&
       r.ledgerId === rule.ledgerId,
   );
-  const key = (billId: string, itemId: string) => JSON.stringify([billId, itemId]);
   const used = new Map(
     saved.links
       .filter((l) => l.companyId === scope.companyId)
-      .map((l) => [key(l.billId, l.itemId), l]),
+      .map((l) => [billItemKey(l.billId, l.itemId), l]),
   );
   const assigned = new Map(
     saved.links.filter((l) => l.accountId === scope.accountId).map((l) => [l.orderItemId, l]),
   );
   const listings = new Map(
-    catalogue.filter((l) => l.accountId === scope.accountId && l.observedAt).map((l) => [l.id, l]),
+    catalogue.filter((l) => l.observedAt).map((l) => [JSON.stringify([l.accountId, l.id]), l]),
   );
   const destinations = new Map(
-    state.listings
-      .filter((l) => l.accountId === scope.accountId)
-      .map((l) => [JSON.stringify([l.sku, l.location]), l]),
+    state.listings.map((l) => [JSON.stringify([l.accountId, l.sku, l.location]), l]),
   );
   const items = new Map(state.items.map((i) => [i.id, i]));
   const billsByStock = new Map<string, TallySalesBill[]>();
@@ -315,9 +350,9 @@ export function matchBills(
       else billsByStock.set(signature, [bill]);
     }
   }
-  function mappingFor(order: FlipkartBillingOrder) {
-    const listing = listings.get(order.listingId);
-    const candidate = destinations.get(JSON.stringify([order.sku, order.locationId]));
+  function mappingFor(order: FlipkartBillingOrder, accountId = scope.accountId) {
+    const listing = listings.get(JSON.stringify([accountId, order.listingId]));
+    const candidate = destinations.get(JSON.stringify([accountId, order.sku, order.locationId]));
     return candidate &&
       listing?.sku === order.sku &&
       (!candidate.skuMappingId || candidate.skuMappingId === listing.id) &&
@@ -326,14 +361,72 @@ export function matchBills(
       ? candidate
       : undefined;
   }
-  for (const order of evidence.orders) {
+  // A shortened seller search can omit a sibling that still claims this voucher.
+  // Reconcile those claims together, then report only the requested order items.
+  const requestedOrders = new Set(evidence.orders.map((order) => order.orderItemId));
+  const retained = new Map(
+    evidence.knownOrders
+      ?.filter((entry) => entry.accountId === scope.accountId)
+      .map(({ order }) => [order.orderItemId, order]),
+  );
+  const orders = [
+    ...evidence.orders,
+    ...[...retained.values()].filter(
+      (order) => !requestedOrders.has(order.orderItemId) && !isVerifiedCancellation(order),
+    ),
+  ];
+  // An unavailable invoice can dispute a deduction in this ledger only for
+  // the same stock item, unit and quantity, on or after the competing sale.
+  const missingInvoices = usesInvoiceNumber(rule)
+    ? orders
+        .filter((order) => order.invoiceLookup === 'failed')
+        .map((order) => ({ accountId: scope.accountId, order }))
+    : [];
+  if (sharedLedger) {
+    const invoicePeers = new Set(
+      saved.rules
+        .filter(
+          (r) =>
+            r.companyId === scope.companyId &&
+            r.accountId !== scope.accountId &&
+            r.ledgerId === rule.ledgerId &&
+            usesInvoiceNumber(r),
+        )
+        .map((r) => r.accountId),
+    );
+    for (const entry of evidence.knownOrders ?? [])
+      if (entry.order.invoiceLookup === 'failed' && invoicePeers.has(entry.accountId))
+        missingInvoices.push(entry);
+  }
+  const earliestMissing = new Map<string, { itemExternalId: string; date: string }>();
+  for (const { accountId, order } of missingInvoices) {
+    if (unresolvedSale(order)) continue;
+    const mapping = mappingFor(order, accountId);
+    const item = mapping?.itemId && items.get(mapping.itemId);
+    const units = mappedUnits(order, mapping);
+    if (!item || item.companyId !== scope.companyId || units === null) continue;
+    const signature = JSON.stringify([item.externalId, item.unit, units]);
+    const date = saleDay(order.orderDate);
+    const previous = earliestMissing.get(signature);
+    if (!previous || date < previous.date)
+      earliestMissing.set(signature, { itemExternalId: item.externalId, date });
+  }
+  const unverifiedBillItems = new Set<string>();
+  for (const [signature, { itemExternalId, date }] of earliestMissing)
+    for (const bill of billsByStock.get(signature) ?? [])
+      if (bill.date >= date) unverifiedBillItems.add(billItemKey(bill.externalId, itemExternalId));
+  for (const order of orders) {
     const mapping = mappingFor(order);
     const item = mapping?.itemId ? items.get(mapping.itemId) : undefined;
     if (item && item.companyId !== scope.companyId) continue;
     // A shared invoice/order reference and one aggregated bill quantity
     // cannot identify a specific line in a partial or consolidated sale.
-    if (item && rule.field !== 'manual' && order[rule.reference]) {
-      const group = JSON.stringify([item.id, order[rule.reference]]);
+    const missingInvoice = order.invoiceLookup === 'failed' && usesInvoiceNumber(rule);
+    const referenceValue = rule.field === 'manual' ? null : order[rule.reference];
+    // A last-known invoice can still dispute a sibling's match even while
+    // this order's own invoice reference is waiting for verification.
+    if (item && referenceValue) {
+      const group = JSON.stringify([item.id, referenceValue]);
       orderGroup.set(order.orderItemId, group);
       groupSizes.set(group, (groupSizes.get(group) ?? 0) + 1);
     }
@@ -342,7 +435,7 @@ export function matchBills(
       orderId: order.orderId,
       listingId: order.listingId,
       orderDate: order.orderDate,
-      referenceValue: rule.field === 'manual' ? null : order[rule.reference],
+      referenceValue: missingInvoice ? null : referenceValue,
       sku: order.sku,
       location: order.locationId,
       quantity: order.quantity,
@@ -363,25 +456,29 @@ export function matchBills(
       voucherOrders.push({ order, row, item, mapping });
     }
     if (!item) continue;
-    const group = stockItems.get(item.id) ?? { item, rows: [] };
-    group.rows.push(row);
-    stockItems.set(item.id, group);
-    if (order.eligibilityUnverified) {
+    if (requestedOrders.has(order.orderItemId)) {
+      const group = stockItems.get(item.id) ?? { item, rows: [] };
+      group.rows.push(row);
+      stockItems.set(item.id, group);
+    }
+    const recorded = retained.get(order.orderItemId);
+    if (
+      unresolvedSale(order) ||
+      (recorded && (unresolvedSale(recorded) || !sameOrderIdentity(order, recorded)))
+    ) {
       row.status = 'review';
       row.reason =
-        'Flipkart did not verify this order item’s sale status. Refresh after checking the order.';
+        'This order item’s sale status or identity needs verification. Refresh after checking the order.';
       continue;
     }
-    if (
-      !mapping?.verified ||
-      !mapping.packSize ||
-      (mapping.packSource === 'packages' &&
-        (!mapping.packageAvailable || mapping.packageCount !== mapping.packSize))
-    )
-      continue;
-    const units = order.quantity * mapping.packSize;
-    if (!Number.isSafeInteger(units) || units <= 0) continue;
+    const units = mappedUnits(order, mapping);
+    if (units === null) continue;
     row.baseUnits = units;
+    if (missingInvoice) {
+      row.status = 'review';
+      row.reason = 'Retry the Flipkart invoice check to verify this sale against its Tally bill.';
+      continue;
+    }
     const referenceGroup = orderGroup.get(order.orderItemId);
     if (referenceGroup) expectedDeductions.add(JSON.stringify([referenceGroup, item.unit, units]));
     row.status = 'unmatched';
@@ -390,9 +487,11 @@ export function matchBills(
     links.set(order.orderItemId, choices);
     const signature = JSON.stringify([item.externalId, item.unit, units]);
     let competingVoucher = false;
+    let competingInvoice = false;
     for (const bill of billsByStock.get(signature) ?? []) {
       if (bill.date < saleDay(order.orderDate)) continue;
-      const owner = used.get(key(bill.externalId, item.externalId));
+      const lineId = billItemKey(bill.externalId, item.externalId);
+      const owner = used.get(lineId);
       if (
         owner &&
         (owner.accountId !== scope.accountId || owner.orderItemId !== order.orderItemId)
@@ -410,6 +509,10 @@ export function matchBills(
         order[rule.reference]
       )
         continue;
+      if (unverifiedBillItems.has(lineId)) {
+        competingInvoice = true;
+        continue;
+      }
       const link: BillingLink = {
         ...scope,
         orderItemId: order.orderItemId,
@@ -447,7 +550,7 @@ export function matchBills(
         row.reason = 'Confirmed by seller.';
       }
       if (refMatches) {
-        const id = key(link.billId, link.itemId);
+        const id = lineId;
         claims.set(id, (claims.get(id) ?? 0) + 1);
         exact.set(order.orderItemId, [...(exact.get(order.orderItemId) ?? []), id]);
       }
@@ -459,6 +562,9 @@ export function matchBills(
       row.candidates = [];
       row.reason =
         'A voucher for this order has been confirmed for another order. Review the assignments.';
+    } else if (competingInvoice && !row.candidates.length) {
+      row.status = 'review';
+      row.reason = competingInvoiceMessage;
     } else if (row.status !== 'matched' && prior) {
       row.status = 'review';
       row.reason =
@@ -524,12 +630,13 @@ export function matchBills(
   const referencedLines = new Set<string>();
   for (const row of rows) {
     const link = row.bill && links.get(row.orderItemId)?.get(row.bill.id);
-    if (link && row.status === 'matched') referencedLines.add(key(link.billId, link.itemId));
+    if (link && row.status === 'matched')
+      referencedLines.add(billItemKey(link.billId, link.itemId));
   }
   for (const row of rows.filter((r) => r.status === 'review' && r.candidates.length)) {
     row.candidates = row.candidates.filter((b) => {
       const link = links.get(row.orderItemId)?.get(b.id);
-      return link && !referencedLines.has(key(link.billId, link.itemId));
+      return link && !referencedLines.has(billItemKey(link.billId, link.itemId));
     });
     if (!row.candidates.length && !assigned.has(row.orderItemId)) {
       row.status = 'unmatched';
@@ -559,7 +666,7 @@ export function matchBills(
           bill.number.trim() === lookup.billNumber.trim();
         const recorded = restoring && prior.billId === bill.externalId;
         if (!selected && !recorded) continue;
-        const owner = item && used.get(key(bill.externalId, item.externalId));
+        const owner = item && used.get(billItemKey(bill.externalId, item.externalId));
         const result = inspectVoucher(target, bill, scope, rule, knownBills, knownOrders, owner);
         if (
           recorded &&
@@ -617,9 +724,12 @@ export function matchBills(
     };
   });
   return {
-    rows: rows.sort((a, b) => a.orderItemId.localeCompare(b.orderItemId)),
+    rows: rows
+      .filter((row) => requestedOrders.has(row.orderItemId))
+      .sort((a, b) => a.orderItemId.localeCompare(b.orderItemId)),
     stock: stock.sort((a, b) => a.name.localeCompare(b.name)),
-    links,
+    links: new Map([...links].filter(([orderItemId]) => requestedOrders.has(orderItemId))),
     voucherMatches,
+    unverifiedBillItems,
   };
 }

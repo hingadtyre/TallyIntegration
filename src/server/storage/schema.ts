@@ -1,12 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 /** Each managed record has an explicit table. Array order is presentation state,
  * so sort_order is retained without making names or positions into identities. */
 export function createSchema(
   database: DatabaseSync,
-  version: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 = CURRENT_SCHEMA_VERSION,
+  version: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 = CURRENT_SCHEMA_VERSION,
 ): void {
   database.exec(`
     CREATE TABLE app_metadata (
@@ -116,6 +116,26 @@ export function createSchema(
   if (version >= 11) createSkuMappings(database);
   if (version >= 12) addItemKeepBack(database);
   if (version >= 13) addPendingOrderProposal(database);
+  if (version >= 14) createBillingOrdersSchema(database);
+}
+
+export function createBillingOrdersSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE billing_tracking_dates (
+      company_id TEXT PRIMARY KEY NOT NULL REFERENCES companies(id) DEFERRABLE INITIALLY DEFERRED,
+      from_at TEXT NOT NULL CHECK (from_at GLOB '????-??-??T18:30:00.000Z' AND julianday(from_at) IS NOT NULL)
+    ) STRICT;
+    CREATE TABLE billing_orders (
+      company_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      fulfilment TEXT NOT NULL CHECK (fulfilment IN ('standard','selfShip','express','smart','fbf')),
+      order_item_id TEXT NOT NULL CHECK (length(trim(order_item_id)) > 0),
+      evidence TEXT NOT NULL CHECK (json_valid(evidence) AND json_extract(evidence, '$.orderItemId') IS order_item_id),
+      PRIMARY KEY (company_id, account_id, fulfilment, order_item_id),
+      FOREIGN KEY (company_id, account_id) REFERENCES billing_rules(company_id, account_id) DEFERRABLE INITIALLY DEFERRED
+    ) STRICT;
+    CREATE INDEX billing_orders_period ON billing_orders(company_id, account_id, julianday(json_extract(evidence, '$.orderDate')));
+  `);
 }
 
 export function addPendingOrderProposal(database: DatabaseSync): void {

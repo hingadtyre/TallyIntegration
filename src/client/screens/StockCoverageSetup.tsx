@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { StockCoverageStatus } from '../../shared/stock-coverage.js';
 import { errorMessage, requestJson } from '../api.js';
+import { formatIndiaDay } from '../format.js';
 
 const indiaDay = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Kolkata',
@@ -23,7 +24,7 @@ export function StockCoverageSetup({
   onSavingChange?: (saving: boolean) => void;
 }) {
   const [status, setStatus] = useState<StockCoverageStatus | null>(null);
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState<'billing' | 'stock' | null>(null);
   const [fromDate, setFromDate] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -48,21 +49,30 @@ export function StockCoverageSetup({
   const today = new Date();
   const latest = indiaDay.format(today);
   const earliest = indiaDay.format(new Date(today.getTime() - 29 * 86_400_000));
-  const savedDate = status?.from ? indiaDay.format(new Date(status.from)) : '';
+  const savedFrom = status?.from ?? status?.billingFrom;
+  const savedDate = savedFrom ? indiaDay.format(new Date(savedFrom)) : '';
   const validDate = fromDate >= earliest && fromDate <= latest;
+  function edit(mode: 'billing' | 'stock') {
+    setFromDate(savedDate);
+    setConfirmed(false);
+    setError('');
+    setEditing(mode);
+  }
   async function save() {
-    if (!confirmed || saving || disabled || !validDate) return;
+    if (!editing || (editing === 'stock' && !confirmed) || saving || disabled || !validDate) return;
     setSaving(true);
     onSavingChange?.(true);
     setError('');
     try {
-      const result = await requestJson<StockCoverageStatus & { from: string }>(
-        '/billing/coverage/start',
-        { companyId, accountId, fromDate, confirmed: true },
+      const result = await requestJson<StockCoverageStatus>(
+        editing === 'stock' ? '/billing/coverage/start' : '/billing/tracking/start',
+        { companyId, accountId, fromDate, ...(editing === 'stock' && { confirmed: true }) },
       );
+      const from = result.billingFrom ?? result.from;
+      if (!from) throw new Error('The server did not return the saved tracking date.');
       setStatus(result);
-      setEditing(false);
-      onStart(result.from);
+      setEditing(null);
+      onStart(from);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -72,37 +82,47 @@ export function StockCoverageSetup({
   }
   return (
     <section className="panel settings-panel billing-panel">
-      <h2>Order tracking for calculated stock</h2>
+      <h2>Order tracking</h2>
       <p>
-        This date applies to all participating sellers for this company. A tracked sale with a stock
-        mapping reserves units until its Tally bill is matched.
+        This date applies to all participating sellers for this Tally company.
+        {status &&
+          !status.from &&
+          ' To reserve units for mapped sales awaiting a Tally bill, set the starting stock for this company.'}
       </p>
       {!status && !error && <p role="status">Checking order coverage…</p>}
       {status && (
         <>
           <p role="status">
-            {status.current && savedDate
-              ? `Stockbridge checks orders for this company from ${savedDate} (India).`
-              : (status.issue ??
-                (status.from
-                  ? 'Review the starting stock for this company.'
-                  : 'Choose the date to start tracking this company’s Flipkart orders.'))}
+            {status.from
+              ? status.current
+                ? `Stockbridge checks orders for this company from ${formatIndiaDay(savedDate)} (India).`
+                : (status.issue ?? 'Review the starting stock for this company.')
+              : savedDate
+                ? `Bill matching starts on ${formatIndiaDay(savedDate)} (India).`
+                : 'Choose the date to start matching Flipkart orders to Tally bills.'}
           </p>
-          {!status.current && savedDate && (
-            <p>The saved tracking start date is {savedDate} (India).</p>
+          {!status.current && status.from && (
+            <p>The saved tracking start date is {formatIndiaDay(savedDate)} (India).</p>
           )}
           {!editing ? (
-            <button
-              className="button secondary"
-              disabled={disabled}
-              onClick={() => {
-                setFromDate(savedDate);
-                setConfirmed(false);
-                setEditing(true);
-              }}
-            >
-              {status.from ? 'Review starting stock' : 'Set starting stock'}
-            </button>
+            <div className="billing-actions">
+              {!status.from && (
+                <button
+                  className="button secondary"
+                  disabled={disabled}
+                  onClick={() => edit('billing')}
+                >
+                  {savedDate ? 'Change billing start date' : 'Set billing start date'}
+                </button>
+              )}
+              <button
+                className="button secondary"
+                disabled={disabled}
+                onClick={() => edit('stock')}
+              >
+                {status.from ? 'Review starting stock' : 'Set starting stock'}
+              </button>
+            </div>
           ) : (
             <form
               className="billing-form"
@@ -112,7 +132,11 @@ export function StockCoverageSetup({
               }}
             >
               <label className="field billing-period">
-                <span>Track Flipkart orders from (India)</span>
+                <span>
+                  {editing === 'billing'
+                    ? 'Match Flipkart orders from (India)'
+                    : 'Track Flipkart orders from (India)'}
+                </span>
                 <input
                   type="date"
                   min={earliest}
@@ -134,50 +158,64 @@ export function StockCoverageSetup({
               ) : (
                 <p>Choose a day in the last 30 days. Tracking starts at midnight in India.</p>
               )}
-              {savedDate && fromDate > savedDate && (
+              {editing === 'stock' && status.from && fromDate > savedDate && (
                 <p role="status">
-                  Orders before {fromDate} will stop reserving stock. Check that those sales are
-                  already recorded in Tally before confirming.
+                  Orders before {formatIndiaDay(fromDate)} will stop reserving stock. Check that
+                  those sales are already recorded in Tally before confirming.
                 </p>
               )}
-              <ul>
-                <li>
-                  All Flipkart sales before this date are already recorded in Tally. Check any
-                  previously outstanding sales before moving the date forward.
-                </li>
-                <li>
-                  Every seller account sharing this stock has bill matching set up. Only standard
-                  and self-ship seller-fulfilled orders use this stock. Smart, Express and
-                  Fulfilment by Flipkart orders use separate stock.
-                </li>
-                <li>
-                  Each mapped listing’s Set of matches the Tally units used per sale throughout this
-                  period. I can map other listings as their orders appear.
-                </li>
-              </ul>
-              <label>
-                <input
-                  type="checkbox"
-                  disabled={saving || disabled || !validDate}
-                  checked={confirmed}
-                  onChange={(event) => setConfirmed(event.target.checked)}
-                />{' '}
-                I have checked all three statements for this company.
-              </label>
+              {editing === 'stock' && (
+                <>
+                  <p>
+                    A tracked sale with a stock mapping reserves units until its Tally bill is
+                    matched.
+                  </p>
+                  <ul>
+                    <li>
+                      All Flipkart sales before this date are already recorded in Tally. Check any
+                      previously outstanding sales before moving the date forward.
+                    </li>
+                    <li>
+                      Every seller account sharing this stock has bill matching set up. Only
+                      standard and self-ship orders use this stock. If I receive Smart, Express or
+                      Fulfilment by Flipkart orders, I have checked that they use separate stock.
+                    </li>
+                    <li>
+                      Each mapped listing’s Set of matches the Tally units used per sale throughout
+                      this period. I can map other listings as their orders appear.
+                    </li>
+                  </ul>
+                  <label>
+                    <input
+                      type="checkbox"
+                      disabled={saving || disabled || !validDate}
+                      checked={confirmed}
+                      onChange={(event) => setConfirmed(event.target.checked)}
+                    />{' '}
+                    I have checked all three statements for this company.
+                  </label>
+                </>
+              )}
               <div className="billing-actions">
                 <button
                   className="button primary"
                   type="submit"
-                  disabled={saving || disabled || !confirmed || !validDate}
+                  disabled={saving || disabled || (editing === 'stock' && !confirmed) || !validDate}
                 >
-                  {saving ? 'Saving starting stock…' : 'Confirm starting stock'}
+                  {editing === 'stock'
+                    ? saving
+                      ? 'Saving starting stock…'
+                      : 'Confirm starting stock'
+                    : saving
+                      ? 'Saving billing start date…'
+                      : 'Save billing start date'}
                 </button>
                 <button
                   className="text-button"
                   type="button"
                   disabled={saving}
                   onClick={() => {
-                    setEditing(false);
+                    setEditing(null);
                     setError('');
                   }}
                 >

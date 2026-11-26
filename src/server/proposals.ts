@@ -1,5 +1,11 @@
 import { availableForMarketplaces, calculateStock } from '../domain/stock-policy.js';
-import type { Listing, Proposal, Snapshot, StockItem } from '../shared/contracts.js';
+import {
+  billingOnlyMapping,
+  type Listing,
+  type Proposal,
+  type Snapshot,
+  type StockItem,
+} from '../shared/contracts.js';
 import { InputError, isRecentObservation } from './validation.js';
 
 function ruleVersion(state: Snapshot, listing: Listing): string {
@@ -12,6 +18,10 @@ export function requireStockSource(
   listing: Listing,
   item = state.items.find((row) => row.id === listing.itemId),
 ): { item: StockItem; physical: number; packSize: number } {
+  if (billingOnlyMapping(listing))
+    throw new InputError(
+      'Confirm the stock source in Inventory before calculating stock for this listing.',
+    );
   if (!item || item.id !== listing.itemId || item.physical === null || !item.observedAt)
     throw new InputError('Refresh valid source stock before calculating.');
   if (!listing.verified || !listing.packSize)

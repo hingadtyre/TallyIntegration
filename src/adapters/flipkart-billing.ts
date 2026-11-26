@@ -1,8 +1,12 @@
+import type { BillingFulfilment } from '../shared/billing-contracts.js';
+
 /** Account-scoped order evidence for reviewing Tally sales bills. */
 export interface FlipkartBillingOrder {
   orderItemId: string;
   orderId: string;
   invoiceNumber: string | null;
+  /** Present when an invoice lookup was attempted and did not supply a number. */
+  invoiceLookup?: 'failed' | 'no-number' | 'unsupported-format';
   listingId: string;
   sku: string;
   locationId: string;
@@ -43,10 +47,31 @@ const preDispatch = [
 ];
 const postDispatchSearchStates = ['PICKUP_COMPLETE', 'SHIPPED', 'DELIVERED'];
 const postDispatch = [...postDispatchSearchStates, 'COMPLETED'];
+const billingPostDispatchStates = [...postDispatch, 'RETURN_REQUESTED', 'RETURNED'];
 const saleStatuses = new Set([...preDispatch, ...postDispatch]);
 const invoiceStatuses = new Set(['PACKED', 'READY_TO_DISPATCH', ...postDispatch]);
 const excludedStatuses = new Set(['RETURN_REQUESTED', 'RETURNED', 'CANCELLED']);
-const sellerProfiles = new Set(['NON_FBF', 'Seller_Fulfilment']);
+const profileNames = {
+  NON_FBF: new Set(['NON_FBF', 'Seller_Fulfilment']),
+  FBF_LITE: new Set(['FBF_LITE', 'Smart_Fulfilment']),
+  FBF: new Set(['FBF', 'Flipkart_Fulfilment']),
+};
+type ServiceProfile = keyof typeof profileNames;
+
+interface ShipmentScope {
+  serviceProfile: ServiceProfile;
+  shipmentTypes: string[];
+}
+
+// Smart and FBF describe the fulfilment profile, regardless of shipment type.
+// Express here is an EXPRESS shipment, independent of the dispatch service tier.
+const billingScopes: Record<BillingFulfilment, ShipmentScope> = {
+  standard: { serviceProfile: 'NON_FBF', shipmentTypes: ['NORMAL'] },
+  selfShip: { serviceProfile: 'NON_FBF', shipmentTypes: ['SELF'] },
+  express: { serviceProfile: 'NON_FBF', shipmentTypes: ['EXPRESS'] },
+  smart: { serviceProfile: 'FBF_LITE', shipmentTypes: ['NORMAL', 'SELF', 'EXPRESS'] },
+  fbf: { serviceProfile: 'FBF', shipmentTypes: ['NORMAL', 'SELF', 'EXPRESS'] },
+};
 
 export class FlipkartBillingError extends Error {}
 class ShipmentSearchLimit extends FlipkartBillingError {}
@@ -57,6 +82,7 @@ interface ShipmentFilter {
   type: 'preDispatch' | 'postDispatch' | 'cancelled';
   states: string[];
   shipmentTypes: string[];
+  serviceProfiles: [ServiceProfile];
   hold?: boolean;
   cancellationType?: 'buyerCancellation' | 'sellerCancellation' | 'marketplaceCancellation';
 }
@@ -159,7 +185,8 @@ function allowsMissingCourierReturn(
     typeof shipment.shipmentType === 'string' &&
     filter.shipmentTypes.includes(shipment.shipmentType) &&
     typeof item.serviceProfile === 'string' &&
-    sellerProfiles.has(item.serviceProfile) &&
+    profileNames.NON_FBF.has(item.serviceProfile) &&
+    (shipment.shipmentType === 'NORMAL' || shipment.shipmentType === 'SELF') &&
     shipment.hold === false &&
     (item.is_replacement ?? item.isReplacement) === false &&
     (item.isReplacement == null || item.isReplacement === false) &&
@@ -174,6 +201,7 @@ function verifyLocationDetailLine(
   detail: Record<string, unknown>,
   cancellationScopeConfirmed: boolean,
   missingCourierReturnAllowed: boolean,
+  profiles: ReadonlySet<string>,
 ): boolean {
   const returnConflict =
     cancellationScopeConfirmed &&
@@ -184,8 +212,8 @@ function verifyLocationDetailLine(
     (['orderId', 'listingId', 'sku', 'quantity', 'orderDate'].some(
       (field) => detail[field] == null,
     ) ||
-      !sellerProfiles.has(String(detail.serviceProfile)) ||
-      !sellerProfiles.has(String(item.serviceProfile)) ||
+      !profiles.has(String(detail.serviceProfile)) ||
+      !profiles.has(String(item.serviceProfile)) ||
       (detail.is_replacement ?? detail.isReplacement) !== false ||
       (item.is_replacement ?? item.isReplacement) !== false ||
       item.isReplacement === true ||
@@ -214,10 +242,7 @@ function verifyLocationDetailLine(
   if (
     detail.serviceProfile != null &&
     detail.serviceProfile !== item.serviceProfile &&
-    !(
-      sellerProfiles.has(String(detail.serviceProfile)) &&
-      sellerProfiles.has(String(item.serviceProfile))
-    )
+    !(profiles.has(String(detail.serviceProfile)) && profiles.has(String(item.serviceProfile)))
   )
     incomplete();
   const detailReturn = hasReturnAddOn(detail);
@@ -242,14 +267,17 @@ function collectShipment(
   lines: Map<string, ShipmentLine>,
   excluded: Set<string>,
   filter: ShipmentFilter,
-  mode: 'stock' | 'billing',
+  mode: 'stock' | 'billingHistory' | 'billing',
 ): void {
-  const forStock = mode === 'stock';
+  const includeExceptions = mode !== 'billing';
   const shipmentId = identifier(shipment.shipmentId);
-  const locationId = identifier(shipment.locationId);
+  // Billing can display an identified order even when its exact shipment details
+  // have no pickup. A stock read still requires the location for this order.
+  const locationId =
+    mode === 'billingHistory' && shipment.locationId == null ? '' : identifier(shipment.locationId);
   if (!Array.isArray(shipment.orderItems) || !shipment.orderItems.length) incomplete();
   if (
-    forStock &&
+    includeExceptions &&
     ((shipment.shipmentType && !filter.shipmentTypes.includes(String(shipment.shipmentType))) ||
       (filter.hold !== undefined &&
         typeof shipment.hold === 'boolean' &&
@@ -276,16 +304,19 @@ function collectShipment(
       item.isReplacement === true ||
       item.courierReturn === true ||
       returnAddOn;
-    const otherProfile = item.serviceProfile && !sellerProfiles.has(String(item.serviceProfile));
+    const otherProfile =
+      item.serviceProfile &&
+      !profileNames[filter.serviceProfiles[0]].has(String(item.serviceProfile));
     const otherType =
       shipment.shipmentType && !['NORMAL', 'SELF'].includes(String(shipment.shipmentType));
-    if (!forStock && (exceptional || otherProfile || otherType)) {
+    if (!includeExceptions && (exceptional || otherProfile || otherType)) {
       excluded.add(id);
       lines.delete(id);
       continue;
     }
     const preDispatchWithoutCourierReturn = allowsMissingCourierReturn(shipment, item, filter);
     let eligibilityUnverified =
+      !locationId ||
       shipment.hold !== false ||
       replacement !== false ||
       returnAddOn === undefined ||
@@ -302,12 +333,17 @@ function collectShipment(
     )
       incomplete();
     let disposition: FlipkartBillingOrder['stockDisposition'];
-    if (forStock) {
-      const knownScope = Boolean(item.serviceProfile && shipment.shipmentType);
+    if (includeExceptions) {
+      const knownScope =
+        typeof item.serviceProfile === 'string' &&
+        !!item.serviceProfile &&
+        typeof shipment.shipmentType === 'string' &&
+        !!shipment.shipmentType;
       // Cancellation in the forward fulfilment flow precedes shipping. In-transit
       // cancellations use the returns flow. Seller cancellations can indicate a shortage.
       if (
         knownScope &&
+        !!locationId &&
         filter.type === 'cancelled' &&
         filter.cancellationType !== 'sellerCancellation' &&
         status === 'CANCELLED' &&
@@ -336,12 +372,12 @@ function collectShipment(
       quantity: item.quantity,
       orderDate: new Date(date).toISOString(),
       ...(preDispatchWithoutCourierReturn && { preDispatchWithoutCourierReturn: true }),
-      ...(forStock && { stockShipmentId: shipmentId }),
-      ...(forStock && returnConflicts?.has(id) && { stockReturnConflict: true }),
+      ...(includeExceptions && { stockShipmentId: shipmentId }),
+      ...(includeExceptions && returnConflicts?.has(id) && { stockReturnConflict: true }),
       ...(eligibilityUnverified && { eligibilityUnverified: true }),
       ...(disposition && { stockDisposition: disposition }),
-      ...(forStock && dispatchObserved && { stockDispatchObserved: true }),
-      ...(forStock &&
+      ...(includeExceptions && dispatchObserved && { stockDispatchObserved: true }),
+      ...(includeExceptions &&
         (returnEvidence ||
           (filter.cancellationType === 'sellerCancellation' && status === 'CANCELLED')) && {
           stockReconciliationRequired: true,
@@ -350,7 +386,7 @@ function collectShipment(
     rememberLine(
       lines,
       { order, shipmentId, invoiceEligible: invoiceStatuses.has(status), dispatchObserved },
-      forStock,
+      includeExceptions,
     );
   }
 }
@@ -425,7 +461,12 @@ export class FlipkartBillingClient {
       ['postDispatch', postDispatchSearchStates],
     ] as const) {
       for (const shipmentType of ['NORMAL', 'SELF']) {
-        const filter = { type, states, shipmentTypes: [shipmentType] };
+        const filter: ShipmentFilter = {
+          type,
+          states,
+          shipmentTypes: [shipmentType],
+          serviceProfiles: ['NON_FBF'],
+        };
         for await (const evidence of this.search(token, filter, earliest, latest))
           collectShipment(evidence, earliest, latest, lines, excluded, filter, 'billing');
       }
@@ -440,25 +481,63 @@ export class FlipkartBillingClient {
     to: string,
     includeInvoices = false,
   ): Promise<FlipkartBillingOrder[]> {
+    return this.readHistory(
+      token,
+      from,
+      to,
+      { serviceProfile: 'NON_FBF', shipmentTypes: ['NORMAL', 'SELF'] },
+      includeInvoices,
+      'stock',
+    );
+  }
+
+  async readFulfilmentOrders(
+    token: string,
+    from: string,
+    to: string,
+    fulfilment: BillingFulfilment,
+    includeInvoices = false,
+  ): Promise<FlipkartBillingOrder[]> {
+    return this.readHistory(
+      token,
+      from,
+      to,
+      billingScopes[fulfilment],
+      includeInvoices,
+      'billingHistory',
+    );
+  }
+
+  private async readHistory(
+    token: string,
+    from: string,
+    to: string,
+    scope: ShipmentScope,
+    includeInvoices: boolean,
+    mode: 'stock' | 'billingHistory',
+  ): Promise<FlipkartBillingOrder[]> {
     verifyToken(token);
     const earliest = Date.parse(from);
     const latest = Date.parse(to);
     if (!Number.isFinite(earliest) || !Number.isFinite(latest) || earliest > latest)
-      throw new FlipkartBillingError('Choose a valid Flipkart stock history period.');
+      throw new FlipkartBillingError('Choose a valid Flipkart order history period.');
     const lines = new Map<string, ShipmentLine>();
     // Adjacent windows overlap at the exact cutoff. Exact order-item IDs remove duplicates.
     let start = earliest;
     for (;;) {
       const end = Math.min(latest, start + maximumWindow);
-      for (const shipmentType of ['NORMAL', 'SELF']) {
+      for (const shipmentType of scope.shipmentTypes) {
         const shipmentTypes = [shipmentType];
+        const serviceProfiles: [ServiceProfile] = [scope.serviceProfile];
         const filters: ShipmentFilter[] = [
-          { type: 'preDispatch', states: preDispatch, shipmentTypes, hold: true },
-          { type: 'preDispatch', states: preDispatch, shipmentTypes, hold: false },
+          { type: 'preDispatch', states: preDispatch, shipmentTypes, serviceProfiles, hold: true },
+          { type: 'preDispatch', states: preDispatch, shipmentTypes, serviceProfiles, hold: false },
           {
             type: 'postDispatch',
-            states: postDispatchSearchStates,
+            states:
+              mode === 'billingHistory' ? billingPostDispatchStates : postDispatchSearchStates,
             shipmentTypes,
+            serviceProfiles,
           },
         ];
         for (const cancellationType of [
@@ -470,39 +549,42 @@ export class FlipkartBillingClient {
             type: 'cancelled',
             states: ['CANCELLED'],
             shipmentTypes,
+            serviceProfiles,
             cancellationType,
           });
-        for (const filter of filters) await this.readStockWindow(token, filter, start, end, lines);
+        for (const filter of filters)
+          await this.readHistoryWindow(token, filter, start, end, lines, mode);
       }
       if (end === latest) break;
       start = end;
     }
-    if (includeInvoices) await this.addInvoiceNumbers(token, lines);
+    if (includeInvoices) await this.addInvoiceNumbers(token, lines, mode === 'billingHistory');
     return Array.from(lines.values(), (line) => line.order);
   }
 
-  private async readStockWindow(
+  private async readHistoryWindow(
     token: string,
     filter: ShipmentFilter,
     earliest: number,
     latest: number,
     collected: Map<string, ShipmentLine>,
+    mode: 'stock' | 'billingHistory',
   ): Promise<void> {
     const lines = new Map<string, ShipmentLine>();
     const excluded = new Set<string>();
     try {
       for await (const evidence of this.search(token, filter, earliest, latest))
-        collectShipment(evidence, earliest, latest, lines, excluded, filter, 'stock');
+        collectShipment(evidence, earliest, latest, lines, excluded, filter, mode);
     } catch (error) {
       if (!(error instanceof ShipmentSearchLimit)) throw error;
       const middle = earliest + Math.floor((latest - earliest) / 2);
       if (middle === earliest)
         throw new FlipkartBillingError(
-          'Flipkart could not return complete stock history at its search limit.',
+          'Flipkart could not return complete order history at its search limit.',
         );
       const recovered = new Map<string, ShipmentLine>();
-      await this.readStockWindow(token, filter, earliest, middle, recovered);
-      await this.readStockWindow(token, filter, middle, latest, recovered);
+      await this.readHistoryWindow(token, filter, earliest, middle, recovered, mode);
+      await this.readHistoryWindow(token, filter, middle, latest, recovered, mode);
       // A change during pagination can remove a known order from a renewed search.
       // Preserve every positive observation and never accept a disappearing cancellation.
       for (const line of lines.values()) {
@@ -539,7 +621,7 @@ export class FlipkartBillingClient {
       const body =
         pageCount === 0
           ? {
-              filter: { ...filter, serviceProfiles: ['NON_FBF'], orderDate },
+              filter: { ...filter, orderDate },
               pagination: { pageSize: 20 },
             }
           : undefined;
@@ -618,53 +700,77 @@ export class FlipkartBillingClient {
           matching,
           cancellationScopeConfirmed,
           allowsMissingCourierReturn(shipment, item, filter),
+          profileNames[filter.serviceProfiles[0]],
         )
       )
         returnConflicts.add(identifier(item.orderItemId));
     }
     return {
-      shipment: { ...shipment, locationId: identifier(detail.locationId) },
+      shipment: { ...shipment, locationId: detail.locationId },
       returnConflicts,
     };
   }
 
-  private async addInvoiceNumbers(token: string, lines: Map<string, ShipmentLine>): Promise<void> {
-    const shipmentIds = [
-      ...new Set(
-        Array.from(lines.values())
-          .filter((row) => row.invoiceEligible)
-          .map((row) => row.shipmentId),
-      ),
-    ];
+  private async addInvoiceNumbers(
+    token: string,
+    lines: Map<string, ShipmentLine>,
+    retainOrdersOnError = false,
+  ): Promise<void> {
+    const eligible = new Map<string, FlipkartBillingOrder[]>();
+    for (const { invoiceEligible, shipmentId, order } of lines.values()) {
+      if (!invoiceEligible) continue;
+      const group = eligible.get(shipmentId);
+      if (group) group.push(order);
+      else eligible.set(shipmentId, [order]);
+    }
+    const shipmentIds = [...eligible.keys()];
     for (let start = 0; start < shipmentIds.length; start += 25) {
       const batch = shipmentIds.slice(start, start + 25);
-      if (batch.some((id) => !/^[A-Za-z0-9_-]+$/u.test(id))) incomplete();
-      const url = 'https://api.flipkart.net/sellers/v3/shipments/' + batch.join(',') + '/invoices';
-      const result = await this.request(token, url, undefined, true);
-      if (!result) continue;
-      if (result.invoices == null) continue;
-      const invoices = Array.isArray(result.invoices) ? result.invoices : [result.invoices];
-      for (const value of invoices) {
-        const invoice = record(value);
-        const shipmentId = identifier(invoice.shipmentId);
-        if (!batch.includes(shipmentId)) incomplete();
-        const rawNumber = invoice.invoiceNumber ?? invoice.InvoiceNumber;
-        if (rawNumber == null || invoice.orderItems == null) continue;
-        if (!Array.isArray(invoice.orderItems)) incomplete();
-        const number = identifier(rawNumber);
-        if (invoice.InvoiceNumber !== undefined && invoice.InvoiceNumber !== number) incomplete();
-        for (const raw of invoice.orderItems) {
-          const line = lines.get(identifier(record(raw).orderItemId));
-          if (!line) continue; // A shipment can also contain a held or excluded line.
-          if (
-            line.shipmentId !== shipmentId ||
-            (line.order.invoiceNumber && line.order.invoiceNumber !== number)
-          )
-            incomplete();
-          line.order.invoiceNumber = number;
-        }
+      let numbers: Map<string, string> | null;
+      let missingNumber: FlipkartBillingOrder['invoiceLookup'];
+      try {
+        numbers = await this.readInvoiceBatch(token, batch, lines);
+        missingNumber = numbers === null ? 'unsupported-format' : 'no-number';
+      } catch (cause) {
+        if (!retainOrdersOnError || !(cause instanceof FlipkartBillingError)) throw cause;
+        numbers = null;
+        missingNumber = 'failed';
+      }
+      // Apply a batch only after validating all of its shipment and order identities.
+      for (const [id, number] of numbers ?? []) lines.get(id)!.order.invoiceNumber = number;
+      for (const id of batch)
+        for (const order of eligible.get(id)!)
+          if (!order.invoiceNumber) order.invoiceLookup = missingNumber;
+    }
+  }
+
+  private async readInvoiceBatch(token: string, batch: string[], lines: Map<string, ShipmentLine>) {
+    if (batch.some((id) => !/^[A-Za-z0-9_-]+$/u.test(id))) incomplete();
+    const url = 'https://api.flipkart.net/sellers/v3/shipments/' + batch.join(',') + '/invoices';
+    const result = await this.request(token, url, undefined, true);
+    if (!result) return null;
+    const numbers = new Map<string, string>();
+    if (result.invoices == null) return numbers;
+    const invoices = Array.isArray(result.invoices) ? result.invoices : [result.invoices];
+    for (const value of invoices) {
+      const invoice = record(value);
+      const shipmentId = identifier(invoice.shipmentId);
+      if (!batch.includes(shipmentId)) incomplete();
+      const rawNumber = invoice.invoiceNumber ?? invoice.InvoiceNumber;
+      if (rawNumber == null || invoice.orderItems == null) continue;
+      if (!Array.isArray(invoice.orderItems)) incomplete();
+      const number = identifier(rawNumber);
+      if (invoice.InvoiceNumber !== undefined && invoice.InvoiceNumber !== number) incomplete();
+      for (const raw of invoice.orderItems) {
+        const id = identifier(record(raw).orderItemId);
+        const line = lines.get(id);
+        if (!line) continue; // A shipment can also contain a held or excluded line.
+        if (line.shipmentId !== shipmentId || (numbers.has(id) && numbers.get(id) !== number))
+          incomplete();
+        numbers.set(id, number);
       }
     }
+    return numbers;
   }
 
   private async request(
@@ -689,9 +795,10 @@ export class FlipkartBillingClient {
       const mime = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
       if (!response.ok || mime !== 'application/json') {
         void response.body?.cancel().catch(() => {});
+        if (invoice && response.status === 404) return {};
         if (
           invoice &&
-          ([404, 406, 415].includes(response.status) || (response.ok && mime === 'application/pdf'))
+          ([406, 415].includes(response.status) || (response.ok && mime === 'application/pdf'))
         )
           return null;
         if (response.status === 401 || response.status === 403)

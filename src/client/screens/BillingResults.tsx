@@ -1,17 +1,8 @@
 import { useState } from 'react';
 import type { BillingReport, BillingRow } from '../../shared/billing-contracts.js';
-import { formatDateTime, formatUnits } from '../format.js';
+import { formatDateTime, formatIndiaDay, formatUnits } from '../format.js';
 import { BilledOrders } from './BilledOrders.js';
-import {
-  TrackedBillOrders,
-  useTrackedBillHistory,
-  type TrackedBillScope,
-} from './TrackedBillOrders.js';
-
-const saleDate = new Intl.DateTimeFormat('en-IN', {
-  dateStyle: 'medium',
-  timeZone: 'Asia/Kolkata',
-});
+import { TrackedBillOrders, type TrackedBillScope } from './TrackedBillOrders.js';
 
 const statusLabel: Record<BillingRow['status'], string> = {
   matched: 'Billed',
@@ -25,21 +16,37 @@ interface Actions {
   busy: boolean;
   onMatch: (orderItemId: string, billId: string) => void;
   onUnmatch: (orderItemId: string) => void;
-  onFindBill?: (row: BillingRow) => void;
+  onFindBill?: (row: BillingRow, trigger: HTMLButtonElement) => void;
 }
 
-export function BillingResults({
+type ResultsProps = { trackingFrom?: string } & (
+  | { tracking: TrackedBillScope; busy: boolean }
+  | (Actions & { report: BillingReport | null; tracking?: TrackedBillScope })
+);
+
+export function BillingResults(props: ResultsProps) {
+  const { tracking, trackingFrom } = props;
+  if (tracking)
+    return (
+      <TrackedBillOrders
+        key={JSON.stringify([tracking.companyId, tracking.accountId])}
+        scope={tracking}
+        trackingFrom={trackingFrom}
+        busy={props.busy}
+      />
+    );
+  if ('report' in props && props.report) return <BillingPreview {...props} report={props.report} />;
+  return null;
+}
+
+function BillingPreview({
   report,
   trackingFrom,
-  tracking,
   ...actions
-}: Actions & { report: BillingReport | null; trackingFrom?: string; tracking?: TrackedBillScope }) {
+}: Actions & { report: BillingReport; trackingFrom?: string }) {
   const [filter, setFilter] = useState<'all' | 'unresolved' | 'billed'>('all');
-  const [otherOpen, setOtherOpen] = useState(false);
-  const history = useTrackedBillHistory(tracking, otherOpen || filter === 'billed');
-  const unresolved = report?.rows.filter((row) => row.status !== 'matched') ?? [];
-  const rows = filter === 'unresolved' ? unresolved : (report?.rows ?? []);
-  if (!report && !tracking) return null;
+  const unresolved = report.rows.filter((row) => row.status !== 'matched');
+  const rows = filter === 'unresolved' ? unresolved : report.rows;
   return (
     <>
       <section className="panel billing-results">
@@ -47,40 +54,31 @@ export function BillingResults({
           <div>
             <h2>Order items and bills</h2>
             {filter === 'billed' ? (
-              <p>
-                {tracking && trackingFrom
-                  ? 'Billed order items for this seller since ' +
-                    saleDate.format(new Date(trackingFrom)) +
-                    ' (India), plus any earlier billed items in the selected preview.'
-                  : 'Billed order items for this seller in the selected preview period.'}
-              </p>
+              <p>Billed order items for this seller in the selected preview period.</p>
             ) : (
-              report && (
-                <>
-                  <p>
-                    {saleDate.format(new Date(report.from))} through{' '}
-                    {saleDate.format(new Date(report.to))} (India) · Checked{' '}
-                    {formatDateTime(report.checkedAt)}
-                  </p>
-                  <p>
-                    This preview covers recent seller-fulfilled standard and self-ship orders
-                    returned for the selected period and sales bills from the selected ledger.
-                  </p>
-                  {report.period === 'tracking' &&
-                    trackingFrom &&
-                    Date.parse(report.from) > Date.parse(trackingFrom) && (
-                      <p>
-                        Company tracking started on {saleDate.format(new Date(trackingFrom))}. This
-                        preview shows the most recent 30 Indian calendar days.
-                      </p>
-                    )}
-                </>
-              )
+              <>
+                <p>
+                  {formatIndiaDay(report.from)} through {formatIndiaDay(report.to)} (India) ·
+                  Checked {formatDateTime(report.checkedAt)}
+                </p>
+                <p>
+                  This preview covers recent seller-fulfilled standard and self-ship orders returned
+                  for the selected period and sales bills from the selected ledger.
+                </p>
+                {report.period === 'tracking' &&
+                  trackingFrom &&
+                  Date.parse(report.from) > Date.parse(trackingFrom) && (
+                    <p>
+                      Company tracking started on {formatIndiaDay(trackingFrom)}. This preview shows
+                      the most recent 30 Indian calendar days.
+                    </p>
+                  )}
+              </>
             )}
           </div>
         </div>
         <div className="billing-filters">
-          {filter !== 'billed' && report && (
+          {filter !== 'billed' && (
             <strong>
               {report.rows.length - unresolved.length} matched · {unresolved.length} unresolved
             </strong>
@@ -98,14 +96,7 @@ export function BillingResults({
           </label>
         </div>
         {filter === 'billed' ? (
-          <BilledOrders
-            report={report}
-            trackingFrom={tracking ? trackingFrom : undefined}
-            history={history}
-            busy={actions.busy}
-          />
-        ) : !report ? (
-          <p className="billing-filters">The selected order preview is unavailable.</p>
+          <BilledOrders report={report} />
         ) : report.rows.length === 0 ? (
           <div className="empty-state compact-empty">
             <h3>No order items in this preview</h3>
@@ -148,7 +139,7 @@ export function BillingResults({
           </>
         )}
       </section>
-      {report && report.stock.length > 0 && (
+      {report.stock.length > 0 && (
         <section className="panel billing-results">
           <div className="panel-heading">
             <div>
@@ -193,16 +184,6 @@ export function BillingResults({
           </div>
         </section>
       )}
-      {tracking && (
-        <TrackedBillOrders
-          scope={tracking}
-          report={report}
-          busy={actions.busy}
-          open={otherOpen}
-          onToggle={() => setOtherOpen(!otherOpen)}
-          history={history}
-        />
-      )}
     </>
   );
 }
@@ -221,7 +202,7 @@ function OrderRow({
   const labels = new Set<string>();
   const duplicateLabels = new Set<string>();
   const choices = row.candidates.map((bill) => {
-    const label = bill.number + ' · ' + bill.date;
+    const label = bill.number + ' · ' + formatIndiaDay(bill.date);
     if (labels.has(label)) duplicateLabels.add(label);
     labels.add(label);
     return { id: bill.id, label };
@@ -231,7 +212,7 @@ function OrderRow({
       <td>
         <strong>{row.orderItemId}</strong>
         <small>Order ID {row.orderId}</small>
-        {row.orderDate && <small>Ordered {saleDate.format(new Date(row.orderDate))}</small>}
+        {row.orderDate && <small>Ordered {formatIndiaDay(row.orderDate)}</small>}
         {showInvoice && (
           <small>
             {row.referenceValue
@@ -252,7 +233,7 @@ function OrderRow({
         <strong>{statusLabel[row.status]}</strong>
         {row.bill && (
           <small>
-            Bill {row.bill.number} · {row.bill.date}
+            Bill {row.bill.number} · {formatIndiaDay(row.bill.date)}
           </small>
         )}
         <small>{row.reason}</small>
@@ -298,7 +279,11 @@ function OrderRow({
           (row.status === 'review' || row.status === 'unmatched') &&
           row.baseUnits !== null &&
           !row.manualBillId && (
-            <button className="text-button" disabled={busy} onClick={() => onFindBill(row)}>
+            <button
+              className="text-button"
+              disabled={busy}
+              onClick={(event) => onFindBill(row, event.currentTarget)}
+            >
               Find Tally bill
             </button>
           )}

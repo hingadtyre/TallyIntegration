@@ -13,8 +13,78 @@ import type {
   BillingWorkspace,
   PendingListingCheck,
   PendingListings,
+  TrackedBillHistory,
 } from '../../src/shared/billing-contracts.js';
 import { close, listen, serverFixture } from '../support/server-fixture.js';
+
+test('a billing start date opens the full bill history independently of starting stock', async (t) => {
+  const f = serverFixture(t);
+  const markets = new MarketplaceService(f.store, f.folder);
+  const app = createApp(f.service, f.folder, undefined, undefined, markets);
+  const address = await listen(app);
+  t.after(async () => {
+    await close(app);
+    markets.stop();
+    await markets.idle();
+  });
+  const scope = { companyId: 'demo-a', accountId: 'flipkart-primary' };
+  const post = (action: string, input: Record<string, unknown> = {}) =>
+    fetch(address + '/api/billing/' + action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Stockbridge-Request': '1' },
+      body: JSON.stringify({ ...scope, ...input }),
+    });
+  const fromDate = saleDay(f.store.read().items.find((item) => item.id === 'item-a')!.observedAt!);
+  const from = new Date(fromDate + 'T00:00:00+05:30').toISOString();
+  const settings = {
+    ledgerId: 'sample-sales-demo-a',
+    field: 'reference',
+    reference: 'orderId',
+    days: 7,
+  };
+  assert.equal((await post('tracking/start', { fromDate })).status, 409);
+  const before = (await (await post('preview', settings)).json()) as BillingReport;
+  assert.equal((await post('confirm', { previewId: before.previewId })).status, 200);
+  assert.equal((await post('tracking/start', { fromDate: 'invalid' })).status, 400);
+  const status = await (await post('tracking/start', { fromDate })).json();
+  assert.partialDeepStrictEqual(status, { from: null, billingFrom: from, current: false });
+  assert.equal(((await (await post('workspace')).json()) as BillingWorkspace).trackingFrom, from);
+  const history = (await (await post('tracked-bills')).json()) as TrackedBillHistory;
+  assert.equal(history.check?.complete, true);
+  assert.deepEqual(
+    history.check.groups.map((group) => [group.group, group.count]),
+    [
+      ['standard', 2],
+      ['selfShip', 0],
+      ['express', 0],
+      ['smart', 0],
+      ['fbf', 0],
+    ],
+  );
+  assert.equal(history.billed[0].bill.number, 'SAMPLE-INV-1');
+  assert.equal(history.billed[0].bill.date, fromDate);
+  assert.equal(
+    history.orders.find((row) => row.orderItemId === 'SAMPLE-LINE-2')?.status,
+    'unmatched',
+  );
+  const [{ order }] = f.store.readBillingOrders(
+    scope.companyId,
+    scope.accountId,
+    from,
+    history.check.to,
+  );
+  f.store.saveBillingOrders(scope.companyId, scope.accountId, 'smart', [
+    { ...order, orderItemId: 'competing-smart-item' },
+  ]);
+  const shortened = (await (await post('preview', settings)).json()) as BillingReport;
+  assert.equal(shortened.rows.find((row) => row.orderItemId === order.orderItemId)?.bill, null);
+  assert.equal(f.store.readStockCoverage(scope.companyId), null);
+  assert.deepEqual(f.store.readMarketplace().changes, []);
+  assert.equal((await post('coverage/start', { fromDate })).status, 400);
+  assert.equal((await post('coverage/start', { fromDate, confirmed: true })).status, 200);
+  assert.equal(f.store.readStockCoverage(scope.companyId)?.from, from);
+  assert.equal((await post('tracking/start', { fromDate })).status, 409);
+});
 
 test('finds a posted voucher for one preview order and verifies a reference exception without changing the seller rule', async (t) => {
   const f = serverFixture(t);
@@ -266,6 +336,47 @@ test('the tracking preview uses the saved Indian date and rejects reports from a
     command('confirm', { previewId: previousDay.previewId }),
     /tracking period changed/,
   );
+});
+
+test('recent billing previews expire after ten minutes and at Indian midnight, including during first-time setup', async (t) => {
+  const start = Date.parse('2026-11-25T18:10:00Z');
+  t.mock.timers.enable({ apis: ['Date'], now: start });
+  const f = serverFixture(t);
+  f.store.updateMarketplace(seedSampleMarketplace);
+  const billing = new BillingService(f.store);
+  const scope = { companyId: 'demo-a', accountId: 'flipkart-primary' };
+  const command = (action: string, data: Record<string, unknown> = {}) =>
+    billing.command('/api/billing/' + action, { ...scope, ...data }, async () => null);
+  const workspace = () => command('workspace') as Promise<BillingWorkspace>;
+  const preview = () =>
+    command('preview', {
+      ledgerId: 'sample-sales-demo-a',
+      field: 'reference',
+      reference: 'orderId',
+      days: 1,
+    }) as Promise<BillingReport>;
+  const confirm = (report: BillingReport) => command('confirm', { previewId: report.previewId });
+  const first = await preview();
+  t.mock.timers.setTime(start + 600_000);
+  await assert.rejects(confirm(first), /expired/);
+  assert.equal((await workspace()).rule, null);
+
+  t.mock.timers.setTime(Date.parse('2026-11-25T18:29:59Z'));
+  const yesterday = await preview();
+  const firstConfirmation = confirm(yesterday);
+  t.mock.timers.setTime(Date.parse('2026-11-25T18:30:00Z'));
+  await assert.rejects(firstConfirmation, /period changed/);
+  assert.equal((await workspace()).rule, null);
+  await confirm(await preview());
+  assert.ok((await workspace()).report);
+  t.mock.timers.tick(600_000);
+  assert.equal((await workspace()).report, null);
+
+  t.mock.timers.setTime(Date.parse('2026-11-26T18:29:59Z'));
+  const saved = await preview();
+  t.mock.timers.setTime(Date.parse('2026-11-26T18:30:00Z'));
+  assert.equal((await workspace()).report, null);
+  await assert.rejects(confirm(saved), /period changed/);
 });
 
 test('keep-back preview verifies sample orders and the next sync publishes both increases and decreases', async (t) => {
@@ -555,6 +666,10 @@ test('Order matching finds tracked listings outside the preview and rechecks the
       ['SAMPLE-LINE-2', 'reserved', 1],
     ],
   );
+  assert.partialDeepStrictEqual(rows[0], {
+    bill: { id: 'sample-bill-1', number: 'SAMPLE-INV-1', date: fromDate },
+  });
+  assert.ok(!('bill' in rows[1]));
   assert.equal(f.store.read().listings.find((r) => r.id === 'listing-1')!.paused, true);
   assert.equal(f.store.readMarketplace().changes.length, 0);
   assert.equal(saleDay(f.store.readStockCoverage(scope.companyId)!.from), fromDate);

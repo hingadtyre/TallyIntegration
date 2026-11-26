@@ -23,7 +23,9 @@ import {
 import { sampleBills, sampleLedger } from './billing-sample.js';
 import { invalidateReservationDrafts } from './proposals.js';
 import type { BillingData } from './storage/billing-records.js';
-import type { StockAvailabilityService } from './stock-availability.js';
+import { mergeRetainedBillOrders, type StockAvailabilityService } from './stock-availability.js';
+import { stockConfiguration } from './stock-configuration.js';
+import type { TrackedBillingService } from './tracked-billing.js';
 import type { Store } from './store.js';
 import { InputError, requireCompany, requireText } from './validation.js';
 
@@ -43,7 +45,7 @@ interface ReviewSession {
 export interface BillingSources {
   tally: (endpoint: string) => Pick<TallyClient, 'listLedgers' | 'readSalesBills' | 'readStock'>;
   orders: Pick<FlipkartBillingClient, 'readOrders'> &
-    Partial<Pick<FlipkartBillingClient, 'readStockOrders'>>;
+    Partial<Pick<FlipkartBillingClient, 'readStockOrders' | 'readFulfilmentOrders'>>;
 }
 
 function configuredRule(data: BillingData, scope: BillingScope): BillingRule | null {
@@ -119,15 +121,15 @@ function newReview(input: Record<string, unknown>, trackingFrom?: string): Revie
   };
 }
 
-function trackingPeriodCurrent(spec: ReviewSpec, originalFrom?: string, currentFrom?: string) {
+function reviewPeriodCurrent(spec: ReviewSpec, originalFrom?: string, currentFrom?: string) {
   return (
-    spec.period !== 'tracking' ||
-    (originalFrom === currentFrom && saleDay(spec.to) === saleDay(new Date().toISOString()))
+    saleDay(spec.to) === saleDay(new Date().toISOString()) &&
+    (spec.period !== 'tracking' || originalFrom === currentFrom)
   );
 }
 
 function reviewExpired(report: BillingReport) {
-  return Date.now() - Date.parse(report.checkedAt) > 600_000;
+  return Date.now() - Date.parse(report.checkedAt) >= 600_000;
 }
 
 function currentReview(
@@ -233,10 +235,10 @@ export class BillingService {
       !session.report.rows.some((row) => row.orderItemId === orderItemId) ||
       session.savedDecisions !== decisionsDigest(saved, scope, session.report.rule.ledgerId) ||
       session.tallyUrl !== this.store.read().settings.tallyUrl ||
-      !trackingPeriodCurrent(
+      !reviewPeriodCurrent(
         session.report,
         session.trackingFrom,
-        this.store.readStockTrackingStart(scope.companyId),
+        this.store.readBillingTrackingStart(scope.companyId),
       )
     )
       throw new InputError('Refresh the billing preview for this seller and order item.', 409);
@@ -409,6 +411,7 @@ export class BillingService {
     token: () => Promise<string | null>,
     verifyAccess: () => void = () => {},
     availability?: StockAvailabilityService,
+    tracked?: TrackedBillingService,
   ): Promise<unknown> {
     const state = this.store.read();
     const company = requireCompany(state, input.companyId);
@@ -421,12 +424,12 @@ export class BillingService {
     const saved = this.store.readBilling();
     const rule = configuredRule(saved, scope);
     if (path === '/api/billing/ledgers') return { ledgers: await this.listLedgers(state, company) };
-    const trackingFrom = rule ? this.store.readStockTrackingStart(company.id) : undefined;
+    const trackingFrom = rule ? this.store.readBillingTrackingStart(company.id) : undefined;
     if (path === '/api/billing/workspace') {
       const current =
         session &&
-        trackingPeriodCurrent(session.report, session.trackingFrom, trackingFrom) &&
-        (session.report.period !== 'tracking' || !reviewExpired(session.report)) &&
+        reviewPeriodCurrent(session.report, session.trackingFrom, trackingFrom) &&
+        !reviewExpired(session.report) &&
         session.tallyUrl === state.settings.tallyUrl &&
         fingerprint(session.report.rule) === fingerprint(rule) &&
         session.savedDecisions === decisionsDigest(saved, scope, session.report.rule.ledgerId);
@@ -445,9 +448,10 @@ export class BillingService {
     const previous =
       action === 'preview' ? null : currentReview(session, input.previewId, action, rule);
     const spec = previous?.report ?? newReview(input, trackingFrom);
-    if (previous && !trackingPeriodCurrent(spec, previous.trackingFrom, trackingFrom))
+    const periodName = spec.period === 'tracking' ? 'tracking period' : 'preview period';
+    if (previous && !reviewPeriodCurrent(spec, previous.trackingFrom, trackingFrom))
       throw new InputError(
-        'The tracking period changed. Preview the current orders and bills again.',
+        `The ${periodName} changed. Preview the current orders and bills again.`,
         409,
       );
     const baseline = decisionsDigest(saved, scope, spec.rule.ledgerId);
@@ -466,22 +470,36 @@ export class BillingService {
       verifyAccess,
     );
     const reviewedOrders = new Set(evidence.orders.map((order) => order.orderItemId));
-    const inspectedInPreview = saved.links.some(
+    const inspectedInPreview = saved.links.filter(
       (link) =>
         link.companyId === company.id &&
         link.accountId === accountId &&
         reviewedOrders.has(link.orderItemId) &&
         isInspectedBillLink(link),
     );
-    if (inspectedInPreview && availability) {
+    if (inspectedInPreview.length && availability) {
       // This seller's short preview can contain an inspected voucher whose
       // reference or stock is claimed by another seller outside the short period.
-      const bills = await availability.readBillEvidence(
-        company.id,
-        accountId,
-        undefined,
-        spec.from,
-      );
+      const expanded =
+        tracked && trackingFrom
+          ? await tracked.check(scope, {}, { previewFrom: spec.from })
+          : undefined;
+      if (expanded && !expanded.check.complete)
+        throw new InputError(
+          'The order check is incomplete. Refresh tracked orders to verify the saved bill match.',
+          409,
+        );
+      if (expanded) {
+        const itemIds = new Set(inspectedInPreview.map((link) => link.itemId));
+        for (const [id, issue] of expanded.uncheckedItems) {
+          const item = expanded.evidence.ctx.items.get(id);
+          if (item && item.companyId === company.id && itemIds.has(item.externalId))
+            throw new InputError(issue, 409);
+        }
+      }
+      const bills =
+        expanded?.evidence ??
+        (await availability.readBillEvidence(company.id, accountId, undefined, spec.from));
       evidence.knownOrders = bills.coverage.orders;
       evidence.knownBills = [...bills.vouchers.values()].flat();
       if (rule?.ledgerId === spec.rule.ledgerId) {
@@ -493,16 +511,38 @@ export class BillingService {
       }
       bills.verify();
     } else if (trackingFrom) {
-      evidence.knownOrders = this.store.readStockCoverage(company.id)?.orders;
+      const context = stockConfiguration(state, this.store.readMarketplace(), saved, company.id);
+      const coverage = this.store.readStockCoverage(company.id) ?? {
+        companyId: company.id,
+        from: trackingFrom,
+        checkedThrough: null,
+        signature: context.signature,
+        orders: [],
+      };
+      for (const seller of context.rules) {
+        const archived = this.store.readBillingOrders(
+          company.id,
+          seller.accountId,
+          trackingFrom,
+          spec.to,
+        );
+        if (archived.length)
+          coverage.orders = mergeRetainedBillOrders(
+            coverage,
+            seller.accountId,
+            archived.map(({ order }) => order),
+            context,
+          );
+      }
+      evidence.knownOrders = coverage.orders;
     }
     if (state.mode === 'live') verifyAccess();
     const current = this.store.read();
     let decisions = this.store.readBilling();
-    if (
-      spec.period === 'tracking' &&
-      !trackingPeriodCurrent(spec, trackingFrom, this.store.readStockTrackingStart(company.id))
-    )
-      throw new InputError('The tracking period changed during the read. Preview again.', 409);
+    if (!reviewPeriodCurrent(spec, trackingFrom, this.store.readBillingTrackingStart(company.id)))
+      throw new InputError(`The ${periodName} changed during the read. Preview again.`, 409);
+    if (previous && reviewExpired(previous.report))
+      throw new InputError('This review expired. Preview the current orders and bills again.', 409);
     if (
       current.settings.tallyUrl !== state.settings.tallyUrl ||
       decisionsDigest(decisions, scope, spec.rule.ledgerId) !== baseline ||
@@ -548,7 +588,7 @@ export class BillingService {
       reviewedEvidence: evidenceDigest(requested, match),
     });
     if (action === 'preview') return report;
-    const currentFrom = this.store.readStockTrackingStart(company.id);
+    const currentFrom = this.store.readBillingTrackingStart(company.id);
     return {
       rule: requested,
       report,

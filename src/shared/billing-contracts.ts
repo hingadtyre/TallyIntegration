@@ -1,6 +1,18 @@
 export type BillField = 'reference' | 'number' | 'narration' | 'manual';
 export type OrderReference = 'orderId' | 'orderItemId' | 'invoiceNumber';
 
+export const billingFulfilments = ['standard', 'selfShip', 'express', 'smart', 'fbf'] as const;
+export type BillingFulfilment = (typeof billingFulfilments)[number];
+
+export interface FulfilmentCheck {
+  id: string;
+  from: string;
+  to: string;
+  complete: boolean;
+  /** Count reflects this seller's order search. Invoice and other sellers' checks can still need a retry. */
+  groups: { group: BillingFulfilment; count: number | null; error?: string }[];
+}
+
 export interface BillingRule {
   ledgerId: string;
   ledgerName: string;
@@ -97,6 +109,7 @@ export interface PendingOrderResult {
   status: 'matched' | 'reserved' | 'review' | 'cancelled' | 'unmapped';
   reason: string;
   baseUnits: number | null;
+  bill?: BillCandidate;
 }
 
 export interface TrackedBillOrder {
@@ -104,8 +117,11 @@ export interface TrackedBillOrder {
   orderId: string;
   orderDate: string;
   sku: string;
-  status: PendingOrderResult['status'];
+  fulfilment?: BillingFulfilment;
+  mapping?: { listingId: string; location: string; purpose: 'stock' | 'billing' };
+  status: PendingOrderResult['status'] | 'unmatched';
   reason: string;
+  canFindBill: boolean;
   manualBillId?: string;
   manualBillNumber?: string;
   manualBillDate?: string;
@@ -122,6 +138,7 @@ export interface BilledOrderItem {
 }
 
 export interface TrackedBillHistory {
+  check?: FulfilmentCheck;
   orders: TrackedBillOrder[];
   billed: BilledOrderItem[];
 }

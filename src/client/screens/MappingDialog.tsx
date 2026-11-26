@@ -1,5 +1,11 @@
 import { useState, type FormEvent } from 'react';
-import type { Listing, MappingInput, Snapshot, StockItem } from '../../shared/contracts.js';
+import {
+  billingOnlyMapping,
+  type Listing,
+  type MappingInput,
+  type Snapshot,
+  type StockItem,
+} from '../../shared/contracts.js';
 import type { ActionResult } from '../api.js';
 import { Icon, Modal } from '../components.js';
 import { formatDateTime } from '../format.js';
@@ -138,6 +144,8 @@ export function PackForm({
     accountId: string;
     marketplaceListingId: string;
     location: string;
+    orderItemId?: string;
+    billingOnly?: boolean;
   };
 }) {
   const packages = listing.packageAvailable ? (listing.packageCount ?? null) : null;
@@ -156,6 +164,9 @@ export function PackForm({
   const choices = listing.pickupChoices ?? [];
   const [pickup, setPickup] = useState(order?.location ?? (choices.length === 1 ? choices[0] : ''));
   const [keepPaused, setKeepPaused] = useState(listing.paused);
+  const editingBillingMapping = !order && !!listing.itemId && billingOnlyMapping(listing);
+  const [useCompanyStock, setUseCompanyStock] = useState(false);
+  const billingOnly = order?.billingOnly || (editingBillingMapping && !useCompanyStock);
   const size = source === 'packages' ? packages : Number(customSize);
   const valid = size !== null && Number.isSafeInteger(size) && size > 0;
   const confirmed = valid && confirmedSize === size;
@@ -178,10 +189,13 @@ export function PackForm({
           locationId: order.location,
           companyId: item.companyId,
           accountId: order.accountId,
+          ...(order.orderItemId && { orderItemId: order.orderItemId }),
         },
       }),
-      ...((order || !listing.itemId) && keepPaused && { keepPaused: true }),
-      sourceScope: 'company',
+      ...((billingOnly || ((order || !listing.itemId) && keepPaused)) && {
+        keepPaused: true,
+      }),
+      sourceScope: billingOnly ? null : 'company',
       tyreFloor,
     });
     if (result.ok) onClose();
@@ -277,21 +291,43 @@ export function PackForm({
             />
           </label>
         )}
-        <label className="checkbox-label">
-          <input
-            type="checkbox"
-            checked={tyreFloor}
-            onChange={(event) => {
-              setTyreFloor(event.target.checked);
-              setConfirmedSize(null);
-            }}
-          />
-          <span>
-            Apply the Flipkart tyre minimum of 5 when at least one complete set is available. Zero
-            complete sets means zero stock.
-          </span>
-        </label>
-        {(order || !listing.itemId) && (
+        {editingBillingMapping && (
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={useCompanyStock}
+              onChange={(event) => {
+                setUseCompanyStock(event.target.checked);
+                setConfirmedSize(null);
+              }}
+            />
+            <span>Use company stock to supply this pickup location</span>
+          </label>
+        )}
+        {!billingOnly && (
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={tyreFloor}
+              onChange={(event) => {
+                setTyreFloor(event.target.checked);
+                setConfirmedSize(null);
+              }}
+            />
+            <span>
+              Apply the Flipkart tyre minimum of 5 when at least one complete set is available. Zero
+              complete sets means zero stock.
+            </span>
+          </label>
+        )}
+        {billingOnly && (
+          <p>
+            {editingBillingMapping
+              ? 'Stock updates stay paused while this listing is used for billing only.'
+              : 'Stock updates stay paused. To use this listing for stock updates, confirm its stock source in Inventory.'}
+          </p>
+        )}
+        {!billingOnly && (order || !listing.itemId) && (
           <>
             {listing.paused ? (
               <p>Stock updates are paused for this location. You can resume sync in Inventory.</p>
@@ -323,7 +359,13 @@ export function PackForm({
           />
           <span>
             I confirm the item and Set of value
-            {listing.location || pickup ? (
+            {billingOnly ? (
+              <>
+                {' '}
+                for orders at <strong>{order?.location ?? listing.location}</strong> in{' '}
+                <strong>{company}</strong>
+              </>
+            ) : listing.location || pickup ? (
               <>
                 , and that the full stock of this item in <strong>{company}</strong> supplies{' '}
                 <strong>{listing.location || pickup}</strong>
@@ -334,7 +376,7 @@ export function PackForm({
                 for <strong>{company}</strong>. Stock updates will wait for a pickup location
               </>
             )}
-            .{order && ' This Set of applies to the orders being checked.'}
+            .{order && !order.billingOnly && ' This Set of applies to the orders being checked.'}
           </span>
         </label>
       </fieldset>

@@ -41,6 +41,7 @@ export interface StockSyncCoverage {
 
 export interface StockCoverageStatus {
   from: string | null;
+  billingFrom?: string;
   current: boolean;
   checkedThrough: string | null;
   issue?: string;

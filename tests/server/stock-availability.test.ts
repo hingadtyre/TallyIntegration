@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import type { FlipkartBillingOrder } from '../../src/adapters/flipkart-billing.js';
+import {
+  FlipkartBillingClient,
+  type FlipkartBillingOrder,
+} from '../../src/adapters/flipkart-billing.js';
 import type { TallySalesBill, TallyStockItem } from '../../src/adapters/tally.js';
 import { BillingService } from '../../src/server/billing-service.js';
 import { BillLookupService } from '../../src/server/bill-lookup.js';
@@ -11,7 +14,7 @@ import { desiredStock } from '../../src/server/proposals.js';
 import { marketplaceData } from '../support/marketplace-fixture.js';
 import { serverFixture } from '../support/server-fixture.js';
 
-function setup(t: TestContext, sellerPacks = [1]) {
+function setup(t: TestContext, sellerPacks = [1], flipkart?: FlipkartBillingClient) {
   const f = serverFixture(t, 'live');
   const companyId = 'tally:books';
   const itemId = 'local-tyre';
@@ -105,7 +108,7 @@ function setup(t: TestContext, sellerPacks = [1]) {
     new StockAvailabilityService(
       f.store,
       {
-        orders: {
+        orders: flipkart ?? {
           async readOrders() {
             throw new Error('Preview is not a stock source');
           },
@@ -266,6 +269,7 @@ test('an older mapped sale can be looked up, linked across previews, revalidated
   const linked = await tracked();
   assert.equal(linked.status, 'matched');
   assert.equal(linked.manualBillId, bill.externalId);
+  assert.equal(linked.canFindBill, false);
   assert.equal(linked.manualBillNumber, bill.number);
   assert.equal(linked.manualBillDate, bill.date);
   assert.ok(linked.linkToken);
@@ -301,7 +305,15 @@ test('Billed verifies retained automatic matches per seller and per order item b
     for (const rule of data.rules) rule.reference = 'orderItemId';
   });
   const sale = s.orders.get('seller-0')![0];
-  s.orders.get('seller-0')!.push({ ...sale, orderItemId: 'unbilled-sibling' });
+  s.orders
+    .get('seller-0')!
+    .push(
+      { ...sale, orderItemId: 'unbilled-sibling' },
+      { ...sale, orderItemId: 'held', stockDisposition: 'uncertain', eligibilityUnverified: true },
+      { ...sale, orderItemId: 'returned', stockReconciliationRequired: true },
+      { ...sale, orderItemId: 'cancelled', stockDisposition: 'cancelled' },
+      { ...sale, orderItemId: 'unknown-listing', listingId: 'unknown', sku: 'other-sku' },
+    );
   const first = { ...s.bill(0, 'voucher-a'), number: 'FK/1001', reference: sale.orderItemId };
   const second = { ...s.bill(1, 'voucher-b'), number: 'FK/1002', reference: sale.orderItemId };
   s.bills.set('seller-0', [first]);
@@ -330,7 +342,18 @@ test('Billed verifies retained automatic matches per seller and per order item b
     },
   ]);
   assert.deepEqual(
-    selected.orders.map((o) => o.orderItemId),
+    selected.orders.map((o) => [o.orderItemId, o.status]),
+    [
+      ['cancelled', 'cancelled'],
+      ['held', 'review'],
+      ['line', 'matched'],
+      ['returned', 'review'],
+      ['unbilled-sibling', 'reserved'],
+      ['unknown-listing', 'unmapped'],
+    ],
+  );
+  assert.deepEqual(
+    selected.orders.filter((o) => o.canFindBill).map((o) => o.orderItemId),
     ['unbilled-sibling'],
   );
   assert.deepEqual(
@@ -390,6 +413,83 @@ test('voucher assignment checks competing sellers, new evidence, and expiry befo
   );
   other.invoiceNumber = null;
   await assert.rejects(s.available(), /review/);
+});
+
+test('a stock check holds a previously matched bill when the Flipkart invoice disappears and releases it on verification', async (t) => {
+  let invoice: 'issued' | 'missing' | 'pdf' = 'issued';
+  const flipkart = new FlipkartBillingClient({
+    request: async (url, options) => {
+      if (String(url).endsWith('/invoices')) {
+        if (invoice === 'pdf')
+          return new Response(null, { headers: { 'Content-Type': 'application/pdf' } });
+        return Response.json({
+          invoices:
+            invoice === 'missing'
+              ? []
+              : [
+                  {
+                    shipmentId: 'shipment',
+                    invoiceNumber: 'FK-17',
+                    orderItems: [{ orderItemId: sale.orderItemId }],
+                  },
+                ],
+        });
+      }
+      const { filter } = JSON.parse(String(options?.body));
+      const included =
+        filter.type === 'preDispatch' && !filter.hold && filter.shipmentTypes[0] === 'NORMAL';
+      return Response.json({
+        hasMore: false,
+        shipments: included
+          ? [
+              {
+                shipmentId: 'shipment',
+                shipmentType: 'NORMAL',
+                locationId: sale.locationId,
+                hold: false,
+                orderItems: [
+                  {
+                    ...sale,
+                    status: 'PACKED',
+                    is_replacement: false,
+                    courierReturn: false,
+                    serviceProfile: 'NON_FBF',
+                  },
+                ],
+              },
+            ]
+          : [],
+      });
+    },
+  });
+  const s = setup(t, [1], flipkart);
+  const [sale] = s.orders.get('seller-0')!;
+  s.f.store.updateBilling((data) => {
+    data.rules[0].reference = 'invoiceNumber';
+  });
+  s.confirm();
+  s.bills.set('seller-0', [{ ...s.bill(), reference: 'FK-17' }]);
+  s.f.store.update((state) => {
+    state.connection.tally = 'online';
+  });
+  s.f.service.calculate(s.companyId, ['map-0']);
+  const draft = () => s.f.store.read().proposals.find((row) => row.listingId === 'map-0');
+  for (const unavailable of ['missing', 'pdf'] as const) {
+    assert.equal((await s.available()).reservedUnits, 0);
+    await s.scan();
+    assert.equal(draft()?.quantity, 6);
+    assert.ok(!draft()?.stale);
+    invoice = unavailable;
+    await assert.rejects(s.available(), /Retry the Flipkart invoice check/);
+    await s.scan();
+    assert.equal(draft()?.stale, true);
+    assert.match(
+      s.f.store.read().listings[0].proposalIssue ?? '',
+      /Retry the Flipkart invoice check/,
+    );
+    invoice = 'issued';
+  }
+  assert.equal((await s.available()).reservedUnits, 0);
 });
 
 test('a restock can publish five and the matching Tally sale leaves five available', async (t) => {
@@ -1226,6 +1326,109 @@ test('a sale billed before the first mapping is matched on the first recheck wit
   s.setStock(5);
   assert.equal((await s.available()).available, 5);
   assert.ok(s.f.store.read().listings.every((l) => !l.orderSyncPending));
+});
+
+test('a warehouse order claiming the same voucher blocks a stock release after mapping without reserving warehouse units', async (t) => {
+  const s = setup(t, [2]);
+  s.f.store.update((state) => {
+    state.companies.find((company) => company.id === s.companyId)!.automation = false;
+    state.listings[0].itemId = null;
+  });
+  s.confirm();
+  await s.scan();
+  const [sale] = s.orders.get('seller-0')!;
+  const mapping = s.f.store.read().listings[0];
+  s.f.service.mapping({
+    listingId: mapping.id,
+    listingVersion: mapping.version,
+    itemId: s.itemId,
+    packSize: 2,
+    packSource: 'manual',
+    sourceScope: 'company',
+    confirmPackEvidence: true,
+    tyreFloor: false,
+  });
+  s.bills.set('seller-0', [s.bill()]);
+  assert.equal((await s.review())[0].result.status, 'matched');
+  const available = await s.available();
+  const warehouse = { ...sale, orderItemId: 'warehouse-line' };
+  s.f.store.saveBillingOrders(s.companyId, 'seller-0', 'fbf', [warehouse]);
+  assert.throws(available.verify, /changed during this check/);
+  const reviewed = await s.review();
+  assert.equal(reviewed.length, 1);
+  assert.equal(reviewed[0].result.status, 'review');
+  assert.equal(reviewed[0].result.bill, undefined);
+  await assert.rejects(s.available(), /unique match/);
+  s.bills.set('seller-0', []);
+  assert.equal((await s.available()).reservedUnits, 2);
+  assert.deepEqual(
+    s.f.store.readStockCoverage(s.companyId)?.orders.map(({ order }) => order.orderItemId),
+    [sale.orderItemId],
+  );
+});
+
+test('a missing warehouse invoice holds a compatible deduction until verified and leaves other pack quantities available', async (t) => {
+  const s = setup(t, [2]);
+  s.f.store.updateBilling((data) => {
+    data.rules[0].reference = 'invoiceNumber';
+  });
+  const [sale] = s.orders.get('seller-0')!;
+  sale.invoiceNumber = 'FK-STANDARD';
+  s.confirm();
+  s.bills.set('seller-0', [{ ...s.bill(), reference: sale.invoiceNumber }]);
+  const archive = (quantity: number, invoiceNumber: string | null, invoiceLookup?: 'failed') =>
+    s.f.store.saveBillingOrders(s.companyId, 'seller-0', 'fbf', [
+      {
+        ...sale,
+        orderItemId: 'warehouse-line',
+        orderId: 'warehouse-order',
+        quantity,
+        invoiceNumber,
+        invoiceLookup,
+      },
+    ]);
+  archive(2, null, 'failed');
+  assert.equal((await s.available()).reservedUnits, 0);
+  // A previously reported shared invoice still disputes a match, including
+  // when the bill might represent only part of the combined deduction.
+  archive(2, sale.invoiceNumber, 'failed');
+  await assert.rejects(s.available(), /unique match/);
+  archive(1, null, 'failed');
+  await assert.rejects(s.available(), /unique match/);
+  archive(1, 'FK-WAREHOUSE');
+  assert.equal((await s.available()).reservedUnits, 0);
+  assert.deepEqual(
+    s.f.store.readStockCoverage(s.companyId)?.orders.map(({ order }) => order.orderItemId),
+    [sale.orderItemId],
+  );
+});
+
+test('a cancellation cannot release stock after billing observed dispatch of the same seller order', async (t) => {
+  const s = setup(t);
+  const [sale] = s.orders.get('seller-0')!;
+  const cancellation = {
+    ...sale,
+    stockShipmentId: 'shipment',
+    stockDisposition: 'cancelled' as const,
+  };
+  s.orders.set('seller-0', [cancellation]);
+  s.confirm();
+  const archive = (order: FlipkartBillingOrder) =>
+    s.f.store.saveBillingOrders(s.companyId, 'seller-0', 'standard', [order]);
+  // An earlier forward sale can be cancelled before dispatch.
+  archive({ ...sale, stockShipmentId: 'shipment' });
+  const checked = await s.available();
+  assert.equal(checked.reservedUnits, 0);
+  s.f.store.update((state) => {
+    state.connection.tally = 'online';
+  });
+  s.f.service.calculate(s.companyId, ['map-0']);
+  assert.equal(s.f.store.read().proposals[0].quantity, 6);
+  archive({ ...sale, stockShipmentId: 'shipment', stockDispatchObserved: true });
+  assert.throws(checked.verify, /changed during this check/);
+  await assert.rejects(s.available(), /dispatch|cancellation/i);
+  await s.scan();
+  assert.equal(s.f.store.read().proposals[0].stale, true);
 });
 
 test('a verified cancellation alone needs no mapping and remains in the journal and same-destination audit', async (t) => {

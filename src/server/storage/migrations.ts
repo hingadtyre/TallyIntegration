@@ -9,11 +9,13 @@ import { readSnapshot, writeSnapshot } from './records.js';
 import { readMarketplace } from './marketplace-records.js';
 import { readBilling } from './billing-records.js';
 import { verifyStockCoverage } from './stock-coverage.js';
+import { verifyBillingOrders } from './billing-orders.js';
 import {
   createSchema,
   createMarketplaceSchema,
   createPackSchema,
   createBillingSchema,
+  createBillingOrdersSchema,
   createStockCoverageSchema,
   addCompanyStockIssue,
   addProposalIssue,
@@ -64,6 +66,7 @@ export function prepareDatabase(
     readMarketplace(database);
     readBilling(database);
     verifyStockCoverage(database);
+    verifyBillingOrders(database);
     return upgradingExisting ? migrationBackup(database, file) : null;
   }
   if (version === 0) {
@@ -115,6 +118,7 @@ export function prepareDatabase(
       if (version < 11) createSkuMappings(database);
       if (version < 12) addItemKeepBack(database);
       if (version < 13) addPendingOrderProposal(database);
+      if (version < 14) createBillingOrdersSchema(database);
     }
     database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION};`);
     // The old-schema reader converted holds to pauses with their drafts and queued work.

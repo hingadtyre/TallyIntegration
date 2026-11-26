@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { TallyClient } from '../adapters/tally.js';
 import { availableForMarketplaces } from '../domain/stock-policy.js';
+import { billingOnlyMapping } from '../shared/contracts.js';
 import type {
   Activity,
   CalculationResult,
@@ -12,6 +13,8 @@ import type {
   Snapshot,
 } from '../shared/contracts.js';
 import type { MarketplaceService } from './marketplace-service.js';
+import { isVerifiedSale } from '../shared/stock-coverage.js';
+import { coverageIssue } from './stock-availability.js';
 import { checkManualKeepBack } from './marketplace-keep-back.js';
 import { pickupChoices, verifyOrderMapping } from './marketplace-catalog.js';
 import { checkCalculationStock, proposalInputs, saveCalculation } from './inventory-calculation.js';
@@ -603,7 +606,7 @@ export class InventoryService {
   }
 
   private saveMapping(input: Record<string, unknown>): void {
-    this.store.updateMapping(input.listingId, (market, state) => {
+    this.store.updateMapping(input.listingId, (market, state, baselines) => {
       const listing = state.listings.find((row) => row.id === input.listingId);
       const item = state.items.find((row) => row.id === input.itemId);
       if (!listing || !item || (listing.itemId && listing.itemId !== item.id))
@@ -613,19 +616,98 @@ export class InventoryService {
       if (input.confirmPackEvidence !== true)
         throw new InputError('Verified pack evidence is required.');
       const editing = listing.itemId !== null;
+      const editingBillingMapping = editing && billingOnlyMapping(listing) && !input.orderSource;
+      const billingOnly = input.sourceScope === null;
+      if (
+        billingOnly &&
+        ((!input.orderSource && !editingBillingMapping) ||
+          input.keepPaused !== true ||
+          !input.packSource ||
+          input.expectedUnit !== item.unit)
+      )
+        throw new InputError('Confirm the order, Tally item and Set of for billing.');
       if (
         input.keepPaused !== undefined &&
-        (typeof input.keepPaused !== 'boolean' || (editing && listing.location))
+        (typeof input.keepPaused !== 'boolean' ||
+          (editing && listing.location && !(editingBillingMapping && billingOnly)))
       )
         throw new InputError('Choose the pause setting when adding a new listing mapping.');
-      if (input.orderSource !== undefined)
+      if (input.orderSource !== undefined) {
+        const location = listing.location || input.pickupLocation;
+        const remoteId = verifyOrderMapping(
+          market,
+          listing,
+          item.companyId,
+          location,
+          input.orderSource,
+        );
+        const { orderItemId } = input.orderSource as { orderItemId?: unknown };
+        if (orderItemId !== undefined || billingOnly) {
+          const from = this.store.readBillingTrackingStart(item.companyId);
+          if (!from || typeof orderItemId !== 'string' || !orderItemId)
+            throw new InputError('Refresh tracked orders and choose the listing again.', 409);
+          const saved = this.store.readBillingOrders(
+            item.companyId,
+            listing.accountId,
+            from,
+            new Date().toISOString(),
+            orderItemId,
+          );
+          const baseline = baselines.find((entry) => entry.coverage.companyId === item.companyId);
+          const stock = baseline?.coverage;
+          const receipt = stock?.orders.find(
+            (entry) =>
+              entry.accountId === listing.accountId &&
+              entry.order.orderItemId === orderItemId &&
+              entry.order.orderDate >= from,
+          );
+          const orders = [
+            ...saved.map((entry) => entry.order),
+            ...(receipt ? [receipt.order] : []),
+          ];
+          if (
+            !orders.length ||
+            orders.some(
+              (o) =>
+                !isVerifiedSale(o) ||
+                o.sku !== listing.sku ||
+                o.listingId !== remoteId ||
+                o.locationId !== location,
+            )
+          )
+            throw new InputError(
+              'The tracked sale or its listing changed. Refresh tracked orders.',
+              409,
+            );
+          if (
+            !billingOnly &&
+            (!baseline?.current ||
+              !stock ||
+              orders.some((o) => o.orderDate < stock.from) ||
+              saved.some((entry) => entry.group !== 'standard' && entry.group !== 'selfShip') ||
+              coverageIssue(stock, stock.signature, Date.now()))
+          )
+            throw new InputError(
+              'The stock tracking setup changed. Refresh tracked orders before mapping.',
+              409,
+            );
+        }
+        if (billingOnly) listing.skuMappingId = remoteId;
+      } else if (editingBillingMapping) {
         verifyOrderMapping(
           market,
           listing,
           item.companyId,
-          listing.location || input.pickupLocation,
-          input.orderSource,
+          listing.location,
+          {
+            companyId: item.companyId,
+            accountId: listing.accountId,
+            listingId: listing.skuMappingId,
+            locationId: listing.location,
+          },
+          true,
         );
+      }
       if (input.keepPaused === true) listing.paused = true;
       let pickupChanged = false;
       if (!listing.location || input.pickupLocation !== undefined) {
@@ -686,7 +768,10 @@ export class InventoryService {
           );
         if (input.packSource !== 'packages' && input.packSource !== 'manual')
           throw new InputError('Choose a valid Set of source.');
-        if (input.sourceScope !== 'company' || typeof input.tyreFloor !== 'boolean')
+        if (
+          (input.sourceScope !== 'company' && input.sourceScope !== null) ||
+          typeof input.tyreFloor !== 'boolean'
+        )
           throw new InputError(
             'Confirm the company stock source and the advertising rule for this location.',
           );
