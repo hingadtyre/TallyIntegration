@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   BillingReport,
   BillingRule,
@@ -112,8 +112,10 @@ function LoadWorkspace({ companyId, accountId, ...mapping }: Scope & MappingAcce
 }
 
 type RuleInput = Pick<BillingRule, 'ledgerId' | 'reference' | 'field'>;
+type OrderPeriod = 'tracking' | 1 | 7 | 30;
 
-function orderPeriod(report: BillingReport): 1 | 7 | 30 {
+function orderPeriod(report: BillingReport): OrderPeriod {
+  if (report.period === 'tracking') return 'tracking';
   const elapsed = Date.parse(report.to) - Date.parse(report.from);
   if (elapsed >= 7 * 86_400_000) return 30;
   return elapsed >= 86_400_000 ? 7 : 1;
@@ -128,14 +130,21 @@ function BillingReview({
 }: Scope & MappingAccess & { initial: BillingWorkspace }) {
   const [workspace, setWorkspace] = useState(initial);
   const [editing, setEditing] = useState(!initial.rule && !initial.report);
-  const [days, setDays] = useState<number>(initial.report ? orderPeriod(initial.report) : 7);
+  const [days, setDays] = useState<OrderPeriod>(
+    initial.trackingFrom ? 'tracking' : initial.report ? orderPeriod(initial.report) : 7,
+  );
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [requiresRefresh, setRequiresRefresh] = useState(false);
   const [trackingRevision, setTrackingRevision] = useState(0);
-  const { rule, report } = workspace;
+  const [coverageSaving, setCoverageSaving] = useState(false);
+  const [mappingBusy, setMappingBusy] = useState(false);
+  const previewRequest = useRef<AbortController | null>(null);
+  const { rule, report, trackingFrom } = workspace;
+  const locked = !!busy || coverageSaving || mappingBusy;
   const periodChanged = !!report && days !== orderPeriod(report);
+  const visibleReport = requiresRefresh || periodChanged ? null : report;
   const confirmed = !!(
     rule &&
     report &&
@@ -145,7 +154,7 @@ function BillingReview({
     rule.reference === report.rule.reference
   );
   async function run(label: string, action: () => Promise<void>) {
-    if (busy) return;
+    if (locked || !visibleReport) return;
     setBusy(label);
     setError('');
     setNotice('');
@@ -158,20 +167,63 @@ function BillingReview({
       setBusy('');
     }
   }
-  const preview = (draft: RuleInput) =>
-    run('Reading orders and bills…', async () => {
-      const latest = await requestJson<BillingReport>('/billing/preview', {
-        companyId,
-        accountId,
-        ledgerId: draft.ledgerId,
-        field: draft.field,
-        reference: draft.reference,
-        days,
-      });
-      setWorkspace({ rule, report: latest });
-      setRequiresRefresh(false);
-      setEditing(false);
-    });
+  const preview = useCallback(
+    async (draft: RuleInput, period: OrderPeriod) => {
+      previewRequest.current?.abort();
+      const controller = new AbortController();
+      previewRequest.current = controller;
+      setBusy('Reading orders and bills…');
+      setError('');
+      setNotice('');
+      setRequiresRefresh(true);
+      try {
+        const latest = await requestJson<BillingReport>(
+          '/billing/preview',
+          {
+            companyId,
+            accountId,
+            ledgerId: draft.ledgerId,
+            field: draft.field,
+            reference: draft.reference,
+            days: period,
+          },
+          controller.signal,
+        );
+        if (!controller.signal.aborted) {
+          setWorkspace((previous) => ({ ...previous, report: latest }));
+          setRequiresRefresh(false);
+          setEditing(false);
+        }
+      } catch (cause) {
+        if (!controller.signal.aborted) setError(errorMessage(cause));
+      } finally {
+        if (!controller.signal.aborted) {
+          previewRequest.current = null;
+          setBusy('');
+        }
+      }
+    },
+    [companyId, accountId],
+  );
+  useEffect(() => {
+    if (initial.trackingFrom && initial.rule && initial.report?.period !== 'tracking') {
+      void preview(initial.rule, 'tracking');
+    }
+    return () => previewRequest.current?.abort();
+  }, [initial, preview]);
+  function changePeriod(value: string) {
+    const period = value === 'tracking' ? value : (Number(value) as 1 | 7 | 30);
+    setDays(period);
+    if (!editing && rule && (!report || confirmed)) void preview(rule, period);
+  }
+  function startTracking(from: string) {
+    if (!rule) return;
+    const period = trackingFrom ? days : 'tracking';
+    setWorkspace((previous) => ({ ...previous, trackingFrom: from }));
+    setTrackingRevision((value) => value + 1);
+    setDays(period);
+    void preview(rule, period);
+  }
   const confirm = () =>
     report &&
     run('Saving setup…', async () => {
@@ -181,6 +233,10 @@ function BillingReview({
         previewId: report.previewId,
       });
       setWorkspace(next);
+      if (next.trackingFrom && !trackingFrom && next.rule) {
+        setDays('tracking');
+        await preview(next.rule, 'tracking');
+      }
       setNotice('Billing setup saved for this company and seller account.');
     });
   const match = (orderItemId: string, billId: string) =>
@@ -223,9 +279,10 @@ function BillingReview({
           <span>Order period</span>
           <select
             value={days}
-            disabled={!!busy}
-            onChange={(event) => setDays(Number(event.target.value))}
+            disabled={locked}
+            onChange={(event) => changePeriod(event.target.value)}
           >
+            {trackingFrom && <option value="tracking">Since tracking start (up to 30 days)</option>}
             <option value={1}>Today in India</option>
             <option value={7}>Last 7 days</option>
             <option value={30}>Last 30 days</option>
@@ -236,13 +293,14 @@ function BillingReview({
             companyId={companyId}
             accountId={accountId}
             initialRule={shownRule}
-            busy={!!busy}
-            onPreview={preview}
+            busy={locked}
+            onPreview={(draft) => preview(draft, days)}
             onCancel={
               shownRule
                 ? () => {
                     setEditing(false);
                     setError('');
+                    if (rule && (!report || confirmed) && periodChanged) void preview(rule, days);
                   }
                 : undefined
             }
@@ -275,7 +333,7 @@ function BillingReview({
                 {report && !confirmed && (
                   <button
                     className="button primary"
-                    disabled={!!busy || requiresRefresh || periodChanged}
+                    disabled={locked || !visibleReport}
                     onClick={() => void confirm()}
                   >
                     Confirm billing setup
@@ -283,14 +341,14 @@ function BillingReview({
                 )}
                 <button
                   className="button secondary"
-                  disabled={!!busy}
-                  onClick={() => void preview(shownRule)}
+                  disabled={locked}
+                  onClick={() => void preview(shownRule, days)}
                 >
                   Refresh preview
                 </button>
                 <button
                   className="text-button"
-                  disabled={!!busy}
+                  disabled={locked}
                   onClick={() => {
                     setEditing(true);
                     setError('');
@@ -302,11 +360,12 @@ function BillingReview({
                 {rule && report && !confirmed && (
                   <button
                     className="text-button"
-                    disabled={!!busy}
+                    disabled={locked}
                     onClick={() => {
-                      setWorkspace({ rule, report: null });
+                      setWorkspace((previous) => ({ ...previous, report: null }));
                       setError('');
                       setNotice('');
+                      void preview(rule, days);
                     }}
                   >
                     Return to saved setup
@@ -328,26 +387,29 @@ function BillingReview({
           </p>
         )}
       </section>
-      {!editing && (report || rule) && (
-        <BillingListingMappings
-          companyId={companyId}
-          accountId={accountId}
-          inventory={inventory}
-          report={requiresRefresh || periodChanged ? null : report}
-          trackingRevision={trackingRevision}
-          busy={!!busy}
-          onSaveMapping={onSaveMapping}
-          onRefreshPreview={async () => {
-            if (report) await preview(report.rule);
-          }}
-        />
-      )}
       {rule && !editing && (
         <StockCoverageSetup
           key={JSON.stringify(rule)}
           companyId={companyId}
           accountId={accountId}
-          onStart={() => setTrackingRevision((value) => value + 1)}
+          disabled={!!busy || mappingBusy || (!!report && !confirmed)}
+          onSavingChange={setCoverageSaving}
+          onStart={startTracking}
+        />
+      )}
+      {!editing && (report || rule) && (
+        <BillingListingMappings
+          key={trackingRevision}
+          companyId={companyId}
+          accountId={accountId}
+          inventory={inventory}
+          report={visibleReport}
+          busy={!!busy || coverageSaving}
+          onCheckingChange={setMappingBusy}
+          onSaveMapping={onSaveMapping}
+          onRefreshPreview={async () => {
+            if (report) await preview(report.rule, days);
+          }}
         />
       )}
       {!rule && (
@@ -356,24 +418,17 @@ function BillingReview({
           for this company.
         </p>
       )}
-      {!editing && report && (
-        <>
-          {(requiresRefresh || periodChanged) && (
-            <p role="status">
-              Showing the previous preview. Refresh it for the selected period before confirming any
-              decisions.
-            </p>
-          )}
-          <BillingResults
-            report={report}
-            confirmed={confirmed}
-            busy={!!busy || requiresRefresh || periodChanged}
-            onMatch={(order, bill) => void match(order, bill)}
-            onUnmatch={(order) => void unmatch(order)}
-          />
-        </>
+      {!editing && visibleReport && (
+        <BillingResults
+          report={visibleReport}
+          trackingFrom={trackingFrom}
+          confirmed={confirmed}
+          busy={locked}
+          onMatch={(order, bill) => void match(order, bill)}
+          onUnmatch={(order) => void unmatch(order)}
+        />
       )}
-      {!editing && !report && (
+      {!editing && !busy && !visibleReport && (
         <p>Refresh the preview to check recent orders against the saved ledger.</p>
       )}
     </div>

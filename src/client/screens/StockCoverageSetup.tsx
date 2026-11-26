@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { StockCoverageStatus } from '../../shared/stock-coverage.js';
 import { errorMessage, requestJson } from '../api.js';
-import { formatDateTime } from '../format.js';
 
 const indiaDay = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Kolkata',
@@ -13,11 +12,15 @@ const indiaDay = new Intl.DateTimeFormat('en-CA', {
 export function StockCoverageSetup({
   companyId,
   accountId,
+  disabled = false,
   onStart,
+  onSavingChange,
 }: {
   companyId: string;
   accountId: string;
-  onStart: () => void;
+  disabled?: boolean;
+  onStart: (from: string) => void;
+  onSavingChange?: (saving: boolean) => void;
 }) {
   const [status, setStatus] = useState<StockCoverageStatus | null>(null);
   const [editing, setEditing] = useState(false);
@@ -45,47 +48,59 @@ export function StockCoverageSetup({
   const today = new Date();
   const latest = indiaDay.format(today);
   const earliest = indiaDay.format(new Date(today.getTime() - 29 * 86_400_000));
+  const savedDate = status?.from ? indiaDay.format(new Date(status.from)) : '';
+  const validDate = fromDate >= earliest && fromDate <= latest;
   async function save() {
-    if (!confirmed || saving || fromDate < earliest || fromDate > latest) return;
+    if (!confirmed || saving || disabled || !validDate) return;
     setSaving(true);
+    onSavingChange?.(true);
     setError('');
     try {
-      const result = await requestJson<StockCoverageStatus>('/billing/coverage/start', {
-        companyId,
-        accountId,
-        fromDate,
-        confirmed: true,
-      });
+      const result = await requestJson<StockCoverageStatus & { from: string }>(
+        '/billing/coverage/start',
+        { companyId, accountId, fromDate, confirmed: true },
+      );
       setStatus(result);
       setEditing(false);
-      setConfirmed(false);
-      setFromDate('');
-      onStart();
+      onStart(result.from);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
       setSaving(false);
+      onSavingChange?.(false);
     }
   }
   return (
     <section className="panel settings-panel billing-panel">
       <h2>Order tracking for calculated stock</h2>
+      <p>
+        This date applies to all participating sellers for this company. A tracked sale with a stock
+        mapping reserves units until its Tally bill is matched.
+      </p>
       {!status && !error && <p role="status">Checking order coverage…</p>}
       {status && (
         <>
           <p role="status">
-            {status.current && status.from
-              ? `Stockbridge checks orders for this company from ${indiaDay.format(new Date(status.from))} (India).`
+            {status.current && savedDate
+              ? `Stockbridge checks orders for this company from ${savedDate} (India).`
               : (status.issue ??
                 (status.from
                   ? 'Review the starting stock for this company.'
                   : 'Choose the date to start tracking this company’s Flipkart orders.'))}
           </p>
-          {status.current && status.checkedThrough && (
-            <p>Last order check through {formatDateTime(status.checkedThrough)}.</p>
+          {!status.current && savedDate && (
+            <p>The saved tracking start date is {savedDate} (India).</p>
           )}
           {!editing ? (
-            <button className="button secondary" onClick={() => setEditing(true)}>
+            <button
+              className="button secondary"
+              disabled={disabled}
+              onClick={() => {
+                setFromDate(savedDate);
+                setConfirmed(false);
+                setEditing(true);
+              }}
+            >
               {status.from ? 'Review starting stock' : 'Set starting stock'}
             </button>
           ) : (
@@ -104,17 +119,27 @@ export function StockCoverageSetup({
                   max={latest}
                   required
                   value={fromDate}
-                  disabled={saving}
+                  disabled={saving || disabled}
                   onChange={(event) => {
                     setFromDate(event.target.value);
                     setConfirmed(false);
                   }}
                 />
               </label>
-              <p>
-                Choose a day in the last 30 days, including today. Tracking starts at midnight in
-                India.
-              </p>
+              {savedDate && savedDate < earliest && fromDate === savedDate ? (
+                <p>
+                  Your saved date is outside the last 30 days. Cancel to keep it, or choose a day in
+                  the last 30 days to change it.
+                </p>
+              ) : (
+                <p>Choose a day in the last 30 days. Tracking starts at midnight in India.</p>
+              )}
+              {savedDate && fromDate > savedDate && (
+                <p role="status">
+                  Orders before {fromDate} will stop reserving stock. Check that those sales are
+                  already recorded in Tally before confirming.
+                </p>
+              )}
               <ul>
                 <li>
                   All Flipkart sales before this date are already recorded in Tally. Check any
@@ -133,7 +158,7 @@ export function StockCoverageSetup({
               <label>
                 <input
                   type="checkbox"
-                  disabled={saving || !fromDate}
+                  disabled={saving || disabled || !validDate}
                   checked={confirmed}
                   onChange={(event) => setConfirmed(event.target.checked)}
                 />{' '}
@@ -143,7 +168,7 @@ export function StockCoverageSetup({
                 <button
                   className="button primary"
                   type="submit"
-                  disabled={saving || !confirmed || fromDate < earliest || fromDate > latest}
+                  disabled={saving || disabled || !confirmed || !validDate}
                 >
                   {saving ? 'Saving starting stock…' : 'Confirm starting stock'}
                 </button>
@@ -153,8 +178,6 @@ export function StockCoverageSetup({
                   disabled={saving}
                   onClick={() => {
                     setEditing(false);
-                    setConfirmed(false);
-                    setFromDate('');
                     setError('');
                   }}
                 >

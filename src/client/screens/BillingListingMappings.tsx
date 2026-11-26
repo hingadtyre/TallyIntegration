@@ -9,7 +9,7 @@ import type {
 import type { Listing, Snapshot } from '../../shared/contracts.js';
 import { errorMessage, requestJson } from '../api.js';
 import { Modal } from '../components.js';
-import { formatUnits } from '../format.js';
+import { formatDateTime, formatUnits } from '../format.js';
 import { SearchablePicker } from '../SearchablePicker.js';
 import { PackForm, type SaveMapping } from './MappingDialog.js';
 
@@ -100,8 +100,8 @@ export function BillingListingMappings({
   accountId,
   inventory,
   report,
-  trackingRevision,
   busy,
+  onCheckingChange,
   onSaveMapping,
   onRefreshPreview,
 }: {
@@ -109,21 +109,15 @@ export function BillingListingMappings({
   accountId: string;
   inventory: Snapshot;
   report: BillingReport | null;
-  trackingRevision: number;
   busy: boolean;
+  onCheckingChange?: (checking: boolean) => void;
   onSaveMapping: SaveMapping;
   onRefreshPreview: () => Promise<void>;
 }) {
   const [pending, setPending] = useState<PendingListings | null>(null);
   const [reload, setReload] = useState(0);
   const [loadError, setLoadError] = useState('');
-  const loadKey = JSON.stringify([
-    companyId,
-    accountId,
-    reload,
-    report?.previewId,
-    trackingRevision,
-  ]);
+  const loadKey = JSON.stringify([companyId, accountId, reload]);
   const [loadedKey, setLoadedKey] = useState('');
   const loading = loadedKey !== loadKey;
   const [checkError, setCheckError] = useState('');
@@ -184,6 +178,7 @@ export function BillingListingMappings({
     setFailed(null);
     setResult(null);
     setChecking(true);
+    onCheckingChange?.(true);
     try {
       if (group.trackedIds.length) {
         const checked = await requestJson<PendingListingCheck>('/billing/pending/recheck', {
@@ -200,8 +195,9 @@ export function BillingListingMappings({
       setFailed(group);
     } finally {
       await onRefreshPreview();
-      if (!report) setReload((value) => value + 1);
+      setReload((value) => value + 1);
       setChecking(false);
+      onCheckingChange?.(false);
     }
   }
   function listingTable(rows: Group[], label: string) {
@@ -282,6 +278,15 @@ export function BillingListingMappings({
         <div>
           <h2>Listings from orders</h2>
           <p>{seller} · Map each listing and pickup location once for its order items.</p>
+          {pending?.trackingStarted && (
+            <p>
+              This list covers orders tracked since the company’s starting date. It can include
+              orders outside the selected preview period.
+            </p>
+          )}
+          {pending?.checkedThrough && (
+            <p>Last company-wide order check through {formatDateTime(pending.checkedThrough)}.</p>
+          )}
         </div>
         <button
           className="button secondary"

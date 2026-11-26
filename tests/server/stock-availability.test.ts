@@ -158,11 +158,11 @@ function setup(t: TestContext, sellerPacks = [1]) {
     available: (batch?: object, target = itemId) => service.forItem(companyId, target, batch),
     preview: () => service.forItem(companyId, itemId, undefined, true),
     review: () => service.reviewOrders(companyId, 'seller-0'),
-    pendingGroups: () =>
+    pendingGroups: (accountId = 'seller-0') =>
       new BillingService(f.store).pendingOrders(
         service,
         { companyId, savedOnly: true },
-        'seller-0',
+        accountId,
         false,
       ),
     pending: () => service.pendingHistory(companyId, 'seller-0').orders,
@@ -173,7 +173,7 @@ function setup(t: TestContext, sellerPacks = [1]) {
         'seller-0',
         recheck,
       ),
-    refreshHistory: () => service.refreshPendingOrders(companyId),
+    refreshHistory: (accountId?: string) => service.refreshPendingOrders(companyId, accountId),
     scan: () => service.checkOrders(companyId, {}),
     restoreService() {
       f.reopen();
@@ -352,6 +352,27 @@ test('a failed seller check keeps already observed sales and cannot advance veri
   s.orders.set('seller-0', []);
   s.source.unavailable = '';
   assert.equal((await s.available()).available, 3);
+});
+
+test('saved pending listings report only a current complete company check for participating sellers', async (t) => {
+  const s = setup(t, [1, 2]);
+  s.confirm();
+  await s.refreshHistory('seller-0');
+  assert.deepEqual(await s.pendingGroups(), { trackingStarted: true, listings: [] });
+  await s.refreshHistory();
+  const checkedThrough = s.f.store.readStockCoverage(s.companyId)!.checkedThrough;
+  assert.ok(checkedThrough);
+  await s.refreshHistory('seller-1');
+  assert.deepEqual(await s.pendingGroups('seller-1'), {
+    trackingStarted: true,
+    listings: [],
+    checkedThrough,
+  });
+  assert.deepEqual(await s.pendingGroups('other-seller'), { trackingStarted: false, listings: [] });
+  s.f.store.update((state) => {
+    state.listings[0].packSize = 4;
+  });
+  assert.deepEqual(await s.pendingGroups(), { trackingStarted: true, listings: [] });
 });
 
 test('a newly verified receipt durably queues all active destinations once even if a later seller read fails', async (t) => {
@@ -699,6 +720,26 @@ test('a later cancellation cannot free previously dispatched stock; a long gap r
   await assert.rejects(s.available(), /gap in order coverage/);
 });
 
+test('reconfirming the current date preserves the last check, recorded sales and fresh proposals', async (t) => {
+  const s = setup(t);
+  s.confirm();
+  s.f.store.update((state) => {
+    state.connection.tally = 'online';
+  });
+  await s.scan();
+  const coverage = s.f.store.readStockCoverage(s.companyId)!;
+  assert.ok(coverage.checkedThrough);
+  assert.equal(coverage.orders.length, 1);
+  const drafts = s.f.store.read().proposals;
+  assert.ok(drafts.some((draft) => draft.listingId === 'map-0' && !draft.stale));
+  assert.equal(s.confirm().checkedThrough, coverage.checkedThrough);
+  assert.deepEqual(s.f.store.readStockCoverage(s.companyId), coverage);
+  assert.deepEqual(s.f.store.read().proposals, drafts);
+  const today = saleDay(new Date().toISOString());
+  assert.equal(s.confirm(today).checkedThrough, null);
+  assert.ok(s.f.store.read().proposals.find((draft) => draft.listingId === 'map-0')?.stale);
+});
+
 test('source balance, changed conversions, baseline dates and changed order identities guard publication', async (t) => {
   const s = setup(t);
   assert.throws(() => s.confirm('2000-01-01'), /previous 29 days/);
@@ -1006,7 +1047,11 @@ test('a verified cancellation alone needs no mapping and remains in the journal 
   s.orders.set('seller-0', [clean]);
   s.confirm();
   await s.scan();
-  assert.deepEqual(await s.pendingGroups(), { trackingStarted: true, listings: [] });
+  assert.deepEqual(await s.pendingGroups(), {
+    trackingStarted: true,
+    listings: [],
+    checkedThrough: s.f.store.readStockCoverage(s.companyId)!.checkedThrough,
+  });
   assert.equal(s.f.store.readStockCoverage(s.companyId)!.orders.length, 1);
   assert.deepEqual(
     (await s.review()).map((row) => row.result.status),
@@ -1022,6 +1067,7 @@ test('a verified cancellation alone needs no mapping and remains in the journal 
   await s.scan();
   assert.deepEqual(await s.pendingGroups(), {
     trackingStarted: true,
+    checkedThrough: s.f.store.readStockCoverage(s.companyId)!.checkedThrough,
     listings: [
       {
         listingId: clean.listingId,

@@ -214,6 +214,13 @@ export class Store {
     }
   }
 
+  readStockTrackingStart(companyId: string): string | undefined {
+    const row = this.database
+      .prepare('SELECT from_at FROM stock_coverage WHERE company_id = ?')
+      .get(companyId);
+    return row && String(row.from_at);
+  }
+
   readStockCoverage(companyId: string): StockSyncCoverage | null {
     this.database.exec('BEGIN');
     try {

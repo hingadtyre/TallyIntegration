@@ -21,7 +21,11 @@ interface Actions {
   onUnmatch: (orderItemId: string) => void;
 }
 
-export function BillingResults({ report, ...actions }: Actions & { report: BillingReport }) {
+export function BillingResults({
+  report,
+  trackingFrom,
+  ...actions
+}: Actions & { report: BillingReport; trackingFrom?: string }) {
   const [onlyOpen, setOnlyOpen] = useState(false);
   const unresolved = report.rows.filter((row) => row.status !== 'matched');
   const rows = onlyOpen ? unresolved : report.rows;
@@ -40,6 +44,14 @@ export function BillingResults({ report, ...actions }: Actions & { report: Billi
               This preview covers recent seller-fulfilled standard and self-ship orders returned for
               the selected period and sales bills from the selected ledger.
             </p>
+            {report.period === 'tracking' &&
+              trackingFrom &&
+              Date.parse(report.from) > Date.parse(trackingFrom) && (
+                <p>
+                  Company tracking started on {saleDate.format(new Date(trackingFrom))}. This
+                  preview shows the most recent 30 Indian calendar days.
+                </p>
+              )}
           </div>
         </div>
         {report.rows.length === 0 ? (

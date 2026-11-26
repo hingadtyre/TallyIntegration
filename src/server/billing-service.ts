@@ -25,7 +25,7 @@ import type { StockAvailabilityService } from './stock-availability.js';
 import type { Store } from './store.js';
 import { InputError, requireCompany, requireText } from './validation.js';
 
-type ReviewSpec = Pick<BillingReport, 'rule' | 'from' | 'to'>;
+type ReviewSpec = Pick<BillingReport, 'rule' | 'from' | 'to' | 'period'>;
 type Matches = ReturnType<typeof matchBills>;
 type Decision = 'confirm' | 'match' | 'unmatch';
 
@@ -35,6 +35,7 @@ interface ReviewSession {
   tallyUrl: string;
   savedDecisions: string;
   reviewedEvidence: string;
+  trackingFrom?: string;
 }
 
 export interface BillingSources {
@@ -84,9 +85,16 @@ function evidenceDigest(rule: BillingRule, match: Matches): string {
   return fingerprint([rule, match.rows, match.stock, candidates.sort()]);
 }
 
-function newReview(input: Record<string, unknown>): ReviewSpec {
-  if (input.days !== 1 && input.days !== 7 && input.days !== 30)
-    throw new InputError('Choose today, the last 7 days or the last 30 days.');
+function newReview(input: Record<string, unknown>, trackingFrom?: string): ReviewSpec {
+  const tracked = input.days === 'tracking';
+  if (tracked && !trackingFrom)
+    throw new InputError(
+      'Set up bill matching and choose a tracking start date for this company first.',
+      409,
+    );
+  const days = tracked ? 30 : input.days;
+  if (days !== 1 && days !== 7 && days !== 30)
+    throw new InputError('Choose a valid billing preview period.');
   const field = input.field;
   const reference = input.reference;
   if (field !== 'manual' && field !== 'number' && field !== 'reference' && field !== 'narration')
@@ -95,6 +103,7 @@ function newReview(input: Record<string, unknown>): ReviewSpec {
     throw new InputError('Choose a Flipkart reference type.');
   const to = new Date().toISOString();
   const startOfToday = Date.parse(saleDay(to) + 'T00:00:00+05:30');
+  const earliest = new Date(startOfToday - (days - 1) * 86_400_000).toISOString();
   return {
     rule: {
       ledgerId: requireText(input.ledgerId, 'Sales ledger'),
@@ -102,9 +111,21 @@ function newReview(input: Record<string, unknown>): ReviewSpec {
       field,
       reference,
     },
-    from: new Date(startOfToday - (input.days - 1) * 86_400_000).toISOString(),
+    ...(tracked && { period: 'tracking' }),
+    from: tracked && trackingFrom && trackingFrom > earliest ? trackingFrom : earliest,
     to,
   };
+}
+
+function trackingPeriodCurrent(spec: ReviewSpec, originalFrom?: string, currentFrom?: string) {
+  return (
+    spec.period !== 'tracking' ||
+    (originalFrom === currentFrom && saleDay(spec.to) === saleDay(new Date().toISOString()))
+  );
+}
+
+function reviewExpired(report: BillingReport) {
+  return Date.now() - Date.parse(report.checkedAt) > 600_000;
 }
 
 function currentReview(
@@ -113,11 +134,7 @@ function currentReview(
   decision: Decision,
   rule: BillingRule | null,
 ): ReviewSession {
-  if (
-    !session ||
-    session.report.previewId !== previewId ||
-    Date.now() - Date.parse(session.report.checkedAt) > 600_000
-  )
+  if (!session || session.report.previewId !== previewId || reviewExpired(session.report))
     throw new InputError(
       'This review expired or changed. Preview the current orders and bills again.',
       409,
@@ -229,7 +246,10 @@ export class BillingService {
         refreshIssue = coverage.issue;
       }
     }
-    const { orders, trackingStarted } = availability.pendingHistory(companyId, accountId);
+    const { orders, trackingStarted, checkedThrough } = availability.pendingHistory(
+      companyId,
+      accountId,
+    );
     const groups = new Map<string, PendingListingGroup>();
     const visible = new Set<PendingListingGroup>();
     for (const { order, mapped } of orders) {
@@ -244,6 +264,7 @@ export class BillingService {
       return {
         trackingStarted,
         listings: [...visible],
+        ...(checkedThrough && { checkedThrough }),
         ...(refreshIssue && { refreshIssue }),
       } satisfies PendingListings;
 
@@ -373,15 +394,22 @@ export class BillingService {
     const session = this.sessions.get(key);
     const saved = this.store.readBilling();
     const rule = configuredRule(saved, scope);
+    if (path === '/api/billing/ledgers') return { ledgers: await this.listLedgers(state, company) };
+    const trackingFrom = rule ? this.store.readStockTrackingStart(company.id) : undefined;
     if (path === '/api/billing/workspace') {
       const current =
         session &&
+        trackingPeriodCurrent(session.report, session.trackingFrom, trackingFrom) &&
+        (session.report.period !== 'tracking' || !reviewExpired(session.report)) &&
         session.tallyUrl === state.settings.tallyUrl &&
         fingerprint(session.report.rule) === fingerprint(rule) &&
         session.savedDecisions === decisionsDigest(saved, scope, session.report.rule.ledgerId);
-      return { rule, report: current ? session.report : null } satisfies BillingWorkspace;
+      return {
+        rule,
+        report: current ? session.report : null,
+        ...(trackingFrom && { trackingFrom }),
+      } satisfies BillingWorkspace;
     }
-    if (path === '/api/billing/ledgers') return { ledgers: await this.listLedgers(state, company) };
     const action = path.slice('/api/billing/'.length);
     if (
       !path.startsWith('/api/billing/') ||
@@ -390,7 +418,12 @@ export class BillingService {
       throw new InputError('Route not found.', 404);
     const previous =
       action === 'preview' ? null : currentReview(session, input.previewId, action, rule);
-    const spec = previous?.report ?? newReview(input);
+    const spec = previous?.report ?? newReview(input, trackingFrom);
+    if (previous && !trackingPeriodCurrent(spec, previous.trackingFrom, trackingFrom))
+      throw new InputError(
+        'The tracking period changed. Preview the current orders and bills again.',
+        409,
+      );
     const baseline = decisionsDigest(saved, scope, spec.rule.ledgerId);
     if (
       previous &&
@@ -409,6 +442,11 @@ export class BillingService {
     if (state.mode === 'live') verifyAccess();
     const current = this.store.read();
     let decisions = this.store.readBilling();
+    if (
+      spec.period === 'tracking' &&
+      !trackingPeriodCurrent(spec, trackingFrom, this.store.readStockTrackingStart(company.id))
+    )
+      throw new InputError('The tracking period changed during the read. Preview again.', 409);
     if (
       current.settings.tallyUrl !== state.settings.tallyUrl ||
       decisionsDigest(decisions, scope, spec.rule.ledgerId) !== baseline ||
@@ -437,6 +475,7 @@ export class BillingService {
     }
     const report: BillingReport = {
       previewId: randomUUID(),
+      ...(spec.period && { period: spec.period }),
       rule: requested,
       from: spec.from,
       to: spec.to,
@@ -447,10 +486,17 @@ export class BillingService {
     this.sessions.set(key, {
       accountId,
       report,
+      ...(spec.period && { trackingFrom }),
       tallyUrl: current.settings.tallyUrl,
       savedDecisions: decisionsDigest(decisions, scope, requested.ledgerId),
       reviewedEvidence: evidenceDigest(requested, match),
     });
-    return action === 'preview' ? report : ({ rule: requested, report } satisfies BillingWorkspace);
+    if (action === 'preview') return report;
+    const currentFrom = this.store.readStockTrackingStart(company.id);
+    return {
+      rule: requested,
+      report,
+      ...(currentFrom && { trackingFrom: currentFrom }),
+    } satisfies BillingWorkspace;
   }
 }

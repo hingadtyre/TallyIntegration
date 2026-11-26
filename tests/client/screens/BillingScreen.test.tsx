@@ -8,10 +8,12 @@ import type {
 } from '../../../src/shared/billing-contracts.js';
 import { initialState } from '../../../src/server/seed.js';
 import { App } from '../../../src/client/App.js';
+import { formatDateTime } from '../../../src/client/format.js';
 import { BillingListingMappings } from '../../../src/client/screens/BillingListingMappings.js';
 import { BillingResults } from '../../../src/client/screens/BillingResults.js';
 import { BillingScreen } from '../../../src/client/screens/BillingScreen.js';
 import { BillingSetup } from '../../../src/client/screens/BillingSetup.js';
+import { StockCoverageSetup } from '../../../src/client/screens/StockCoverageSetup.js';
 import {
   act,
   fireEvent,
@@ -348,6 +350,8 @@ test('company stock tracking starts only after the seller confirms the chosen In
           current: true,
           checkedThrough: null,
         });
+      case '/api/billing/preview':
+        return response({ ...report, period: 'tracking', rows: [], stock: [] });
       default:
         throw new Error('Unexpected request');
     }
@@ -382,6 +386,168 @@ test('company stock tracking starts only after the seller confirms the chosen In
   fireEvent.click(button);
   await screen.findByRole('button', { name: 'Review starting stock' });
   assert.deepEqual(saved, [{ ...scope, fromDate: today, confirmed: true }]);
+});
+
+test('review displays an older saved Indian day and cancel restores it without saving', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-25T20:00:00Z') });
+  const requests: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: string) => {
+    requests.push(String(input));
+    return response({
+      from: '2026-09-30T18:30:00Z',
+      current: false,
+      checkedThrough: null,
+      issue: 'Review the starting stock for this company.',
+    });
+  });
+  render(<StockCoverageSetup companyId="company" accountId="seller" onStart={assert.fail} />);
+  const date = () => screen.getByLabelText<HTMLInputElement>('Track Flipkart orders from (India)');
+  const acknowledgement = () =>
+    screen.getByRole<HTMLInputElement>('checkbox', { name: /I have checked all three/ });
+  const confirm = () =>
+    screen.getByRole<HTMLButtonElement>('button', { name: 'Confirm starting stock' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Review starting stock' }));
+  assert.equal(date().value, '2026-10-01');
+  assert.equal(date().min, '2026-10-28');
+  assert.equal(date().max, '2026-11-26');
+  assert.equal(acknowledgement().checked, false);
+  fireEvent.click(acknowledgement());
+  assert.ok(confirm().disabled);
+  fireEvent.change(date(), { target: { value: '2026-10-28' } });
+  assert.equal(acknowledgement().checked, false);
+  assert.ok(confirm().disabled);
+  fireEvent.click(acknowledgement());
+  assert.equal(confirm().disabled, false);
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Review starting stock' }));
+  assert.equal(date().value, '2026-10-01');
+  assert.equal(acknowledgement().checked, false);
+  assert.ok(confirm().disabled);
+  assert.deepEqual(requests, ['/api/billing/coverage']);
+});
+
+test('changing the tracking date reloads the report and mapping queue; retry and manual periods do not resave the date', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-25T20:00:00Z') });
+  const inventory = initialState('demo', 'unused');
+  const companyId = inventory.companies[0].id;
+  const accountId = inventory.accounts[0].id;
+  const originalFrom = '2026-11-23T18:30:00.000Z';
+  const changedFrom = '2026-11-25T18:30:00.000Z';
+  const earlierCheck = '2026-11-25T19:10:00.000Z';
+  const latestCheck = '2026-11-25T19:59:00.000Z';
+  const checkLabel = (date: string) =>
+    'Last company-wide order check through ' + formatDateTime(date) + '.';
+  let trackingFrom = originalFrom;
+  const saves: unknown[] = [];
+  const periods: (string | number)[] = [];
+  let failNextPreview = false;
+  t.mock.method(globalThis, 'fetch', async (input: string, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/state') return response(inventory);
+    const body = JSON.parse(String(init?.body));
+    switch (path) {
+      case '/api/billing/workspace':
+        return response({ rule, trackingFrom, report });
+      case '/api/billing/coverage':
+        return response({ from: trackingFrom, current: true, checkedThrough: earlierCheck });
+      case '/api/billing/coverage/start':
+        saves.push(body);
+        if (saves.length === 1) return response({ error: 'Reconcile earlier sales first.' }, 409);
+        trackingFrom = changedFrom;
+        failNextPreview = true;
+        return response({ from: trackingFrom, current: true, checkedThrough: null });
+      case '/api/billing/pending': {
+        const sku = trackingFrom === originalFrom ? 'OLD-QUEUE' : 'NEW-QUEUE';
+        return response({
+          trackingStarted: true,
+          checkedThrough: trackingFrom === originalFrom ? earlierCheck : latestCheck,
+          listings: [
+            { listingId: sku, location: 'Shop', sku, orderItemIds: ['waiting'], mapped: false },
+          ],
+        });
+      }
+      case '/api/billing/preview': {
+        periods.push(body.days);
+        if (failNextPreview) {
+          failNextPreview = false;
+          return response({ error: 'Preview temporarily unavailable.' }, 503);
+        }
+        const tracked = body.days === 'tracking';
+        const orderItemId = tracked
+          ? trackingFrom === originalFrom
+            ? 'EARLIER-ORDER'
+            : 'CURRENT-ORDER'
+          : 'MANUAL-ORDER';
+        return response({
+          ...report,
+          previewId: orderItemId,
+          ...(tracked && { period: 'tracking' }),
+          from: tracked ? trackingFrom : '2026-11-19T18:30:00.000Z',
+          to: '2026-11-25T20:00:00.000Z',
+          rows: [{ ...item, orderItemId }],
+          stock: [{ ...report.stock[0], previewAvailable: trackingFrom === originalFrom ? 4 : 6 }],
+        });
+      }
+      default:
+        throw new Error('Unexpected request ' + path);
+    }
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Order matching' }));
+  await screen.findByText('EARLIER-ORDER');
+  await screen.findByText('OLD-QUEUE');
+  assert.ok(screen.getByText(checkLabel(earlierCheck)));
+  assert.equal(screen.queryByText(item.orderItemId), null);
+  const period = screen.getByLabelText<HTMLSelectElement>('Order period');
+  assert.equal(period.value, 'tracking');
+  assert.deepEqual(periods, ['tracking']);
+  fireEvent.click(screen.getByRole('button', { name: 'Review starting stock' }));
+  const date = screen.getByLabelText<HTMLInputElement>('Track Flipkart orders from (India)');
+  const check = screen.getByRole<HTMLInputElement>('checkbox', {
+    name: /I have checked all three/,
+  });
+  assert.equal(date.value, '2026-11-24');
+  assert.equal(check.checked, false);
+  fireEvent.change(date, { target: { value: '2026-11-26' } });
+  fireEvent.click(check);
+  const confirm = screen.getByRole('button', { name: 'Confirm starting stock' });
+  fireEvent.click(confirm);
+  await screen.findByText('Reconcile earlier sales first.');
+  assert.equal(trackingFrom, originalFrom);
+  assert.equal(date.value, '2026-11-26');
+  assert.deepEqual(periods, ['tracking']);
+  fireEvent.click(confirm);
+  await screen.findByText(/Preview temporarily unavailable/);
+  await screen.findByText('NEW-QUEUE');
+  assert.ok(screen.getByText(checkLabel(latestCheck)));
+  assert.equal(screen.queryByText(checkLabel(earlierCheck)), null);
+  assert.equal(screen.queryByText('OLD-QUEUE'), null);
+  assert.equal(screen.queryByText('EARLIER-ORDER'), null);
+  assert.equal(screen.queryByRole('table', { name: 'Available stock preview' }), null);
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh preview' }));
+  await screen.findByText('CURRENT-ORDER');
+  const stock = within(screen.getByRole('table', { name: 'Available stock preview' }));
+  assert.equal(stock.getAllByRole('row')[1].lastElementChild?.textContent, '6');
+  fireEvent.change(period, { target: { value: '7' } });
+  await screen.findByText('MANUAL-ORDER');
+  assert.equal(period.value, '7');
+  assert.equal(screen.queryByText('CURRENT-ORDER'), null);
+  fireEvent.change(period, { target: { value: 'tracking' } });
+  await screen.findByText('CURRENT-ORDER');
+  fireEvent.click(screen.getByRole('button', { name: 'Review starting stock' }));
+  assert.equal(
+    screen.getByLabelText<HTMLInputElement>('Track Flipkart orders from (India)').value,
+    '2026-11-26',
+  );
+  assert.equal(
+    screen.getByRole<HTMLInputElement>('checkbox', { name: /I have checked all three/ }).checked,
+    false,
+  );
+  assert.deepEqual(periods, ['tracking', 'tracking', 'tracking', 7, 'tracking']);
+  assert.deepEqual(
+    saves,
+    Array(2).fill({ companyId, accountId, fromDate: '2026-11-26', confirmed: true }),
+  );
 });
 
 test('maps a listing once and checks tracked orders outside the current billing preview', async (t) => {
@@ -531,19 +697,19 @@ test('the order check distinguishes confirmed reservations while another order n
       accountId={listing.accountId}
       inventory={state}
       report={report}
-      trackingRevision={0}
       busy={false}
       onSaveMapping={() => assert.fail('Checking saved orders must not change the mapping.')}
       onRefreshPreview={async () => {}}
     />,
   );
   fireEvent.click(await screen.findByText('Previously mapped listings (1)'));
-  const check = screen.getByRole('button', { name: 'Check orders' });
+  const check = screen.getByRole<HTMLButtonElement>('button', { name: 'Check orders' });
   fireEvent.click(check);
   await screen.findByText(
     '0 billed · 1 awaiting a bill · 2 Tally units in confirmed reservations · 1 needs review',
   );
   rows[0] = { ...rows[0], status: 'matched', reason: 'Recorded in Tally.' };
+  await waitFor(() => assert.equal(check.disabled, false));
   fireEvent.click(check);
   await screen.findByText('1 billed · 0 awaiting a bill · 1 needs review');
 });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createApp } from '../../src/server/http.js';
 import { MarketplaceService } from '../../src/server/marketplace-service.js';
+import { seedSampleMarketplace } from '../../src/server/marketplace-catalog.js';
 import { InventoryService } from '../../src/server/service.js';
 import { BillingService } from '../../src/server/billing-service.js';
 import { saleDay } from '../../src/server/billing-matcher.js';
@@ -10,7 +11,7 @@ import type {
   BillingReport,
   BillingWorkspace,
   PendingListingCheck,
-  PendingListingGroup,
+  PendingListings,
 } from '../../src/shared/billing-contracts.js';
 import { close, listen, serverFixture } from '../support/server-fixture.js';
 
@@ -115,6 +116,73 @@ test('seller selects a ledger, previews, confirms and corrects a bill without pu
   assert.equal(f.store.readBilling().rules[0].field, 'manual');
   assert.deepEqual(f.store.readMarketplace(), market);
   assert.deepEqual(f.store.read().items, inventory.items);
+});
+
+test('the tracking preview uses the saved Indian date and rejects reports from an earlier cutoff', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-25T19:00:00Z') });
+  const f = serverFixture(t);
+  f.store.updateMarketplace(seedSampleMarketplace);
+  const billing = new BillingService(f.store);
+  const scope = { companyId: 'demo-a', accountId: 'flipkart-primary' };
+  const rule = { ledgerId: 'sample-sales-demo-a', field: 'manual', reference: 'orderId' };
+  const command = (action: string, data: Record<string, unknown> = {}) =>
+    billing.command('/api/billing/' + action, { ...scope, ...data }, async () => null);
+  const workspace = () => command('workspace') as Promise<BillingWorkspace>;
+  const preview = (days: number | 'tracking') =>
+    command('preview', { ...rule, days }) as Promise<BillingReport>;
+  const setStart = (from: string) =>
+    f.store.saveStockCoverage({
+      companyId: scope.companyId,
+      from,
+      signature: 'setup',
+      checkedThrough: null,
+      orders: [],
+    });
+  const recent = '2026-11-22T18:30:00.000Z';
+  setStart(recent);
+  assert.deepEqual(await workspace(), { rule: null, report: null });
+  await assert.rejects(preview('tracking'), /Set up bill matching/);
+  const fixed = await preview(7);
+  assert.equal(fixed.from, '2026-11-19T18:30:00.000Z');
+  assert.equal(fixed.period, undefined);
+  const confirmed = (await command('confirm', { previewId: fixed.previewId })) as BillingWorkspace;
+  assert.equal(confirmed.trackingFrom, recent);
+
+  const tracked = await preview('tracking');
+  assert.equal(tracked.from, recent);
+  assert.equal(tracked.period, 'tracking');
+  assert.equal((await workspace()).report?.previewId, tracked.previewId);
+  setStart('2026-09-30T18:30:00.000Z');
+  assert.equal((await workspace()).report, null);
+  await assert.rejects(
+    command('confirm', { previewId: tracked.previewId }),
+    /tracking period changed/,
+  );
+  const capped = await preview('tracking');
+  assert.equal(capped.from, '2026-10-27T18:30:00.000Z');
+  assert.equal((await workspace()).trackingFrom, '2026-09-30T18:30:00.000Z');
+  const pending = command('match', {
+    previewId: capped.previewId,
+    orderItemId: 'SAMPLE-LINE-1',
+    billId: 'sample-bill-1',
+  });
+  // Both older cutoffs produce the same effective 30-day period.
+  setStart('2026-09-29T18:30:00.000Z');
+  await assert.rejects(pending, /tracking period changed during the read/);
+  assert.deepEqual(f.store.readBilling().links, []);
+  const inFlight = preview('tracking');
+  setStart(recent);
+  await assert.rejects(inFlight, /tracking period changed during the read/);
+  assert.equal((await workspace()).report, null);
+
+  t.mock.timers.setTime(Date.parse('2026-11-26T18:29:00Z'));
+  const previousDay = await preview('tracking');
+  t.mock.timers.setTime(Date.parse('2026-11-26T18:30:01Z'));
+  assert.equal((await workspace()).report, null);
+  await assert.rejects(
+    command('confirm', { previewId: previousDay.previewId }),
+    /tracking period changed/,
+  );
 });
 
 test('keep-back preview verifies sample orders and the next sync publishes both increases and decreases', async (t) => {
@@ -356,9 +424,9 @@ test('Order matching finds tracked listings outside the preview and rechecks the
     trackingStarted: true,
     listings: [],
   });
-  const { listings } = (await (await post('pending')).json()) as {
-    listings: PendingListingGroup[];
-  };
+  const { listings, checkedThrough } = (await (await post('pending')).json()) as PendingListings;
+  assert.ok(checkedThrough);
+  assert.equal(checkedThrough, f.store.readStockCoverage(scope.companyId)!.checkedThrough);
   assert.deepEqual(listings, [
     {
       listingId: 'sample-listing-1',
@@ -372,6 +440,7 @@ test('Order matching finds tracked listings outside the preview and rechecks the
   assert.deepEqual(await (await post('pending', { savedOnly: true })).json(), {
     trackingStarted: true,
     listings,
+    checkedThrough,
   });
   assert.equal((await post('pending/recheck', { ...group, location: 'Other' })).status, 409);
   assert.equal(

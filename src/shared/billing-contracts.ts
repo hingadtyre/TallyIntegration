@@ -33,6 +33,7 @@ export interface BillingRow {
 
 export interface BillingReport {
   previewId: string;
+  period?: 'tracking';
   from: string;
   to: string;
   checkedAt: string;
@@ -51,6 +52,7 @@ export interface BillingReport {
 export interface BillingWorkspace {
   rule: BillingRule | null;
   report: BillingReport | null;
+  trackingFrom?: string;
 }
 
 export interface PendingListingGroup {
@@ -63,6 +65,7 @@ export interface PendingListingGroup {
 
 export interface PendingListings {
   trackingStarted: boolean;
+  checkedThrough?: string;
   listings: PendingListingGroup[];
   refreshIssue?: string;
 }

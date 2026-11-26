@@ -469,17 +469,19 @@ export class StockAvailabilityService {
         throw hold(
           'The stock setup changed. Settle the recorded orders first and select a starting day after those sales.',
         );
-      saved = {
-        companyId,
-        from,
-        signature: ctx.signature,
-        checkedThrough: null,
-        orders: saved?.orders.filter((e) => e.order.orderDate >= from) ?? [],
-      };
-      const items = new Set(
-        ctx.state.items.filter((item) => item.companyId === companyId).map((item) => item.id),
-      );
-      this.store.saveStockCoverage(saved, (state) => invalidateReservationDrafts(state, items));
+      if (!saved || saved.from !== from || coverageIssue(saved, ctx.signature, Date.now())) {
+        saved = {
+          companyId,
+          from,
+          signature: ctx.signature,
+          checkedThrough: null,
+          orders: saved?.orders.filter((e) => e.order.orderDate >= from) ?? [],
+        };
+        const items = new Set(
+          ctx.state.items.filter((item) => item.companyId === companyId).map((item) => item.id),
+        );
+        this.store.saveStockCoverage(saved, (state) => invalidateReservationDrafts(state, items));
+      }
     } else if (path !== '/api/billing/coverage')
       throw new InputError('Unknown stock coverage action.', 404);
     const issue = saved ? coverageIssue(saved, ctx.signature, Date.now()) : startTrackingMessage;
@@ -548,6 +550,13 @@ export class StockAvailabilityService {
   pendingHistory(companyId: string, accountId: string) {
     const ctx = configuration(this.store, companyId);
     const coverage = this.store.readStockCoverage(companyId);
+    const trackingStarted = !!coverage && ctx.rules.some((rule) => rule.accountId === accountId);
+    const checkedThrough =
+      trackingStarted &&
+      coverage.checkedThrough &&
+      !coverageIssue(coverage, ctx.signature, Date.now())
+        ? coverage.checkedThrough
+        : undefined;
     const orders = (coverage?.orders ?? []).flatMap(({ accountId: seller, order }) => {
       if (seller !== accountId) return [];
       const itemId = mappedSaleItem(ctx, seller, order);
@@ -555,10 +564,7 @@ export class StockAvailabilityService {
         return [];
       return [{ order, mapped: !!itemId }];
     });
-    return {
-      orders,
-      trackingStarted: !!coverage && ctx.rules.some((rule) => rule.accountId === accountId),
-    };
+    return { orders, trackingStarted, checkedThrough };
   }
 
   async reviewOrders(
