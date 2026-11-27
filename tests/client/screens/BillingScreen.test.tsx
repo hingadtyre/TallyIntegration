@@ -214,7 +214,7 @@ test('verified seller counts remain visible while another seller or an invoice c
       {
         group: 'express' as const,
         count: 0,
-        error: 'Stockbridge could not check Flipkart invoice details for Seller B.',
+        error: 'Stockbridge could not check invoice details for Seller B.',
       },
     ],
   };
@@ -564,7 +564,9 @@ test('billed search covers every tracked page and excludes preview-only bills be
 });
 
 test('finding a bill from a preview separates duplicate voucher numbers and requires a fresh mismatch acknowledgement', async (t) => {
-  const scope = { companyId: 'company', accountId: 'seller' };
+  const inventory = initialState('demo', 'unused');
+  const seller = inventory.accounts[0];
+  const scope = { companyId: 'company', accountId: seller.id };
   const savedRule: BillingRule = { ...rule, field: 'reference' };
   const currentReport = {
     ...report,
@@ -640,7 +642,7 @@ test('finding a bill from a preview separates duplicate voucher numbers and requ
   render(
     <BillingScreen
       {...scope}
-      inventory={initialState('demo', 'unused')}
+      inventory={inventory}
       onSaveMapping={async () => assert.fail('Unexpected mapping')}
       onAccountChange={assert.fail}
       onConnect={assert.fail}
@@ -663,6 +665,9 @@ test('finding a bill from a preview separates duplicate voucher numbers and requ
   assert.ok(dialog.getByRole<HTMLButtonElement>('button', { name: 'Confirm bill link' }).disabled);
   fireEvent.change(select, { target: { value: candidate.id } });
   const comparison = within(dialog.getByRole('table', { name: 'Order and bill comparison' }));
+  assert.ok(dialog.getByText(seller.name));
+  assert.ok(dialog.getByRole('img', { name: 'Flipkart' }));
+  assert.ok(comparison.getByRole('columnheader', { name: 'Flipkart order item' }));
   assert.ok(comparison.getByText(item.orderId));
   assert.ok(comparison.getByText('ODER-2'));
   assert.equal(comparison.getAllByText('19 Nov 2026').length, 2);
@@ -951,7 +956,7 @@ test('seller selects their ledger, previews, confirms setup, and explicitly matc
   assert.equal(screen.queryByRole('listbox'), null);
   fireEvent.change(screen.getByLabelText('Order period'), { target: { value: '30' } });
   fireEvent.change(screen.getByLabelText(/Where do you enter/), { target: { value: 'manual' } });
-  assert.equal(screen.queryByLabelText(/Which Flipkart reference/), null);
+  assert.equal(screen.queryByLabelText(/Which order reference/), null);
   fireEvent.click(screen.getByRole('button', { name: 'Preview matches' }));
   await screen.findByText('0 matched · 1 unresolved');
   assert.ok(screen.getByText('Ordered 19 Nov 2026'));
@@ -1162,7 +1167,7 @@ test('saving a billing-only date immediately checks all fulfilment types without
     />,
   );
   fireEvent.click(await screen.findByRole('button', { name: 'Set billing start date' }));
-  fireEvent.change(screen.getByLabelText('Match Flipkart orders from (India)'), {
+  fireEvent.change(screen.getByLabelText('Match orders from (India)'), {
     target: { value: '2026-11-25' },
   });
   fireEvent.click(screen.getByRole('button', { name: 'Save billing start date' }));
@@ -1220,7 +1225,7 @@ test('a seller saves the date, finds the sample invoice and maps an older Smart 
     try {
       fireEvent.click(await screen.findByRole('button', { name: 'Order matching' }));
       fireEvent.click(await screen.findByRole('button', { name: 'Set billing start date' }));
-      fireEvent.change(screen.getByLabelText('Match Flipkart orders from (India)'), {
+      fireEvent.change(screen.getByLabelText('Match orders from (India)'), {
         target: { value: fromDate },
       });
       fireEvent.click(screen.getByRole('button', { name: 'Save billing start date' }));
@@ -1333,7 +1338,7 @@ test('company stock tracking starts only after the seller confirms the chosen In
     />,
   );
   fireEvent.click(await screen.findByRole('button', { name: 'Set starting stock' }));
-  const date = screen.getByLabelText('Track Flipkart orders from (India)') as HTMLInputElement;
+  const date = screen.getByLabelText('Track orders from (India)') as HTMLInputElement;
   const button = screen.getByRole('button', {
     name: 'Confirm starting stock',
   }) as HTMLButtonElement;
@@ -1366,7 +1371,7 @@ test('review displays an older saved Indian day and cancel restores it without s
     });
   });
   render(<StockCoverageSetup companyId="company" accountId="seller" onStart={assert.fail} />);
-  const date = () => screen.getByLabelText<HTMLInputElement>('Track Flipkart orders from (India)');
+  const date = () => screen.getByLabelText<HTMLInputElement>('Track orders from (India)');
   const acknowledgement = () =>
     screen.getByRole<HTMLInputElement>('checkbox', { name: /I have checked all three/ });
   const confirm = () =>
@@ -1436,16 +1441,16 @@ test('refreshing tracked orders picks up a tracking date and starting stock chan
   await screen.findByText('Bill matching starts on 20 Nov 2026 (India).');
   await screen.findByText('Fulfilment check · Complete');
   fireEvent.click(screen.getByRole('button', { name: 'Change billing start date' }));
-  const oldDate = screen.getByLabelText<HTMLInputElement>('Match Flipkart orders from (India)');
+  const oldDate = screen.getByLabelText<HTMLInputElement>('Match orders from (India)');
   assert.equal(oldDate.value, '2026-11-20');
   savedFrom = changed;
   fireEvent.click(screen.getByRole('button', { name: 'Refresh tracked orders' }));
-  await screen.findByText('Flipkart orders for this seller since 23 Nov 2026 (India).');
+  await screen.findByText('Orders for this seller since 23 Nov 2026 (India).');
   await screen.findByText('Stockbridge checks orders for this company from 23 Nov 2026 (India).');
-  assert.equal(screen.queryByLabelText('Match Flipkart orders from (India)'), null);
+  assert.equal(screen.queryByLabelText('Match orders from (India)'), null);
   fireEvent.click(screen.getByRole('button', { name: 'Review starting stock' }));
   assert.equal(
-    screen.getByLabelText<HTMLInputElement>('Track Flipkart orders from (India)').value,
+    screen.getByLabelText<HTMLInputElement>('Track orders from (India)').value,
     '2026-11-23',
   );
   assert.equal(checks, 2, 'adopting the completed check does not fetch Flipkart and Tally again');
@@ -1513,7 +1518,7 @@ test('changing the company date refreshes tracked orders; the short preview runs
   assert.equal(screen.queryByText(item.orderItemId), null);
   assert.deepEqual(periods, []);
   fireEvent.click(screen.getByRole('button', { name: 'Review starting stock' }));
-  const date = screen.getByLabelText<HTMLInputElement>('Track Flipkart orders from (India)');
+  const date = screen.getByLabelText<HTMLInputElement>('Track orders from (India)');
   const confirmation = screen.getByRole<HTMLInputElement>('checkbox', {
     name: /I have checked all three/,
   });
@@ -1778,7 +1783,7 @@ test('a preview-only order completes the exact pickup of a paused SKU mapping an
   fireEvent.click(pickup);
   const dialog = within(screen.getByRole('dialog'));
   assert.equal(dialog.queryByLabelText('Tally stock item'), null);
-  assert.equal(dialog.queryByLabelText('Flipkart pickup location'), null);
+  assert.equal(dialog.queryByLabelText('Pickup location'), null);
   assert.ok(dialog.getByText(/Stock updates are paused/));
   fireEvent.click(dialog.getByRole('checkbox', { name: /I confirm the item/ }));
   fireEvent.click(dialog.getByRole('button', { name: 'Save mapping and check orders' }));

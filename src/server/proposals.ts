@@ -31,7 +31,7 @@ export function requireStockSource(
     (!listing.packageAvailable || listing.packageCount !== listing.packSize)
   )
     throw new InputError(
-      'Refresh the Flipkart package count and review Set of before calculating.',
+      'Refresh the reported package count and review Set of before calculating.',
     );
   const maximumAge = Math.max(120_000, state.settings.tallySeconds * 3000);
   const stale = !isRecentObservation(item.observedAt, maximumAge);

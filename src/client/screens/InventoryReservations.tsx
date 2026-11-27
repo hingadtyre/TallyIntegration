@@ -1,3 +1,4 @@
+import { MarketplaceSeller } from '../MarketplaceSeller.js';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Company, ItemReservations, SellerAccount } from '../../shared/contracts.js';
@@ -52,18 +53,6 @@ export function useInventoryReservations(company: Company | undefined, intervalS
     items: key && result?.key === key ? result.items : undefined,
     refresh: () => setRevision((value) => value + 1),
   };
-}
-
-export function MarketplaceSeller({ account }: { account?: SellerAccount }) {
-  if (!account) return <>Seller account unavailable</>;
-  return (
-    <span className="inventory-seller" title={account.name}>
-      {account.marketplace === 'flipkart' && (
-        <img src="/flipkart.png" alt="Flipkart" width="16" height="16" />
-      )}
-      {account.name}
-    </span>
-  );
 }
 
 export function ReservationDetails({

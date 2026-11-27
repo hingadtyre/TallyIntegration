@@ -1,9 +1,11 @@
+import { MarketplaceSeller } from '../MarketplaceSeller.js';
 import { useState } from 'react';
 import type {
   Activity,
   InventoryPublishResult,
   Listing,
   Review,
+  SellerAccount,
   Snapshot,
 } from '../../shared/contracts.js';
 import type { ActionResult } from '../api.js';
@@ -153,7 +155,7 @@ export function ReviewDialog({
         <p className="modal-intro">
           {state.mode === 'demo'
             ? 'This sample publication uses local data.'
-            : 'Publishing sends eligible quantities to Flipkart.'}{' '}
+            : 'Publishing sends eligible quantities to the reviewed listings.'}{' '}
           These quantities stay fixed while Inventory updates. Publish skips calculated quantities
           that have changed.
         </p>
@@ -170,7 +172,7 @@ export function ReviewDialog({
             />
             <span>
               <strong>Update once</strong> · Set the reviewed quantity. With automatic updates on, a
-              Tally stock change can replace it and a verified Flipkart sale can lower it.
+              Tally stock change can replace it and a verified marketplace sale can lower it.
             </span>
           </label>
           <label className="checkbox-label">
@@ -210,7 +212,10 @@ export function ReviewDialog({
                   <td>
                     <strong className="sku">{row.sku}</strong>
                     <small>
-                      {row.account} · {row.location}
+                      <MarketplaceSeller
+                        account={{ name: row.account, marketplace: row.marketplace }}
+                      />{' '}
+                      · {row.location}
                     </small>
                     {(row.problem || row.stale) && (
                       <small className="text-danger">
@@ -342,11 +347,13 @@ export function ReviewDialog({
 
 export function RemoveMappingDialog({
   listing,
+  account,
   busy,
   onClose,
   onRemove,
 }: {
   listing: Listing;
+  account?: SellerAccount;
   busy: boolean;
   onClose: () => void;
   onRemove: () => Promise<ActionResult<Snapshot>>;
@@ -363,6 +370,8 @@ export function RemoveMappingDialog({
     <Modal title="Remove stock mapping" onClose={onClose}>
       <p className="modal-intro">
         Unlink <strong className="sku">{listing.sku}</strong> from its Tally stock item.
+        <br />
+        <MarketplaceSeller account={account} /> - {listing.location || 'Pickup location pending'}
       </p>
       {error && (
         <p className="message error" role="alert">

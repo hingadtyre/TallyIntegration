@@ -104,7 +104,7 @@ function newReview(input: Record<string, unknown>, trackingFrom?: string): Revie
   if (field !== 'manual' && field !== 'number' && field !== 'reference' && field !== 'narration')
     throw new InputError('Choose a Tally reference field.');
   if (reference !== 'invoiceNumber' && reference !== 'orderId' && reference !== 'orderItemId')
-    throw new InputError('Choose a Flipkart reference type.');
+    throw new InputError('Choose an order reference type.');
   const to = new Date().toISOString();
   const startOfToday = Date.parse(saleDay(to) + 'T00:00:00+05:30');
   const earliest = new Date(startOfToday - (days - 1) * 86_400_000).toISOString();
@@ -295,7 +295,7 @@ export class BillingService {
         ...(refreshIssue && { refreshIssue }),
       } satisfies PendingListings;
 
-    const listingId = requireText(input.listingId, 'Flipkart listing');
+    const listingId = requireText(input.listingId, 'Listing');
     const sku = requireText(input.sku, 'Seller SKU');
     const location = requireText(input.location, 'Seller location');
     const group = groups.get(JSON.stringify([listingId, sku, location]));
@@ -417,7 +417,7 @@ export class BillingService {
     const company = requireCompany(state, input.companyId);
     const accountId = requireText(input.accountId, 'Seller account');
     if (!this.store.readMarketplace().accounts.some((account) => account.id === accountId))
-      throw new InputError('Select an added Flipkart account.');
+      throw new InputError('Select an added seller account.');
     const scope: BillingScope = { companyId: company.id, accountId };
     const key = JSON.stringify([company.id, accountId]);
     const session = this.sessions.get(key);

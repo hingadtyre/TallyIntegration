@@ -157,6 +157,7 @@ export interface ReviewRow {
   listingId: string;
   sku: string;
   account: string;
+  marketplace?: SellerAccount['marketplace'];
   location: string;
   quantity: number | null;
   observed: number | null;

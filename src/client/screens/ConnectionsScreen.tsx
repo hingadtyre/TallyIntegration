@@ -21,7 +21,7 @@ export function ConnectionsScreen({
       <div className="page-heading">
         <div>
           <h1>Connections</h1>
-          <p>Check Tally on this computer or open a Flipkart seller account.</p>
+          <p>Check Tally on this computer or open a Seller account.</p>
         </div>
       </div>
       <div className="connection-grid">
@@ -91,7 +91,9 @@ export function ConnectionsScreen({
           )}
         </section>
         <section className="panel connection-card">
-          <div className="service-logo flipkart-logo">F</div>
+          <div className="service-logo">
+            <Icon name="marketplaces" />
+          </div>
           <h2>Marketplace accounts</h2>
           <p>
             Add each seller account separately in Marketplaces. Open its tile to refresh listings or

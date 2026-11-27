@@ -40,7 +40,7 @@ test('status does not declare shutdown complete while its runtime record still e
   assert.match(lines[0], /not responding or is still stopping/);
   assert.match(lines[0], /Do not update/);
   assert.ok(!lines.join('\n').includes('is not running.'));
-  assert.match(lines.join('\n'), /automatic updates can publish stock to Flipkart/);
+  assert.match(lines.join('\n'), /automatic updates can publish stock to eligible listings/);
 });
 
 test('desktop control only accepts a complete local live-instance record', () => {

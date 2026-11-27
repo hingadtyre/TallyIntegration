@@ -79,7 +79,7 @@ function observePackageCount(row: Listing, listing: MarketplaceListing): boolean
     row.packageObservedAt = listing.observedAt;
     if (row.packSource === 'packages' && row.packSize !== count) {
       row.verified = false;
-      row.packEvidence = `Flipkart package count changed from ${row.packSize} to ${count}. Review Set of.`;
+      row.packEvidence = `Reported package count changed from ${row.packSize} to ${count}. Review Set of.`;
     }
   }
   row.packageAvailable = available;

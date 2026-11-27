@@ -481,13 +481,10 @@ test('a stock check holds a previously matched bill when the Flipkart invoice di
     assert.equal(draft()?.quantity, 6);
     assert.ok(!draft()?.stale);
     invoice = unavailable;
-    await assert.rejects(s.available(), /Retry the Flipkart invoice check/);
+    await assert.rejects(s.available(), /Retry the invoice check/);
     await s.scan();
     assert.equal(draft()?.stale, true);
-    assert.match(
-      s.f.store.read().listings[0].proposalIssue ?? '',
-      /Retry the Flipkart invoice check/,
-    );
+    assert.match(s.f.store.read().listings[0].proposalIssue ?? '', /Retry the invoice check/);
     invoice = 'issued';
   }
   assert.equal((await s.available()).reservedUnits, 0);

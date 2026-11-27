@@ -52,7 +52,7 @@ export function billItemKey(billId: string, itemExternalId: string) {
 }
 
 export const competingInvoiceMessage =
-  'Another order could claim this Tally bill. Retry the Flipkart invoice check to verify the matching sale.';
+  'Another order could claim this Tally bill. Retry the invoice check to verify the matching sale.';
 
 function mappedUnits(order: FlipkartBillingOrder, mapping?: Listing) {
   if (
@@ -211,7 +211,7 @@ function inspectVoucher(
     // Inspecting a voucher checks all its reference fields against the other
     // orders, including their Flipkart invoice numbers.
     candidate.reason =
-      'Retry the Flipkart invoice check before confirming this voucher. Its references could belong to another order.';
+      'Retry the invoice check before confirming this voucher. Its references could belong to another order.';
   } else if (
     knownOrders.some((entry) => {
       if (entry.accountId === scope.accountId) {
@@ -476,7 +476,7 @@ export function matchBills(
     row.baseUnits = units;
     if (missingInvoice) {
       row.status = 'review';
-      row.reason = 'Retry the Flipkart invoice check to verify this sale against its Tally bill.';
+      row.reason = 'Retry the invoice check to verify this sale against its Tally bill.';
       continue;
     }
     const referenceGroup = orderGroup.get(order.orderItemId);

@@ -1,7 +1,7 @@
 import type { FlipkartBillingOrder } from '../adapters/flipkart-billing.js';
 
 export const startTrackingMessage =
-  'In Order matching, choose Set starting stock to confirm when Stockbridge should start tracking this company’s Flipkart orders.';
+  'In Order matching, choose Set starting stock to confirm when Stockbridge should start tracking marketplace orders for this company.';
 
 /** Receipt of the first verified sale and its durable shared-stock checks. */
 export type StockCoverageOrder = FlipkartBillingOrder & {

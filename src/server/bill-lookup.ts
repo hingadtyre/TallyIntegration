@@ -119,15 +119,15 @@ function trackedOrders(
         : uncheckedClaim
           ? uncheckedClaim
           : expanded && !order.locationId
-            ? 'Flipkart did not provide the location needed to verify the listing. Check the order location in Flipkart, then refresh tracked orders.'
+            ? 'The marketplace did not provide the location needed to verify the listing. Check the order location in the seller account, then refresh tracked orders.'
             : expanded && (!order.listingId || !order.sku)
-              ? 'Check the listing ID and seller SKU for this order in Flipkart, then refresh tracked orders.'
+              ? 'Check the listing ID and seller SKU for this order in the seller account, then refresh tracked orders.'
               : result.status === 'unmapped' && !isVerifiedSale(order)
-                ? 'Verify the sale status and listing identity in Flipkart before mapping this order.'
+                ? 'Verify the sale status and listing identity in the seller account before mapping this order.'
                 : billingOnly
                   ? 'No verified Tally bill was found for this sale.'
                   : expanded && result.status === 'cancelled'
-                    ? 'Flipkart confirmed this order was cancelled before dispatch.'
+                    ? 'The marketplace confirmed this order was cancelled before dispatch.'
                     : result.reason,
       canFindBill:
         checked &&

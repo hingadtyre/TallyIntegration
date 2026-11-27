@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { BillLookup, BillingRow } from '../../shared/billing-contracts.js';
 import { errorMessage, requestJson } from '../api.js';
+import { MarketplaceSeller } from '../MarketplaceSeller.js';
+import { marketplaceName } from '../../shared/marketplaces.js';
+import type { SellerAccount } from '../../shared/contracts.js';
 import { Modal } from '../components.js';
 import { formatIndiaDay } from '../format.js';
 import { fieldLabels } from './BillingSetup.js';
@@ -13,6 +16,7 @@ export function FindTallyBill({
   companyId,
   accountId,
   order,
+  seller,
   ledgerName,
   onClose,
   onRefreshOrder,
@@ -21,11 +25,13 @@ export function FindTallyBill({
   companyId: string;
   accountId: string;
   order: BillTarget;
+  seller?: SellerAccount;
   ledgerName: string;
   onClose: () => void;
   onRefreshOrder: () => void;
   onSaved: () => void;
 }) {
+  const orderSource = `${marketplaceName(seller?.marketplace) ?? 'Marketplace'} order item`;
   const [billNumber, setBillNumber] = useState('');
   const [lookup, setLookup] = useState<BillLookup | null>(null);
   const [billId, setBillId] = useState('');
@@ -114,7 +120,7 @@ export function FindTallyBill({
       }}
     >
       <p className="modal-intro">
-        <strong>{order.orderItemId}</strong> · {order.sku}
+        <MarketplaceSeller account={seller} /> - <strong>{order.orderItemId}</strong> - {order.sku}
         <br />
         Order {order.orderId} · Sales ledger {lookup?.ledgerName ?? ledgerName}
       </p>
@@ -192,14 +198,14 @@ export function FindTallyBill({
               <thead>
                 <tr>
                   <th scope="col">Compare</th>
-                  <th scope="col">Flipkart order</th>
+                  <th scope="col">{orderSource}</th>
                   <th scope="col">Tally sales bill</th>
                 </tr>
               </thead>
               <tbody>
                 <tr>
                   <th scope="row">Identifier</th>
-                  <td data-label="Flipkart order">{lookup.orderItemId}</td>
+                  <td data-label={orderSource}>{lookup.orderItemId}</td>
                   <td data-label="Tally sales bill">
                     {bill.number}
                     <small>Voucher ID {bill.id}</small>
@@ -212,7 +218,7 @@ export function FindTallyBill({
                 </tr>
                 <tr>
                   <th scope="row">Stock item and quantity</th>
-                  <td data-label="Flipkart order">
+                  <td data-label={orderSource}>
                     {lookup.itemName} · {lookup.baseUnits ?? 'Unknown'} {lookup.unit}
                   </td>
                   <td data-label="Tally sales bill">

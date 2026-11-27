@@ -94,7 +94,7 @@ th,td{border:1px solid #dce4da;text-align:left;vertical-align:top;padding:10px}t
 img{max-width:100%}blockquote,.pilot{padding:12px 18px;border-left:4px solid #b18c31;background:#fff9e8}
 .build{color:#5c665e;font-size:14px}li{margin:8px 0}@media(max-width:600px){body{padding:10px}main{padding:18px}}
 </style></head><body><main>
-<p class="pilot"><strong>Live workspace.</strong> Stockbridge reads Tally. On Flipkart, approved actions can change stock or prices. Enabling company sync allows automatic stock updates.</p>
+<p class="pilot"><strong>Live workspace.</strong> Stockbridge reads Tally. Approved actions can change stock or prices on the selected listings. Enabling company sync allows automatic stock updates.</p>
 <p class="build">Version ${escapeHtml(build.version)} · ${escapeHtml(build.commit.slice(0, 12))}${build.dirty ? ' · includes uncommitted changes' : ''} · built ${escapeHtml(build.createdAt)}</p>
 <nav aria-label="Guide sections"><details><summary>Jump to a section</summary><ul>${sections.join('')}</ul></details></nav>
 ${body}

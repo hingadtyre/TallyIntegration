@@ -9,6 +9,7 @@ import {
 import type { ActionResult } from '../api.js';
 import { Icon, Modal } from '../components.js';
 import { formatDateTime } from '../format.js';
+import { MarketplaceSeller } from '../MarketplaceSeller.js';
 import { MappingListingPicker } from './MappingListingPicker.js';
 
 export type SaveMapping = (mapping: MappingInput) => Promise<ActionResult<Snapshot>>;
@@ -48,6 +49,7 @@ export function MappingDialog({
   );
   const listing = listings.find((entry) => entry.id === selectedId);
   const company = state.companies.find((entry) => entry.id === item.companyId);
+  const seller = state.accounts.find((account) => account.id === (listing?.accountId ?? accountId));
   const companyName = company?.name ?? item.companyId;
   const title = editListingId ? 'Edit Set of' : 'Map an existing listing';
 
@@ -65,22 +67,22 @@ export function MappingDialog({
         listing && (
           <p>
             <strong className="sku">{listing.sku}</strong> · {listing.title}
+            <br />
+            <MarketplaceSeller account={seller} /> - {listing.location || 'Pickup location pending'}
           </p>
         )
       ) : !accountId ? (
         <div className="empty-state compact-empty">
           <Icon name="marketplaces" />
           <h3>Choose a seller account</h3>
-          <p>Select a Flipkart seller account in Inventory to see its listings.</p>
+          <p>Select a seller account in Inventory to see its listings.</p>
         </div>
       ) : listings.length > 0 ? (
         <MappingListingPicker
           key={JSON.stringify([accountId, item.id])}
           listings={listings}
           item={item}
-          accountName={
-            state.accounts.find((account) => account.id === accountId)?.name ?? accountId
-          }
+          account={seller}
           selected={listing}
           onChoose={setSelectedId}
           busy={busy}
@@ -208,7 +210,7 @@ export function PackForm({
         <p>How many {item.unit || 'Tally units'} of this item does one sale consume?</p>
         {!listing.location && !order && (
           <label className="field">
-            <span>Flipkart pickup location</span>
+            <span>Pickup location</span>
             <select
               value={pickup}
               onChange={(event) => {
@@ -231,7 +233,7 @@ export function PackForm({
         )}
         {changed && (
           <p className="message warning" role="status">
-            Flipkart package count changed from {listing.packSize} to {packages}. Review this
+            Reported package count changed from {listing.packSize} to {packages}. Review this
             mapping before publishing.
           </p>
         )}

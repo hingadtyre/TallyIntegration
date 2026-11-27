@@ -64,8 +64,9 @@ export function BillingSetup({
       }}
     >
       <p>
-        Choose the dedicated Flipkart ledger used for the party or for sales on the stock lines of
-        the bill. Payout and fee ledgers serve a different purpose.
+        Choose the Tally ledger where you record this seller’s sales. It can be the party ledger on
+        the bill or the sales ledger on its stock lines. Payout and fee ledgers serve a different
+        purpose.
       </p>
       {error || ledgers?.length === 0 ? (
         <div className="billing-actions">
@@ -103,7 +104,7 @@ export function BillingSetup({
         />
       )}
       <label className="field">
-        <span>Where do you enter the Flipkart reference on the Tally bill?</span>
+        <span>Where do you enter the order reference on the Tally bill?</span>
         <select
           value={field}
           required
@@ -120,7 +121,7 @@ export function BillingSetup({
       </label>
       {field && field !== 'manual' && (
         <label className="field">
-          <span>Which Flipkart reference do you enter?</span>
+          <span>Which order reference do you enter?</span>
           <select
             value={reference}
             required

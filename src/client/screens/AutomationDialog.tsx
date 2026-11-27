@@ -1,3 +1,4 @@
+import { MarketplaceSeller } from '../MarketplaceSeller.js';
 import { useRef, useState } from 'react';
 import type { AutomationPreview, AutomationPreviewRow } from '../../shared/automation.js';
 import type { InventoryPublishRow } from '../../shared/contracts.js';
@@ -105,7 +106,8 @@ export function AutomationDialog({
         ) : (
           <>
             <p>
-              Enabling updates {demo ? 'simulates stock changes' : 'can change Flipkart stock'}{' '}
+              Enabling updates{' '}
+              {demo ? 'simulates stock changes' : 'can change stock on the reviewed listings'}{' '}
               across this company. Newly verified mappings and listings whose setup or checks clear
               can join later. Paused listings stay paused until resumed.
             </p>
@@ -120,7 +122,11 @@ export function AutomationDialog({
         {!selected &&
           Array.from(sellers, ([id, rows]) => (
             <section key={id} aria-label={rows[0].account}>
-              <h3>{rows[0].account}</h3>
+              <h3>
+                <MarketplaceSeller
+                  account={{ name: rows[0].account, marketplace: rows[0].marketplace }}
+                />
+              </h3>
               <div className="review-table-wrap stock-review">
                 <table className="review-table">
                   <thead>
@@ -189,7 +195,10 @@ export function AutomationDialog({
           <section aria-label="Selected trial destination">
             <h3>{selected.sku}</h3>
             <p>
-              {selected.account} · {selected.location} · {selected.itemName}
+              <MarketplaceSeller
+                account={{ name: selected.account, marketplace: selected.marketplace }}
+              />{' '}
+              · {selected.location} · {selected.itemName}
             </p>
             <p>
               Observed stock <strong>{selected.observed}</strong> · Calculated stock{' '}
@@ -199,7 +208,7 @@ export function AutomationDialog({
               <p>
                 {demo
                   ? 'This trial uses sample data.'
-                  : 'Confirm to check this Flipkart location and send its calculated stock if the quantity differs.'}
+                  : 'Confirm to check this listing location and send its calculated stock if the quantity differs.'}
               </p>
             )}
           </section>

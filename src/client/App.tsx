@@ -205,7 +205,7 @@ export function App() {
             {state.mode === 'demo' && (
               <span
                 className="sample-label"
-                title="Sample data. Tally and Flipkart updates are simulated."
+                title="Sample data. Tally and marketplace updates are simulated."
               >
                 Sample workspace
               </span>

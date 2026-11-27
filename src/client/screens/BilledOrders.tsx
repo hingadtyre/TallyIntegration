@@ -68,7 +68,7 @@ export function BilledOrders({ report }: { report: BillingReport }) {
             <table className="billing-table" aria-label="Billed order items">
               <thead>
                 <tr>
-                  <th>Flipkart order item</th>
+                  <th>Order item</th>
                   <th>SKU</th>
                   <th>Tally bill</th>
                   <th>Match method</th>

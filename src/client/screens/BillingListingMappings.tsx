@@ -7,7 +7,8 @@ import type {
   PendingOrderResult,
   TrackedBillOrder,
 } from '../../shared/billing-contracts.js';
-import type { Listing, Snapshot } from '../../shared/contracts.js';
+import { MarketplaceSeller } from '../MarketplaceSeller.js';
+import type { Listing, SellerAccount, Snapshot } from '../../shared/contracts.js';
 import { errorMessage, requestJson } from '../api.js';
 import { Modal } from '../components.js';
 import { formatDateTime, formatIndiaDay, formatUnits } from '../format.js';
@@ -176,7 +177,7 @@ export function BillingListingMappings({
   const unmapped = groups.filter((group) => !group.mapped);
   const mapped = groups.filter((group) => group.mapped);
   const company = inventory.companies.find((entry) => entry.id === companyId);
-  const seller = inventory.accounts.find((entry) => entry.id === accountId)?.name ?? accountId;
+  const seller = inventory.accounts.find((entry) => entry.id === accountId);
   async function check(group: Group) {
     setCheckError('');
     setFailed(null);
@@ -210,7 +211,7 @@ export function BillingListingMappings({
         <table className="billing-table" aria-label={label}>
           <thead>
             <tr>
-              <th>Flipkart listing</th>
+              <th>Listing</th>
               <th>Order items</th>
               <th>Stock mapping</th>
             </tr>
@@ -281,7 +282,10 @@ export function BillingListingMappings({
       <div className="panel-heading">
         <div>
           <h2>Listings from orders</h2>
-          <p>{seller} · Map each listing and pickup location once for its order items.</p>
+          <p>
+            <MarketplaceSeller account={seller} /> - Map each listing and pickup location once for
+            its order items.
+          </p>
           {pending?.trackingStarted && (
             <p>
               This list covers orders tracked since the company’s starting date. It can include
@@ -455,7 +459,7 @@ export function TrackedListingMapping({
           inventory={inventory}
           company={company}
           accountId={accountId}
-          seller={seller.name}
+          seller={seller}
           group={group}
           orderItemId={order.orderItemId}
           billingOnly={order.mapping.purpose === 'billing'}
@@ -488,7 +492,7 @@ function OrderMappingDialog({
   inventory: Snapshot;
   company: Snapshot['companies'][number];
   accountId: string;
-  seller: string;
+  seller?: SellerAccount;
   group: Destination;
   orderItemId?: string;
   billingOnly?: boolean;
@@ -508,7 +512,7 @@ function OrderMappingDialog({
       }}
     >
       <p className="modal-intro">
-        <strong>{group.sku}</strong> · {seller} · {group.location}
+        <strong>{group.sku}</strong> - <MarketplaceSeller account={seller} /> - {group.location}
         <br />
         Listing ID {group.listingId}
         {listing?.title && ` · ${listing.title}`}

@@ -177,7 +177,7 @@ export function TrackedBillOrders({
             Tracked orders
           </h2>
           <p>
-            Flipkart orders for this seller since{' '}
+            Orders for this seller since{' '}
             {displayedFrom ? formatIndiaDay(displayedFrom) + ' (India)' : 'tracking started'}.
           </p>
         </div>
@@ -269,7 +269,7 @@ export function TrackedBillOrders({
               <table className="billing-table tracked-orders-table" aria-label="Tracked orders">
                 <thead>
                   <tr>
-                    <th>Flipkart order item</th>
+                    <th>Order item</th>
                     <th>Billing status</th>
                     <th>Action</th>
                   </tr>

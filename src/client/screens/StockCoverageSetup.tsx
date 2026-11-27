@@ -99,7 +99,7 @@ export function StockCoverageSetup({
                 : (status.issue ?? 'Review the starting stock for this company.')
               : savedDate
                 ? `Bill matching starts on ${formatIndiaDay(savedDate)} (India).`
-                : 'Choose the date to start matching Flipkart orders to Tally bills.'}
+                : 'Choose the date to start matching marketplace orders to Tally bills.'}
           </p>
           {!status.current && status.from && (
             <p>The saved tracking start date is {formatIndiaDay(savedDate)} (India).</p>
@@ -134,8 +134,8 @@ export function StockCoverageSetup({
               <label className="field billing-period">
                 <span>
                   {editing === 'billing'
-                    ? 'Match Flipkart orders from (India)'
-                    : 'Track Flipkart orders from (India)'}
+                    ? 'Match orders from (India)'
+                    : 'Track orders from (India)'}
                 </span>
                 <input
                   type="date"
@@ -161,7 +161,7 @@ export function StockCoverageSetup({
               {editing === 'stock' && status.from && fromDate > savedDate && (
                 <p role="status">
                   Orders before {formatIndiaDay(fromDate)} will stop reserving stock. Check that
-                  those sales are already recorded in Tally before confirming.
+                  those sales before this date are recorded in Tally before confirming.
                 </p>
               )}
               {editing === 'stock' && (
@@ -172,8 +172,9 @@ export function StockCoverageSetup({
                   </p>
                   <ul>
                     <li>
-                      All Flipkart sales before this date are already recorded in Tally. Check any
-                      previously outstanding sales before moving the date forward.
+                      All sales from the participating seller accounts before this date are recorded
+                      in Tally. Check any previously outstanding sales before moving the date
+                      forward.
                     </li>
                     <li>
                       Every seller account sharing this stock has bill matching set up. Only

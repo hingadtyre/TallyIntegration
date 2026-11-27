@@ -4,8 +4,8 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
       <h2>Set up this pilot</h2>
       <p>
         Use Stockbridge on the same Windows computer as Tally. This version reads your stock and
-        saves verified backups. In Marketplaces, add your seller-owned Flipkart accounts and refresh
-        their listings. Apply in a listing editor changes that value on Flipkart.
+        saves verified backups. In Marketplaces, add your seller accounts and refresh their
+        listings. Apply in a listing editor changes that value on the selected listing.
       </p>
       <ol>
         <li>
@@ -90,8 +90,8 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           Refresh inventory reads Tally stock and updates listings for the company’s participating
           sellers. It also includes the seller selected in Inventory when its listings are available
           to refresh. Once you confirm starting stock, it checks orders and the units reserved for
-          unbilled sales. With company sync on, eligible listings can update on Flipkart. The result
-          tells you which checks succeeded and which need attention.
+          unbilled sales. With company sync on, eligible listings can update across the company’s
+          seller accounts. The result tells you which checks succeeded and which need attention.
         </p>
         <p>
           Inventory shows the marketplace logo and seller name beside each listing’s pickup
@@ -107,14 +107,14 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
         </p>
         <p>
           In Inventory, select the company and seller account, then choose Map listing on the Tally
-          item. Open Flipkart listing and search by seller SKU, product title when available, FSN
-          (Flipkart product ID) or Flipkart listing ID. If Flipkart supplied no stock location,
-          choose this seller’s pickup location or save the mapping and choose it later in Edit Set
-          of. Check the product and warehouse before selecting a suggested listing. For Set of,
-          choose the shipping package count when it matches the Tally units used per sale, or enter
-          your own number. Confirm that the company-wide balance supplies the selected Flipkart
-          location. Enable the tyre minimum only for eligible tyre listings. Stockbridge saves these
-          choices in this workspace and reloads them on restart.
+          item. Open Listing and search by seller SKU, product title when available, FSN (Flipkart
+          product ID) or Flipkart listing ID. If Flipkart supplied no stock location, choose this
+          seller’s pickup location or save the mapping and choose it later in Edit Set of. Check the
+          product and warehouse before selecting a suggested listing. For Set of, choose the
+          shipping package count when it matches the Tally units used per sale, or enter your own
+          number. Confirm that the company-wide balance supplies the selected location. Enable the
+          tyre minimum only for eligible tyre listings. Stockbridge saves these choices in this
+          workspace and reloads them on restart.
         </p>
         <p>
           The arrow beside a mapped SKU in Inventory opens its public Flipkart product page in a new
@@ -144,30 +144,30 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           pauses Tally sync at that location. When Tally stock falls too low to fill a set,
           Stockbridge can publish a calculated zero and update the listing again after restocking.
           With automatic updates enabled, a change in Tally stock recalculates eligible listings. A
-          verified Flipkart sale can also lower stock on other listings supplied by the same Tally
-          item before the sale is billed. Review any package-count changes in the listing’s Set of
-          cell. If a bulk calculation reports blocked listings, use Fix Set of where offered or
-          review the ready drafts.
+          verified marketplace sale can also lower stock on other listings supplied by the same
+          Tally item before the sale is billed. Review any package-count changes in the listing’s
+          Set of cell. If a bulk calculation reports blocked listings, use Fix Set of where offered
+          or review the ready drafts.
         </p>
       </details>
       <details className="guide-topic">
-        <summary>Match Flipkart orders to Tally bills</summary>
+        <summary>Match marketplace orders to Tally bills</summary>
         <p>
-          In Order matching, select your Tally company and Flipkart seller account. Choose the sales
-          bill ledger and where you record the Flipkart reference, or choose to match bills
-          manually. Preview up to 30 days of Standard and Self-ship orders, then confirm the setup
-          for that seller. Set billing start date starts bill matching for the company. A company
-          with confirmed starting stock already has a date.
+          In Order matching, select your Tally company and seller account. Choose the sales bill
+          ledger and where you record the order reference, or choose to match bills manually.
+          Preview up to 30 days of Standard and Self-ship orders, then confirm the setup for that
+          seller. Set billing start date starts bill matching for the company. A company with
+          confirmed starting stock already has a date.
         </p>
         <p>
           Tracked orders opens automatically from the saved date. Stockbridge checks Standard,
           Self-ship, Express, Smart and Fulfilment by Flipkart. Choose Billed to see the Tally bill
           number, date and match method. Choose Unresolved for unbilled sales, missing mappings and
-          items needing review. All includes verified cancellations. Search any view by Flipkart
-          order number, order item ID or Tally bill number. Unknown means the selected seller’s
-          order check failed. A count with a warning means orders were counted and some bill checks
-          still need attention. Use the retry beside the warning to check the same period again. If
-          a manual link needs review, you can still find its previous bill number under All or
+          items needing review. All includes verified cancellations. Search any view by order
+          number, order item ID or Tally bill number. Unknown means the selected seller’s order
+          check failed. A count with a warning means orders were counted and some bill checks still
+          need attention. Use the retry beside the warning to check the same period again. If a
+          manual link needs review, you can still find its previous bill number under All or
           Unresolved.
         </p>
         <p>
@@ -189,19 +189,19 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
       <details className="guide-topic">
         <summary>Edit marketplace stock and prices</summary>
         <p>
-          If a search, filter or page fails to load, choose Retry listings. If a Flipkart import
+          If a search, filter or page fails to load, choose Retry listings. If a listing import
           fails, choose Retry refresh to fetch the catalogue again.
         </p>
         <p>
           In Marketplaces, use the pencil beside stock, MRP or selling price. Applying a manual
-          stock edit to a Tally-mapped listing pauses sync at that warehouse. Flipkart can still
-          deduct sales. Stockbridge skips automatic updates, including zero, until you choose Resume
-          sync beside the lock. Resume replaces that location’s draft with a fresh proposed
+          stock edit to a Tally-mapped listing pauses sync at that warehouse. The marketplace can
+          still deduct sales. Stockbridge skips automatic updates, including zero, until you choose
+          Resume sync beside the lock. Resume replaces that location’s draft with a fresh proposed
           quantity. If Stockbridge cannot verify the stock, the row shows what needs attention. With
           company sync on, the next eligible update can publish. Existing sales allowances require
           an explicit policy change before a conflicting edit. If an update is uncertain, choose
           Check result. When the earlier stock request can no longer take effect, choose Review
-          current stock. Compare Flipkart stock with the freshly calculated quantity and approve the
+          current stock. Compare listing stock with the freshly calculated quantity and approve the
           value for that location. If the two match, approval completes the review without sending
           stock. Settlement editing opens Flipkart Seller Hub.
         </p>

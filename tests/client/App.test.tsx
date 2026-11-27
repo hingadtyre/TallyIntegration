@@ -618,7 +618,7 @@ test('returning to Inventory immediately loads an added account and its imported
   const parent = screen.getByRole('row', { name: /Bridgestone Sturdo/ });
   fireEvent.click(within(parent).getByRole('button', { name: 'Map listing' }));
   const dialog = screen.getByRole('dialog', { name: 'Map an existing listing' });
-  fireEvent.click(within(dialog).getByRole('combobox', { name: 'Flipkart listing' }));
+  fireEvent.click(within(dialog).getByRole('combobox', { name: 'Listing' }));
   const destination = within(dialog).getByRole('option', { name: /IMPORTED-TYRE/ });
   assert.ok(within(destination).getByText(listing.title));
   assert.ok(within(destination).getByText('warehouse-1'));
@@ -686,7 +686,7 @@ test('successful mapping closes the dialog and shows the listing under the chose
   const parent = await screen.findByRole('row', { name: /Bridgestone Sturdo/ });
   fireEvent.click(within(parent).getByRole('button', { name: 'Map listing' }));
   const dialog = screen.getByRole('dialog', { name: 'Map an existing listing' });
-  fireEvent.click(within(dialog).getByRole('combobox', { name: 'Flipkart listing' }));
+  fireEvent.click(within(dialog).getByRole('combobox', { name: 'Listing' }));
   fireEvent.click(within(dialog).getByRole('option', { name: /SAMPLE-UNMAPPED-1/ }));
   assert.equal(
     (within(dialog).getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled,
@@ -1409,7 +1409,7 @@ test('failed mapping keeps the dialog, selected listing and confirmation availab
   const parent = await screen.findByRole('row', { name: /Bridgestone Sturdo/ });
   fireEvent.click(within(parent).getByRole('button', { name: 'Map listing' }));
   const dialog = screen.getByRole('dialog', { name: 'Map an existing listing' });
-  fireEvent.click(within(dialog).getByRole('combobox', { name: 'Flipkart listing' }));
+  fireEvent.click(within(dialog).getByRole('combobox', { name: 'Listing' }));
   fireEvent.click(within(dialog).getByRole('option', { name: /SAMPLE-UNMAPPED-1/ }));
   const confirmation = within(dialog).getByRole('checkbox', { name: /I confirm/ });
   fireEvent.click(confirmation);

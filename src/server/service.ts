@@ -491,7 +491,7 @@ export class InventoryService {
         const destination = market.listings.find(
           (row) => row.accountId === listing.accountId && row.sku === listing.sku,
         );
-        if (!destination) problem = 'Refresh listings to verify this Flipkart destination.';
+        if (!destination) problem = 'Refresh listings to verify this listing and pickup location.';
         else {
           const intent = {
             companyId: String(companyId),
@@ -518,11 +518,12 @@ export class InventoryService {
           if (draft.edited && draft.quantity > 0) oneTimeProblem = check('once');
         }
       }
+      const seller = state.accounts.find((row) => row.id === listing.accountId);
       return {
         listingId: listing.id,
         sku: listing.sku,
-        account:
-          state.accounts.find((row) => row.id === listing.accountId)?.name ?? 'Unknown account',
+        account: seller?.name ?? 'Unknown account',
+        marketplace: seller?.marketplace,
         location: listing.location,
         quantity: draft?.quantity ?? null,
         observed: listing.observed,
@@ -818,7 +819,7 @@ export class InventoryService {
           input.packSource === 'packages' &&
           (!listing.packageAvailable || size !== listing.packageCount)
         )
-          throw new InputError('Refresh the actual Flipkart package count before using it.', 409);
+          throw new InputError('Refresh the reported package count before using it.', 409);
         // Reopening and saving an unchanged mapping is not a stock change. A sale
         // on Flipkart may still be waiting to reach Tally.
         const sameConversion =
@@ -835,7 +836,7 @@ export class InventoryService {
         const units = `${size} Tally ${size === 1 ? 'unit' : 'units'} per sale`;
         listing.packEvidence =
           input.packSource === 'packages'
-            ? `Confirmed ${units} using Flipkart's package count.`
+            ? `Confirmed ${units} using the reported package count.`
             : `Seller confirmed ${units}.`;
         listing.verified = true;
         listing.sourceScope = input.sourceScope;

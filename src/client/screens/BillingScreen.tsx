@@ -7,6 +7,7 @@ import type {
 } from '../../shared/billing-contracts.js';
 import type { Snapshot } from '../../shared/contracts.js';
 import { errorMessage, requestJson } from '../api.js';
+import { marketplaceName } from '../../shared/marketplaces.js';
 import { BillingResults } from './BillingResults.js';
 import { StockCoverageSetup } from './StockCoverageSetup.js';
 import { BillingSetup, fieldLabels, referenceLabels } from './BillingSetup.js';
@@ -30,19 +31,22 @@ export function BillingScreen({
     onConnect: () => void;
   }) {
   const accounts = inventory.accounts;
+  const provider = marketplaceName(
+    accounts.find((account) => account.id === accountId)?.marketplace,
+  );
   return (
     <>
       <div className="page-heading">
         <div>
           <h1>Order matching</h1>
           <p>
-            Flipkart reports the order. Match it to a Tally sales bill to see when you recorded the
-            sale.
+            {provider ?? 'The marketplace'} reports the order. Match it to a Tally sales bill to see
+            when you recorded the sale.
           </p>
         </div>
         {accounts.length > 0 && (
           <label className="account-select">
-            <span>Flipkart seller account</span>
+            <span>Seller account</span>
             <select value={accountId} onChange={(event) => onAccountChange(event.target.value)}>
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>
@@ -63,7 +67,7 @@ export function BillingScreen({
         />
       ) : (
         <section className="panel empty-state">
-          <h2>{companyId ? 'Add a Flipkart seller account' : 'Connect a Tally company'}</h2>
+          <h2>{companyId ? 'Add a seller account' : 'Connect a Tally company'}</h2>
           <p>
             Matching uses the sales ledger in your selected company and orders from the selected
             seller account.
@@ -435,7 +439,7 @@ function BillingReview({
                 </div>
                 {shownRule.field !== 'manual' && (
                   <div>
-                    <dt>Flipkart reference</dt>
+                    <dt>Order reference</dt>
                     <dd>{referenceLabels[shownRule.reference]}</dd>
                   </div>
                 )}
@@ -558,6 +562,7 @@ function BillingReview({
         <FindTallyBill
           companyId={companyId}
           accountId={accountId}
+          seller={inventory.accounts.find((account) => account.id === accountId)}
           order={findOrder}
           ledgerName={rule.ledgerName}
           onClose={() => setFindOrder(null)}

@@ -24,7 +24,7 @@ test('a company can set and change its billing start date independently, then re
   });
   render(<StockCoverageSetup {...scope} onStart={(from) => starts.push(from)} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Set billing start date' }));
-  const dateLabel = 'Match Flipkart orders from (India)';
+  const dateLabel = 'Match orders from (India)';
   const date = screen.getByLabelText<HTMLInputElement>(dateLabel);
   const save = screen.getByRole<HTMLButtonElement>('button', { name: 'Save billing start date' });
   assert.equal(date.max, '2026-11-26');
@@ -45,7 +45,7 @@ test('a company can set and change its billing start date independently, then re
   await screen.findByText('Bill matching starts on 25 Nov 2026 (India).');
   fireEvent.click(screen.getByRole('button', { name: 'Set starting stock' }));
   assert.equal(
-    screen.getByLabelText<HTMLInputElement>('Track Flipkart orders from (India)').value,
+    screen.getByLabelText<HTMLInputElement>('Track orders from (India)').value,
     '2026-11-25',
   );
   assert.ok(

@@ -1,5 +1,8 @@
+import { MarketplaceSeller } from '../MarketplaceSeller.js';
+import { marketplaceName } from '../../shared/marketplaces.js';
 import { useEffect, useRef, useState } from 'react';
 import type {
+  MarketplaceAccount,
   MarketplaceApplyResult,
   MarketplaceChange,
 } from '../../shared/marketplace-contracts.js';
@@ -9,20 +12,22 @@ import { Modal } from '../components.js';
 import { marketplaceApi } from '../marketplace-api.js';
 
 export function StockRecoveryAction({
+  provider,
   change,
   disabled,
   onReview,
 }: {
   change: MarketplaceChange;
   disabled: boolean;
+  provider?: string;
   onReview: (change: MarketplaceChange) => void;
 }) {
   if (change.state !== 'uncertain' || change.edit.kind !== 'stock') return null;
   if (change.stockRequestFinality !== 'not-sent' && change.stockRequestFinality !== 'completed')
     return (
       <p>
-        Flipkart could still apply the earlier stock update. Check result refreshes the observed
-        stock. Contact support if the request stays uncertain.
+        {provider ?? 'The marketplace'} could still apply the earlier stock update. Check result
+        refreshes the observed stock. Contact support if the request stays uncertain.
       </p>
     );
   return (
@@ -34,19 +39,20 @@ export function StockRecoveryAction({
 
 export function MarketplaceStockRecovery({
   change,
-  accountName,
+  account,
   onPending,
   onResult,
   onReload,
   onClose,
 }: {
   change: MarketplaceChange;
-  accountName: string;
+  account: MarketplaceAccount;
   onPending: (pending: boolean) => void;
   onResult: (result: MarketplaceApplyResult) => void;
   onReload: () => void;
   onClose: () => void;
 }) {
+  const provider = marketplaceName(account.marketplace);
   const [review, setReview] = useState<MarketplaceStockRecoveryReview | null>(null);
   const [revision, setRevision] = useState(0);
   const [error, setError] = useState('');
@@ -109,7 +115,9 @@ export function MarketplaceStockRecovery({
     <Modal title="Review current stock" onClose={onClose}>
       <div className="marketplace-editor">
         <p>
-          <strong>{accountName}</strong>
+          <strong>
+            <MarketplaceSeller account={account} />
+          </strong>
           <br />
           {change.sku} · {change.edit.locationId}
         </p>
@@ -131,11 +139,12 @@ export function MarketplaceStockRecovery({
             {change.stockRequestFinality === 'not-sent' ? (
               <p>
                 The earlier request for {change.edit.quantity} stopped before Stockbridge sent it to
-                Flipkart.
+                {provider ?? 'the marketplace'}.
               </p>
             ) : (
               <p>
-                Flipkart has finished processing the earlier request for {change.edit.quantity}.
+                {provider ?? 'The marketplace'} has finished processing the earlier request for{' '}
+                {change.edit.quantity}.
               </p>
             )}
             {error && (
@@ -147,13 +156,13 @@ export function MarketplaceStockRecovery({
               <p>Reload the saved listing result to see what happened to this approval.</p>
             )}
             {!error && !review && (
-              <p role="status">Checking Tally, Flipkart orders and current listing stock…</p>
+              <p role="status">Checking Tally, orders and current listing stock…</p>
             )}
             {review && (
               <>
                 <dl className="connection-details">
                   <div>
-                    <dt>Current Flipkart stock</dt>
+                    <dt>Current {provider ?? 'listing'} stock</dt>
                     <dd>{review.observed}</dd>
                   </div>
                   <div>
@@ -164,7 +173,7 @@ export function MarketplaceStockRecovery({
                 <p>
                   {same
                     ? 'The quantities match. Approval closes the earlier attempt without sending a stock update.'
-                    : `Approval closes the earlier attempt and sends ${review.quantity} to this Flipkart location.`}
+                    : `Approval closes the earlier attempt and sends ${review.quantity} to ${review.locationId} on ${provider ?? 'the marketplace'}.`}
                 </p>
               </>
             )}

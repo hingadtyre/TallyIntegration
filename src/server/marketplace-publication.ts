@@ -11,6 +11,7 @@ import {
   type MarketplaceEdit,
   type MarketplaceListing,
 } from '../shared/marketplace-contracts.js';
+import { marketplaceName } from '../shared/marketplaces.js';
 import { recordActivity } from './activity.js';
 import {
   checkManualKeepBack,
@@ -31,6 +32,18 @@ import {
   inventoryTarget,
   type InventoryIntent,
 } from './inventory-publication.js';
+
+function publicationDestination(state: Snapshot, change: MarketplaceChange) {
+  const seller = state.accounts.find((account) => account.id === change.accountId);
+  return [
+    marketplaceName(seller?.marketplace),
+    seller?.name ?? change.accountId,
+    change.sku,
+    change.edit.kind === 'stock' ? change.edit.locationId : undefined,
+  ]
+    .filter(Boolean)
+    .join(' - ');
+}
 
 export type ListingTransport = Pick<
   FlipkartListingsClient,
@@ -79,7 +92,7 @@ export function recoverableStockChange(
     throw new InputError('This stock update is no longer awaiting recovery in this account.', 409);
   if (!old.stockRequestFinality)
     throw new InputError(
-      'Flipkart has not established whether the earlier request can still take effect. The listing remains blocked; contact seller support with this update’s details.',
+      'The marketplace has not established whether the earlier request can still take effect. The listing remains blocked; contact seller support with this update’s details.',
       409,
     );
   if (changes.some((c) => c !== old && blocksListing(c, accountId, old.listingId)))
@@ -307,9 +320,14 @@ export class MarketplacePublication {
             row.orderSyncPending = work.orderPending;
         }
       }
-      recordActivity(state, `marketplace-${status}`, `${change.sku}: ${message}`, {
-        level: status === 'failed' || status === 'uncertain' ? 'warning' : 'info',
-      });
+      recordActivity(
+        state,
+        `marketplace-${status}`,
+        `${publicationDestination(state, change)}: ${message}`,
+        {
+          level: status === 'failed' || status === 'uncertain' ? 'warning' : 'info',
+        },
+      );
       return { ...change };
     });
   }
@@ -362,7 +380,7 @@ export class MarketplacePublication {
     const checkBackoff = () => {
       if (Date.now() < automaticRetryAt(data.changes, listing, edit))
         throw new InputError(
-          'Flipkart rejected the previous stock update. An upcoming stock check will retry after backoff.',
+          'The marketplace rejected the previous stock update. An upcoming stock check will retry after backoff.',
           409,
         );
     };
@@ -392,7 +410,7 @@ export class MarketplacePublication {
       before.sku !== listing.sku
     )
       throw new InputError(
-        'Flipkart returned a different listing identity. Refresh the account.',
+        'The marketplace returned a different listing identity. Refresh the account.',
         409,
       );
     let firstPickupWrite = false;
@@ -405,7 +423,7 @@ export class MarketplacePublication {
       ) {
         this.saveObservation(before);
         throw new InputError(
-          'Flipkart package count changed or is unavailable. Review Set of before publishing.',
+          'Reported package count changed or is unavailable. Review Set of before publishing.',
           409,
         );
       }
@@ -458,14 +476,14 @@ export class MarketplacePublication {
     ) {
       this.saveObservation(before);
       throw new InputError(
-        'Flipkart changed since this editor was opened. Refresh and review the latest value.',
+        'The listing changed since this editor was opened. Refresh and review the latest value.',
         409,
       );
     }
     if (keepBack?.usesPackageCount && listing.packageCount !== before.packageCount) {
       this.saveObservation(before);
       throw new InputError(
-        'Flipkart’s package count changed. Refresh the listing and review its Set of before applying.',
+        'The reported package count changed. Refresh the listing and review its Set of before applying.',
         409,
       );
     }
@@ -600,7 +618,7 @@ export class MarketplacePublication {
           recordActivity(
             state,
             'inventory-confirmed',
-            `${listing.sku}: confirmed current stock ${target.quantity}; no write needed.`,
+            `${publicationDestination(state, change)}: confirmed current stock ${target.quantity}; no write needed.`,
             { companyId: intent.companyId, listingId: intent.listingId },
           );
           return null;
@@ -627,7 +645,11 @@ export class MarketplacePublication {
               ? 'Stock is already zero. Tally sync paused for this location.'
               : 'Stock is already zero.';
           current.changes.unshift(change);
-          recordActivity(state, 'marketplace-confirmed', `${listing.sku}: ${change.message}`);
+          recordActivity(
+            state,
+            'marketplace-confirmed',
+            `${publicationDestination(state, change)}: ${change.message}`,
+          );
           return null;
         }
       }
@@ -635,7 +657,7 @@ export class MarketplacePublication {
       recordActivity(
         state,
         intent ? 'inventory-publish' : 'marketplace-apply',
-        `${listing.sku}: ${edit.kind} update requested${edit.kind === 'stock' && edit.automation === 'pause' ? '; Tally synchronization paused' : ''}.`,
+        `${publicationDestination(state, change)}: ${edit.kind} update requested${edit.kind === 'stock' && edit.automation === 'pause' ? '; Tally synchronization paused' : ''}.`,
       );
       return pending.map(({ row, itemVersion, tallyPending, orderPending }) => ({
         listingId: row.id,
@@ -738,8 +760,8 @@ export class MarketplacePublication {
       confirmed
         ? token === null
           ? 'Sample value updated. No marketplace was contacted.'
-          : 'Updated value confirmed by a fresh Flipkart read.'
-        : 'Flipkart has not confirmed the stock or price outcome. Check result before making another change.',
+          : 'Updated value confirmed by a fresh listing check.'
+        : 'The marketplace has not confirmed the stock or price outcome. Check result before making another change.',
     );
     return {
       change: result,
@@ -808,7 +830,11 @@ export class MarketplacePublication {
         (same
           ? `The seller verified current stock ${quantity}. No new update was needed.`
           : `The seller approved a separate stock update of ${quantity}.`);
-      recordActivity(state, 'stock-recovery', old.sku + ': ' + old.message);
+      recordActivity(
+        state,
+        'stock-recovery',
+        publicationDestination(state, old) + ': ' + old.message,
+      );
       if (same) return { original: old, replacement: null, observed, pending };
       const replacement: MarketplaceChange = {
         id: randomUUID(),

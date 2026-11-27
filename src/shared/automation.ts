@@ -1,7 +1,10 @@
+import type { SellerAccount } from './contracts.js';
+
 export interface AutomationPreviewRow {
   listingId: string;
   accountId: string;
   account: string;
+  marketplace?: SellerAccount['marketplace'];
   sku: string;
   location: string;
   itemName: string;

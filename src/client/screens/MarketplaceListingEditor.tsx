@@ -1,5 +1,8 @@
+import { MarketplaceSeller } from '../MarketplaceSeller.js';
+import { marketplaceName } from '../../shared/marketplaces.js';
 import { useEffect, useRef, useState } from 'react';
 import type {
+  MarketplaceAccount,
   MarketplaceApplyResult,
   MarketplaceChange,
   MarketplaceKeepBackReview,
@@ -27,6 +30,7 @@ export const changeLabels: Record<MarketplaceChange['state'], string> = {
 
 export function MarketplaceListingEditor({
   target,
+  account,
   demo,
   onResult,
   onClose,
@@ -38,6 +42,7 @@ export function MarketplaceListingEditor({
   onReviewRecovery,
 }: {
   target: MarketplaceEditorTarget;
+  account: MarketplaceAccount;
   demo: boolean;
   onResult: (result: MarketplaceApplyResult) => void;
   onClose: () => void;
@@ -48,6 +53,7 @@ export function MarketplaceListingEditor({
   onFailure: (message: string, uncertain: boolean) => void;
   onReviewRecovery: (change: MarketplaceChange) => void;
 }) {
+  const provider = marketplaceName(account.marketplace);
   const [listing, setListing] = useState(target.listing);
   const [policyConfirmation, setPolicyConfirmation] = useState(false);
   const previousChanges = useRef(new Set(knownChangeIds));
@@ -253,7 +259,7 @@ export function MarketplaceListingEditor({
         <p>
           <strong>{listing.title}</strong>
           <br />
-          {listing.sku}
+          <MarketplaceSeller account={account} /> - {listing.sku}
           {target.kind === 'stock' && ` · ${target.locationId}`}
         </p>
         <p className="marketplace-help">
@@ -338,8 +344,9 @@ export function MarketplaceListingEditor({
             </p>
             {policy.companyId && (
               <p>
-                Flipkart sales still reduce stock. Stockbridge skips automatic updates for this
-                location, including updates to zero, until you choose Resume sync.
+                Sales on {provider ?? 'the marketplace'} still reduce stock. Stockbridge skips
+                automatic updates for this location, including updates to zero, until you choose
+                Resume sync.
               </p>
             )}
           </div>
@@ -402,8 +409,8 @@ export function MarketplaceListingEditor({
         )}
         {lostResponse && (
           <p className="marketplace-help">
-            The response was lost, so this edit may have reached Flipkart. Reload its saved result
-            before submitting anything again.
+            The response was lost, so this edit may have reached {provider ?? 'the marketplace'}.
+            Reload its saved result before submitting anything again.
           </p>
         )}
         {change && (
@@ -411,6 +418,7 @@ export function MarketplaceListingEditor({
             <strong>{changeLabels[change.state]}</strong>
             <p>{change.message}</p>
             <StockRecoveryAction
+              provider={provider}
               change={change}
               disabled={pending || lostResponse}
               onReview={onReviewRecovery}
@@ -419,7 +427,7 @@ export function MarketplaceListingEditor({
         )}
         {demo && (
           <p className="marketplace-help">
-            Sample simulation only. Apply does not contact Flipkart.
+            Sample simulation only. Apply does not contact {provider ?? 'the marketplace'}.
           </p>
         )}
         <div className="modal-actions">

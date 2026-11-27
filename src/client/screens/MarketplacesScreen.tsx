@@ -1,3 +1,5 @@
+import { MarketplaceLogo } from '../MarketplaceSeller.js';
+import { marketplaceBrand, marketplaceName } from '../../shared/marketplaces.js';
 import { useEffect, useRef, useState } from 'react';
 import type { Snapshot } from '../../shared/contracts.js';
 import type {
@@ -118,7 +120,7 @@ export function MarketplacesScreen({
             <div className="panel marketplace-empty">
               <Icon name="box" />
               <h2>Add your first marketplace account</h2>
-              <p>Connect Flipkart to view its listings. A Tally company is not required.</p>
+              <p>Add a seller account to view its listings. A Tally company is not required.</p>
             </div>
           )}
           <div className="marketplace-account-grid">
@@ -202,7 +204,9 @@ function MarketplaceAccountTile({
   return (
     <article className="panel marketplace-account" aria-label={account.name} aria-busy={!!pending}>
       <div className="connection-card-top">
-        <div className="service-logo flipkart-logo">F</div>
+        <div className="service-logo">
+          <MarketplaceLogo marketplace={account.marketplace} size={32} />
+        </div>
         <span
           className={`badge ${account.connection.state === 'verified' ? 'badge-green' : 'badge-amber'}`}
         >
@@ -210,7 +214,7 @@ function MarketplaceAccountTile({
         </span>
       </div>
       <h2>{account.name}</h2>
-      <div className="marketplace-account-provider">Flipkart</div>
+      <div className="marketplace-account-provider">{marketplaceName(account.marketplace)}</div>
       <p>{account.connection.message}</p>
       {account.catalogImportError && (
         <p className="marketplace-error" role="alert">
@@ -223,7 +227,7 @@ function MarketplaceAccountTile({
           <dd>
             {account.sellerId ??
               (account.catalogOwnershipVerified
-                ? 'Listing ownership verified · Flipkart did not supply a seller ID'
+                ? `Listing ownership verified · ${marketplaceName(account.marketplace)} did not supply a seller ID`
                 : 'Not yet verified')}
           </dd>
         </div>
@@ -302,6 +306,8 @@ function MarketplaceListings({
   const [rowErrors, setRowErrors] = useState<
     Record<string, { message: string; uncertain: boolean }>
   >({});
+  const brand = marketplaceBrand(account.marketplace);
+  const provider = brand?.name;
   const alive = useRef(true);
   const request = useRef(0);
   const readInFlight = useRef(false);
@@ -407,7 +413,9 @@ function MarketplaceListings({
       </button>
       <div className="page-heading">
         <div>
-          <div className="eyebrow">FLIPKART · {demo ? 'SAMPLE ACCOUNT' : 'SELLER ACCOUNT'}</div>
+          <div className="eyebrow">
+            {marketplaceName(account.marketplace)} · {demo ? 'SAMPLE ACCOUNT' : 'SELLER ACCOUNT'}
+          </div>
           <h1>{account.name}</h1>
           <p>All marketplace listings, including those without a Tally mapping.</p>
         </div>
@@ -497,7 +505,7 @@ function MarketplaceListings({
               <thead>
                 <tr>
                   <th>Product</th>
-                  <th>Flipkart status</th>
+                  <th>{provider ?? 'Listing'} status</th>
                   <th>MRP</th>
                   <th>Selling price</th>
                   <th>Shipping packages</th>
@@ -508,6 +516,7 @@ function MarketplaceListings({
               <tbody>
                 {data.listings.map((listing) => (
                   <MarketplaceListingRow
+                    marketplace={account.marketplace}
                     key={listing.id}
                     listing={listing}
                     changes={data.changes.filter((change) => change.listingId === listing.id)}
@@ -563,6 +572,7 @@ function MarketplaceListings({
       </section>
       {editor && (
         <MarketplaceListingEditor
+          account={account}
           target={editor}
           demo={demo}
           onResult={applyResult}
@@ -585,7 +595,7 @@ function MarketplaceListings({
         <MarketplaceStockRecovery
           key={recovery.id}
           change={recovery}
-          accountName={account.name}
+          account={account}
           onClose={() => setRecovery(null)}
           onResult={applyResult}
           onPending={(pending) => setListingPending(recovery.listingId, pending)}
@@ -599,6 +609,7 @@ function MarketplaceListings({
 }
 
 function MarketplaceListingRow({
+  marketplace,
   listing,
   changes,
   pending,
@@ -610,6 +621,7 @@ function MarketplaceListingRow({
   onResult,
   onReviewRecovery,
 }: {
+  marketplace: MarketplaceAccount['marketplace'];
   listing: MarketplaceListingView;
   changes: MarketplaceChange[];
   pending: boolean;
@@ -629,6 +641,8 @@ function MarketplaceListingRow({
   );
   const latest =
     unresolved ?? [...changes].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  const brand = marketplaceBrand(marketplace);
+  const provider = brand?.name;
   async function resume(policy: MarketplaceListingView['stockPolicies'][number]) {
     if (resuming || !policy.companyId) return;
     setResuming(true);
@@ -708,6 +722,7 @@ function MarketplaceListingRow({
                   {checking ? 'Checking result…' : 'Check result'}
                 </button>
                 <StockRecoveryAction
+                  provider={provider}
                   change={unresolved}
                   disabled={checking}
                   onReview={onReviewRecovery}
@@ -741,7 +756,7 @@ function MarketplaceListingRow({
           </div>
         )}
       </td>
-      <td data-label="Flipkart status">
+      <td data-label={`${provider ?? 'Listing'} status`}>
         <span className={`badge ${listing.status === 'ACTIVE' ? 'badge-green' : 'badge-amber'}`}>
           {statuses.find((status) => status.value === listing.status)?.label ?? listing.status}
         </span>
@@ -766,7 +781,11 @@ function MarketplaceListingRow({
       </td>
       <td data-label="Stock by location">
         <div className="marketplace-locations">
-          {listing.locations.length === 0 && <span>Flipkart supplied no stock location.</span>}
+          {listing.locations.length === 0 && (
+            <span>
+              {provider ?? 'The marketplace'} supplied no stock location for this listing.
+            </span>
+          )}
           {listing.locations.map((location) => {
             const stockVerified =
               isKnownMarketplaceLocationStatus(location.status) && location.quantity !== null;
@@ -833,15 +852,14 @@ function MarketplaceListingRow({
         </div>
       </td>
       <td data-label="Settlement">
-        <a
-          className="text-button"
-          href="https://seller.flipkart.com/"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Open in Flipkart ↗
-        </a>
-        <small className="marketplace-help">View settlement in Seller Hub</small>
+        {brand && (
+          <>
+            <a className="text-button" href={brand.sellerHub} target="_blank" rel="noreferrer">
+              Open in {brand.name} ↗
+            </a>
+            <small className="marketplace-help">View settlement in Seller Hub</small>
+          </>
+        )}
       </td>
     </tr>
   );

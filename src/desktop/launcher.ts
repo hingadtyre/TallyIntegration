@@ -69,7 +69,7 @@ export async function runLauncher(
     );
     console.log(`Dashboard: ${dashboardUrl}\nData folder: ${dataDirectory}`);
     console.log(
-      'Stockbridge reads Tally stock. Reviewed changes and enabled automatic updates can publish stock to Flipkart.',
+      'Stockbridge reads Tally stock. Reviewed changes and enabled automatic updates can publish stock to eligible listings.',
     );
     return;
   }

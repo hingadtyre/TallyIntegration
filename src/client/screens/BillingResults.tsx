@@ -101,7 +101,7 @@ function BillingPreview({
           <div className="empty-state compact-empty">
             <h3>No order items in this preview</h3>
             <p>
-              Check the selected seller and period, or refresh after an order appears in Flipkart.
+              Check the selected seller and period, or refresh after the seller receives an order.
             </p>
           </div>
         ) : (
@@ -111,7 +111,7 @@ function BillingPreview({
                 <table className="billing-table" aria-label="Order and bill matches">
                   <thead>
                     <tr>
-                      <th>Flipkart order item</th>
+                      <th>Order item</th>
                       <th>Item and stock</th>
                       <th>Tally bill</th>
                     </tr>

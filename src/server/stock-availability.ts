@@ -483,7 +483,7 @@ export function reconcileOrders(
       ) {
         result.status = 'review';
         result.reason =
-          'A Flipkart order for this item has an unresolved sale, return or cancellation status. Check the order before increasing stock.';
+          'An order for this item has an unresolved sale, return or cancellation status. Check the order before increasing stock.';
         continue;
       }
       const row = byId.get(order.orderItemId);
@@ -874,7 +874,7 @@ export class StockAvailabilityService {
           guards.push(auth.verify);
           auth.verify();
           if (!auth.token || !this.sources.orders.readStockOrders)
-            throw hold('Verify each participating Flipkart seller and its shipment access.');
+            throw hold('Verify each participating seller account and its shipment access.');
           orders = await this.sources.orders.readStockOrders(
             auth.token,
             coverage.from,
@@ -979,7 +979,7 @@ export class StockAvailabilityService {
         } catch (error) {
           if (error instanceof InputError) throw error;
           throw hold(
-            'Could not verify all Flipkart orders and Tally sales bills. Check the connections and retry.',
+            'Could not verify all marketplace orders and Tally sales bills. Check the connections and retry.',
           );
         }
       };
@@ -1158,7 +1158,7 @@ export class StockAvailabilityService {
     } catch (error) {
       if (error instanceof InputError) throw error;
       throw hold(
-        'Could not verify all Flipkart orders and Tally sales bills. Check the connections and retry.',
+        'Could not verify all marketplace orders and Tally sales bills. Check the connections and retry.',
       );
     }
   }

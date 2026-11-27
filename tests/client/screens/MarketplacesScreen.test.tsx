@@ -173,7 +173,7 @@ test('a listing without a stock location still shows its shipping package count'
   const row = screen.getByRole('row', { name: /Marketplace tyre/ });
   assert.ok(within(row).getByRole('cell', { name: '2' }));
   assert.ok(screen.getByText('1 matching listing'));
-  assert.ok(within(row).getByText('Flipkart supplied no stock location.'));
+  assert.ok(within(row).getByText('Flipkart supplied no stock location for this listing.'));
   assert.equal(within(row).queryByRole('button', { name: /Edit stock/ }), null);
 });
 

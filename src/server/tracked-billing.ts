@@ -220,7 +220,7 @@ export class TrackedBillingService {
             );
           else
             throw new FlipkartBillingError(
-              'Verify access to the participating Flipkart seller and refresh its listings.',
+              'Verify access to the participating seller account and refresh its listings.',
             );
           reads.push({ accountId: rule.accountId, group: fulfilment, orders });
         } catch (cause) {
@@ -231,7 +231,7 @@ export class TrackedBillingService {
             error:
               cause instanceof FlipkartBillingError
                 ? cause.message
-                : 'Could not complete this Flipkart order check.',
+                : 'Could not complete this order check.',
           });
         }
         verifyAccess();
@@ -329,7 +329,7 @@ export class TrackedBillingService {
         for (const result of results) {
           if (result.accountId !== rule.accountId) continue;
           if (incomplete.has(result.group))
-            result.invoiceError = 'Flipkart invoice numbers could not be verified for some orders.';
+            result.invoiceError = 'Invoice numbers could not be verified for some orders.';
           else delete result.invoiceError;
         }
       }
@@ -419,7 +419,7 @@ export class TrackedBillingService {
           issues.push(
             row.error
               ? 'Stockbridge could not check orders for ' + seller + '.'
-              : 'Stockbridge could not check Flipkart invoice details for ' + seller + '.',
+              : 'Stockbridge could not check invoice details for ' + seller + '.',
           );
         }
       }

@@ -322,7 +322,7 @@ export function InventoryScreen({
             </span>
           </div>
           <label className="account-select">
-            <span>Flipkart seller</span>
+            <span>Seller account</span>
             <select
               aria-label="Seller account"
               value={accountId}
@@ -349,9 +349,9 @@ export function InventoryScreen({
                 <Icon name="chevron" />
               </summary>
               <small>
-                {state.mode === 'demo' ? 'Simulates updates' : 'Updates Flipkart stock'} for
+                {state.mode === 'demo' ? 'Simulates updates' : 'Updates marketplace stock'} for
                 eligible listings across all seller accounts for {company.name}. Checks include
-                Tally stock changes, changes to stock kept back, and verified Flipkart sales that
+                Tally stock changes, changes to stock kept back, and verified marketplace sales that
                 reduce shared stock. When automatic updates are on, eligible listings can sync while
                 a review is open.
               </small>
@@ -641,7 +641,7 @@ export function InventoryScreen({
           <strong>Review saved proposals before publishing.</strong>{' '}
           {state.mode === 'demo'
             ? 'This sample workspace simulates stock updates.'
-            : 'Publishing updates stock on Flipkart for the reviewed destinations.'}
+            : 'Publishing updates stock for the reviewed listings and pickup locations.'}
         </p>
       </div>
       {active && review && (
@@ -702,6 +702,7 @@ export function InventoryScreen({
       {removeListing && (
         <RemoveMappingDialog
           listing={removeListing}
+          account={state.accounts.find((seller) => seller.id === removeListing.accountId)}
           busy={!!busy}
           onClose={() => setRemoveListing(null)}
           onRemove={() =>

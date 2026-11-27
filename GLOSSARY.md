@@ -29,6 +29,7 @@ _Avoid_: Tally listing
 
 **Marketplace**:
 A selling platform, such as Flipkart, on which a seller offers products.
+_Avoid_: Using a platform name as a synonym for marketplace.
 
 **Seller account**:
 A seller's account on a particular marketplace. One marketplace can have multiple seller accounts.

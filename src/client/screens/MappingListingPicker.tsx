@@ -1,8 +1,10 @@
-import type { Listing, StockItem } from '../../shared/contracts.js';
+import { marketplaceName } from '../../shared/marketplaces.js';
+import { MarketplaceSeller } from '../MarketplaceSeller.js';
+import type { Listing, SellerAccount, StockItem } from '../../shared/contracts.js';
 import { SearchablePicker } from '../SearchablePicker.js';
 import { searchMappingListings, suggestedMappingListings } from '../mapping-search.js';
 
-function ListingDetails({ listing }: { listing: Listing }) {
+function ListingDetails({ listing, provider }: { listing: Listing; provider?: string }) {
   const hasTitle = listing.title.trim() && listing.title.trim() !== listing.sku.trim();
   return (
     <span className="mapping-listing-details">
@@ -18,7 +20,10 @@ function ListingDetails({ listing }: { listing: Listing }) {
             <b>Location</b> {listing.location}
           </span>
         ) : (
-          <span>Flipkart has not reported stock at a pickup location for this SKU.</span>
+          <span>
+            {provider ?? 'The marketplace'} has not reported stock at a pickup location for this
+            SKU.
+          </span>
         )}
         {listing.location && !listing.observedAt && (
           <span>Refresh listings to verify this location.</span>
@@ -45,14 +50,14 @@ function ListingDetails({ listing }: { listing: Listing }) {
 export function MappingListingPicker({
   listings,
   item,
-  accountName,
+  account,
   selected,
   onChoose,
   busy,
 }: {
   listings: Listing[];
   item: StockItem;
-  accountName: string;
+  account?: SellerAccount;
   selected?: Listing;
   onChoose: (id: string) => void;
   busy: boolean;
@@ -67,10 +72,10 @@ export function MappingListingPicker({
   return (
     <div className="mapping-picker">
       <div className="mapping-picker-heading">
-        <span>{accountName}</span>
+        <MarketplaceSeller account={account} />
       </div>
       <SearchablePicker
-        label="Flipkart listing"
+        label="Listing"
         placeholder="SKU, title, FSN or listing ID"
         options={listings}
         selected={selected}
@@ -86,14 +91,16 @@ export function MappingListingPicker({
           if (suggestedIds.has(listing.id)) return 'Possible matches for this item';
           return suggested.length ? 'Other unmapped listings' : 'Unmapped listings';
         }}
-        renderOption={(listing) => <ListingDetails listing={listing} />}
+        renderOption={(listing) => (
+          <ListingDetails listing={listing} provider={marketplaceName(account?.marketplace)} />
+        )}
         emptyMessage="No matching listings. Try another SKU, title, FSN or listing ID."
         pageSize={10}
         moreLabel="Show more listings"
       />
       {selected && (
         <div className="mapping-selected" role="group" aria-label="Selected listing">
-          <ListingDetails listing={selected} />
+          <ListingDetails listing={selected} provider={marketplaceName(account?.marketplace)} />
         </div>
       )}
     </div>

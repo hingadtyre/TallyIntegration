@@ -1,6 +1,6 @@
 # Stockbridge · Tally inventory integration
 
-A local Windows dashboard for reviewing Tally stock and managing Flipkart seller listings. The approved product design is in [architecture.md](docs/design/architecture.md) and [marketplace listing management](docs/design/marketplace-listings.md).
+A local Windows dashboard for reviewing Tally stock and managing marketplace listings. Flipkart is the only supported marketplace today. The approved product design is in [architecture.md](docs/design/architecture.md) and [marketplace listing management](docs/design/marketplace-listings.md).
 
 This is the development project, not the customer's Tally machine. Use sample data here. Follow the [plain-language customer setup guide](docs/customer-setup.md); a shorter guide is also built into **Connections**. A new live **Marketplaces** page starts with **Add account**, without sample seller tiles.
 
@@ -12,9 +12,9 @@ A fresh live workspace has no company or seller account in its selectors. Tally 
 
 **Keep back from marketplaces** on each Tally stock item sets aside stock for other uses. Enter the quantity once in the item's Tally unit. All mapped marketplace listings draw on the same balance after this deduction and unbilled orders. For Flipkart, the listing's pack size, optional tyre minimum and sales allowance then determine the proposed stock. Saving queues eligible listings for their next sync. The field defaults to zero.
 
-**Order matching** lets each seller select a Tally company, Flipkart account and sales ledger. Choose where the order ID, order-item ID or invoice number is recorded, or review bills manually. Select today, the last 7 days or the last 30 days, preview the results, then save the setup. An exact reference, matching stock item and quantity can identify a unique bill. A seller can confirm or release a manual match. Flipkart supplies the orders and Tally supplies posted sales evidence. A ledger entry alone cannot establish that a Flipkart order exists.
+**Order matching** lets each seller select a Tally company, seller account and sales ledger. Choose where the order ID, order-item ID or invoice number is recorded, or review bills manually. Select today, the last 7 days or the last 30 days, preview the results, then save the setup. An exact reference, matching stock item and quantity can identify a unique bill. A seller can confirm or release a manual match. Flipkart supplies the orders and Tally supplies posted sales evidence. A ledger entry alone cannot establish that a Flipkart order exists.
 
-If a Tally bill has a mistyped Flipkart reference, **Find Tally bill** lets the seller look up the bill by number and verify it for one order item. This also works for older tracked sales. Stockbridge checks the actual stock deduction and competing orders before accepting the link. [Find a bill for one Flipkart order](docs/customer-setup.md#find-a-bill-for-one-flipkart-order)
+If a Tally bill has a mistyped Flipkart reference, **Find Tally bill** lets the seller look up the bill by number and verify it for one order item. This also works for older tracked sales. Stockbridge checks the actual stock deduction and competing orders before accepting the link. [Find a bill for one marketplace order](docs/customer-setup.md#find-a-bill-for-one-marketplace-order)
 
 After confirming the ledger, use **Set billing start date** to start checking bills. A company with confirmed starting stock already has a date. Saving the date and returning to **Order matching** both open **Tracked orders** automatically. Stockbridge checks the selected seller’s Standard, Self-ship, Express, Smart and Fulfilment by Flipkart order items from that date through the time shown. The shorter Standard and Self-ship preview is available when setting up or changing the ledger.
 

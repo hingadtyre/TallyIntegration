@@ -98,7 +98,7 @@ export class MarketplaceStockRecovery {
         : await this.client.getListing(token, input.listing, { requireCurrentStatus: true });
     if (!sameListingIdentity(input.listing, current) || current.status !== 'ACTIVE')
       throw new InputError(
-        'The original active Flipkart listing could not be verified. Refresh the seller account.',
+        'The original active listing could not be verified. Refresh the seller account.',
         409,
       );
     const destination = current.locations.filter((loc) => loc.id === input.locationId);
@@ -108,11 +108,11 @@ export class MarketplaceStockRecovery {
       destination[0].quantity === null
     )
       throw new InputError(
-        'Flipkart must verify the enabled stock location and its current quantity before recovery.',
+        'The marketplace must verify the enabled stock location and its current quantity before recovery.',
         409,
       );
     if (input.mapping.packSource === 'packages' && current.packageCount !== input.mapping.packSize)
-      throw new InputError('The current Flipkart package count needs review in Inventory.', 409);
+      throw new InputError('The current reported package count needs review in Inventory.', 409);
     const observed = destination[0].quantity;
     const quantity = desiredStock(input.state, input.mapping, 'current', evidence.available);
     if (!Number.isSafeInteger(quantity) || quantity < 0 || quantity > 5000)

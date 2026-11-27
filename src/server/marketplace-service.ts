@@ -887,7 +887,7 @@ export class MarketplaceService {
     verify();
     if (!sameListingIdentity(listing, current))
       throw new InputError(
-        'Flipkart returned a different listing. Refresh the seller account before enabling updates.',
+        'The marketplace returned a different listing. Refresh the seller account before enabling updates.',
         409,
       );
     return { current, verify };
@@ -1051,7 +1051,7 @@ export class MarketplaceService {
             ? {
                 ...identity,
                 status: 'unchanged',
-                message: `Flipkart already matches the latest calculated quantity of ${result.latestQuantity}. No update was sent.`,
+                message: `Listing stock already matches the latest calculated quantity of ${result.latestQuantity}. No update was sent.`,
               }
             : {
                 ...identity,

@@ -85,11 +85,11 @@ test('package confirmation survives a restart, flags a changed count and preserv
     () => confirm('packages', 2, current().version, 'previous base unit'),
     /Tally base unit changed/,
   );
-  assert.throws(() => confirm('packages', 1), /actual Flipkart package count/);
+  assert.throws(() => confirm('packages', 1), /reported package count/);
   confirm('packages', 2);
   assert.equal(
     current().packEvidence,
-    "Confirmed 2 Tally units per sale using Flipkart's package count.",
+    'Confirmed 2 Tally units per sale using the reported package count.',
   );
   const beforeRestart = current();
   f.reopen();
@@ -107,7 +107,7 @@ test('package confirmation survives a restart, flags a changed count and preserv
   assert.equal(current().packageAvailable, false);
   assert.equal(current().packageObservedAt, observedAt);
   assert.equal(current().packageCount, 1);
-  assert.throws(() => confirm('packages', 1), /actual Flipkart package count/);
+  assert.throws(() => confirm('packages', 1), /reported package count/);
   observe(2, 3);
   assert.equal(current().verified, false);
   confirm('manual', 3);

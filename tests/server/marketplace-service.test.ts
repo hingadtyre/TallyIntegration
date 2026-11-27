@@ -1164,7 +1164,7 @@ test('an unchanged calculation cannot refill remotely changed stock or publish w
   await s.f.service.refresh(s.account.id);
   const [conflict] = (await s.service.publish(review.id)).rows;
   assert.deepEqual([conflict.status, conflict.latestQuantity], ['blocked', undefined]);
-  assert.match(conflict.message, /Flipkart changed/);
+  assert.match(conflict.message, /The listing changed/);
   const fresh = s.prepare();
   s.setOrdersOffline(true);
   const [missing] = (await s.service.publish(fresh.id)).rows;
@@ -2181,6 +2181,12 @@ test('an uncertain manual stock change stays locked when its outcome is checked'
   s.f.setFailWrite('lost-readback');
   const result = await s.f.stock(s.account.id, 2);
   assert.equal(result.change.state, 'uncertain');
+  const entry = s.service
+    .snapshot()
+    .activity.find((row) => row.operation === 'marketplace-uncertain');
+  assert.ok(
+    entry?.message.startsWith(`Flipkart - ${s.account.name} - ${result.change.sku} - warehouse-a:`),
+  );
   s.f.setFailRead(false);
   s.f.setFailWrite('no');
   await s.service.refresh();

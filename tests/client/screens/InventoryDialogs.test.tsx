@@ -32,7 +32,7 @@ test('failed unlink stays open and closes only after a successful retry', async 
 });
 
 function openListingPicker() {
-  const picker = screen.getByRole<HTMLInputElement>('combobox', { name: 'Flipkart listing' });
+  const picker = screen.getByRole<HTMLInputElement>('combobox', { name: 'Listing' });
   fireEvent.click(picker);
   return picker;
 }
@@ -119,10 +119,7 @@ test('an imported SKU without a stock location is searchable but cannot select a
     assert.ok((screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled);
   }
   fireEvent.click(screen.getByRole('option', { name: /155\/65R14/ }));
-  assert.equal(
-    (screen.getByLabelText(/Flipkart pickup location/) as HTMLSelectElement).value,
-    'North',
-  );
+  assert.equal((screen.getByLabelText(/Pickup location/) as HTMLSelectElement).value, 'North');
 });
 
 test('mapping requires a selected seller before showing inventory destinations', () => {
@@ -138,7 +135,7 @@ test('mapping requires a selected seller before showing inventory destinations',
     />,
   );
   assert.ok(screen.getByRole('heading', { name: 'Choose a seller account' }));
-  assert.equal(screen.queryByRole('combobox', { name: 'Flipkart listing' }), null);
+  assert.equal(screen.queryByRole('combobox', { name: 'Listing' }), null);
   assert.equal(screen.queryByRole('option', { name: /SAMPLE-UNMAPPED-1/ }), null);
   assert.ok((screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled);
 });
@@ -331,7 +328,7 @@ test('a changed package count can be accepted or the confirmed number kept as a 
       }}
     />,
   );
-  assert.ok(screen.getByText(/Flipkart package count changed from 2 to 1/));
+  assert.ok(screen.getByText(/Reported package count changed from 2 to 1/));
   assert.equal(
     (screen.getByLabelText(/Use 1 .current package count/) as HTMLInputElement).checked,
     true,
@@ -363,7 +360,7 @@ test('mapping without available listings explains the empty state and keeps save
   );
 
   assert.ok(screen.getByRole('heading', { name: 'No unmapped listings available' }));
-  assert.equal(screen.queryByRole('combobox', { name: 'Flipkart listing' }), null);
+  assert.equal(screen.queryByRole('combobox', { name: 'Listing' }), null);
   assert.equal(
     (screen.getByRole('button', { name: 'Save mapping' }) as HTMLButtonElement).disabled,
     true,
@@ -386,6 +383,7 @@ test('choosing a manual keep-back override explicitly approves only the affected
             listingId: 'held-pair',
             sku: 'TYRE-PAIR',
             account: 'Sample seller',
+            marketplace: 'flipkart',
             location: 'Warehouse',
             quantity: 5,
             observed: 3,
@@ -414,6 +412,9 @@ test('choosing a manual keep-back override explicitly approves only the affected
   const publish = screen.getByRole('button', {
     name: 'Publish 1 eligible listing',
   }) as HTMLButtonElement;
+  const destination = within(screen.getByRole('row', { name: /TYRE-PAIR/ }));
+  assert.ok(destination.getByRole('img', { name: 'Flipkart' }));
+  assert.ok(destination.getByText('Sample seller'));
   const override = screen.getByRole('checkbox', {
     name: /Publish 5 for TYRE-PAIR at Warehouse.*keeping back 2 tyres.*3 complete packs/,
   });

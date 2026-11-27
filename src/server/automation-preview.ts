@@ -19,13 +19,13 @@ function waiting(message: string): never {
 function checkLocation(listing: Listing, remote: MarketplaceListing): number | null {
   if (!listing.location) waiting('Choose a pickup location in Edit Set of before publishing.');
   if (listing.packSource === 'packages' && listing.packSize !== remote.packageCount)
-    waiting('Review Set of. The Flipkart package count changed or is unavailable.');
+    waiting('Review Set of. The reported package count changed or is unavailable.');
   if (remote.status === 'ACTIVE' && hasConfirmedPickup(listing, remote)) return null;
   const locations = remote.locations.filter((location) => location.id === listing.location);
   if (remote.status !== 'ACTIVE' || locations.length !== 1 || locations[0].status !== 'ENABLED')
-    waiting('Verify the active Flipkart listing and its enabled stock location.');
+    waiting('Verify the active listing and its enabled stock location.');
   if (locations[0].quantity === null || !remote.observedAt)
-    waiting('Refresh Flipkart to verify the stock at this location.');
+    waiting('Refresh the seller account to verify the stock at this location.');
   return locations[0].quantity;
 }
 
@@ -65,7 +65,7 @@ export function checkAutomationDestination(
   if (!sellerVerified) waiting('Refresh the seller account to verify its identity.');
   const matches = catalog.listingsFor(listing);
   if (matches.length !== 1 || !matches[0].observedAt)
-    waiting('Refresh the seller account to verify a unique Flipkart listing for this SKU.');
+    waiting('Refresh the seller account to verify a unique listing for this SKU.');
   const remote = matches[0];
   if (
     catalog.changesFor(remote).some((change) => blocksListing(change, remote.accountId, remote.id))
@@ -202,14 +202,15 @@ export class AutomationReviews {
     const checkOrders =
       input.state.mode === 'live' || !!this.store.readStockCoverage(input.company.id);
     for (const { listing, item } of input.mappings) {
+      const seller = input.state.accounts.find((a) => a.id === listing.accountId);
       const row: AutomationPreviewRow = {
         listingId: listing.id,
         sku: listing.sku,
         location: listing.location,
         itemName: item.name,
         accountId: listing.accountId,
-        account:
-          input.state.accounts.find((a) => a.id === listing.accountId)?.name ?? listing.accountId,
+        account: seller?.name ?? listing.accountId,
+        marketplace: seller?.marketplace,
         observed: listing.observedAt ? listing.observed : null,
         proposed: null,
         status: listing.paused ? 'paused' : 'waiting',

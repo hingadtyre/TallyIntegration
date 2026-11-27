@@ -17,7 +17,8 @@ import {
 import { isLowStock } from '../selectors.js';
 import { QuantityEditor } from './QuantityEditor.js';
 import { KeepBackEditor } from './KeepBackEditor.js';
-import { MarketplaceSeller } from './InventoryReservations.js';
+import { MarketplaceSeller } from '../MarketplaceSeller.js';
+import { marketplaceName } from '../../shared/marketplaces.js';
 
 function compareListingRows(a: Listing, b: Listing): number {
   if (a.packSize !== b.packSize) return (a.packSize ?? Infinity) - (b.packSize ?? Infinity);
@@ -175,8 +176,8 @@ export function ItemRows({
                       href={listing.productUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      aria-label={`View ${listing.sku} on Flipkart (opens in a new tab)`}
-                      title="View product on Flipkart (opens in a new tab)"
+                      aria-label={`View ${listing.sku} on ${marketplaceName(accounts.get(listing.accountId)?.marketplace) ?? 'the marketplace'} (opens in a new tab)`}
+                      title={`View product on ${marketplaceName(accounts.get(listing.accountId)?.marketplace) ?? 'the marketplace'} (opens in a new tab)`}
                     >
                       <Icon name="external-link" />
                     </a>
@@ -217,7 +218,7 @@ export function ItemRows({
                   </small>
                 )}
               {listing.packSource === 'manual' && listing.packageAvailable && (
-                <small>Flipkart packages: {listing.packageCount}</small>
+                <small>Reported packages: {listing.packageCount}</small>
               )}
               {listing.packageAvailable === false && (
                 <small title={`Last successful check: ${time(listing.packageObservedAt)}`}>
