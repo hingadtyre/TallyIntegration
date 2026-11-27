@@ -20,7 +20,7 @@ import {
   matchBills,
   saleDay,
 } from './billing-matcher.js';
-import { sampleBills } from './billing-sample.js';
+import { sampleBills, sampleOrderDate } from './billing-sample.js';
 import { checkCalculationStock, saveCalculation } from './inventory-calculation.js';
 import { invalidateReservationDrafts, queueOrderProposal } from './proposals.js';
 import { mappedSaleItem, mappedSaleListing, stockConfiguration } from './stock-configuration.js';
@@ -862,12 +862,9 @@ export class StockAvailabilityService {
       for (const rule of rules) {
         let orders: FlipkartBillingOrder[];
         if (demo) {
-          const sampleAt =
-            coverage.orders.find((e) => e.accountId === rule.accountId)?.order.orderDate ??
-            ctx.items.get('item-a')?.observedAt ??
-            null;
+          const sampleAt = sampleOrderDate(rule, ctx.state.items, coverage.orders);
           const sample = sampleBills(rule, sampleAt, coverage.from, to);
-          orders = sample.orders;
+          orders = sample.stockOrders;
           sampleVouchers.set(rule.accountId, sample.bills);
         } else {
           const auth = await this.access(rule.accountId);

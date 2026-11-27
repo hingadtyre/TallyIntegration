@@ -24,6 +24,7 @@ import { CURRENT_SCHEMA_VERSION } from './storage/schema.js';
 import { readStockCoverage, writeStockCoverage } from './storage/stock-coverage.js';
 import { mappedSaleItem, stockConfiguration } from './stock-configuration.js';
 import { invalidateReservationDrafts } from './proposals.js';
+import { installDemoWorkspace } from './demo-workspace.js';
 
 /** SQLite owns records and transactions; callers receive a detached read model. */
 export class Store {
@@ -53,6 +54,10 @@ export class Store {
       this.database.close();
       throw error;
     }
+  }
+
+  installDemoWorkspace(): void {
+    installDemoWorkspace(this.database);
   }
 
   read(): Snapshot {

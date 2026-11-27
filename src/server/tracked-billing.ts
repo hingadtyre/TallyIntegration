@@ -18,7 +18,7 @@ import {
   usesInvoiceNumber,
   type BillingScope,
 } from './billing-matcher.js';
-import { sampleBills } from './billing-sample.js';
+import { sampleBills, sampleOrderDate } from './billing-sample.js';
 import type { BillingSources } from './billing-service.js';
 import {
   coverageIssue,
@@ -179,11 +179,9 @@ export class TrackedBillingService {
     const identity = { externalId: companyId.slice('tally:'.length), name: ctx.company.name };
     const tally = this.sources.tally(ctx.state.settings.tallyUrl);
     for (const rule of rules) {
-      const sampleAt =
-        coverage.orders.find((e) => e.accountId === rule.accountId)?.order.orderDate ??
-        ctx.items.get('item-a')?.observedAt ??
-        null;
-      const sample = demo ? sampleBills(rule, sampleAt, from, to) : null;
+      const sample = demo
+        ? sampleBills(rule, sampleOrderDate(rule, ctx.state.items, coverage.orders), from, to)
+        : null;
       const groups =
         retry && previous
           ? previous.results
@@ -209,7 +207,7 @@ export class TrackedBillingService {
       for (const fulfilment of groups) {
         try {
           let orders: FlipkartBillingOrder[];
-          if (sample) orders = fulfilment === 'standard' ? sample.orders : [];
+          if (sample) orders = sample.byFulfilment[fulfilment];
           else if (token && this.sources.orders.readFulfilmentOrders)
             orders = await this.sources.orders.readFulfilmentOrders(
               token,

@@ -19,6 +19,8 @@ npm run demo
 
 Open `http://127.0.0.1:4311`. Sample data lives in `.data/demo.sqlite`, separate from the customer's live database. Keep one server running per workspace. To stop the demo from another terminal in this checkout, run `npm run demo:stop`. It uses the demo's saved instance record and waits for shutdown. If you started the demo with a custom `STOCKBRIDGE_DATA_DIR`, use the same absolute folder when stopping it.
 
+**Sample Tyres · Integration** has two Flipkart sellers, **Sample Retail** and **Sample Outlet**, with bill matching and starting stock configured. Their shared touring tyre has 24 units in Tally and two kept back. Retail has sample sales in all five fulfilment types, including an unmapped order and a bill with a mistyped reference. The demo adds this company once to fresh and existing sample workspaces. Its orders are dated when the sample company is added. **Tracked orders** uses the saved start date, while the setup preview uses the date range you choose. Later restarts preserve your edits.
+
 The optional Windows launcher, [scripts/app.ps1](scripts/app.ps1), selects the project-local Node runtime when available and delegates to the same npm scripts. Use it when intentionally selecting that runtime; prefer npm directly when the terminal already uses Node.js 24. The launcher neither installs dependencies nor rebuilds before starting.
 
 ## Build and reload behavior

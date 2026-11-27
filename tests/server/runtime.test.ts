@@ -15,6 +15,8 @@ import {
 import { close, listen, queryFile } from '../support/server-fixture.js';
 import { readSnapshot } from '../../src/server/storage/records.js';
 import type { Snapshot } from '../../src/shared/contracts.js';
+import type { MarketplacePage } from '../../src/shared/marketplace-contracts.js';
+import { Store } from '../../src/server/store.js';
 
 function fixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), 'stockbridge-runtime-'));
@@ -114,6 +116,70 @@ test(
     f.cleanups.push(() => recovered.release());
   },
 );
+
+test('demo startup adds the integration company once and preserves saved demo choices', async (t) => {
+  const f = fixture(t);
+  const options = { mode: 'demo', dataDirectory: f.directory, port: 0 } as const;
+  const legacy = new Store(join(f.directory, 'demo.sqlite'), 'demo');
+  try {
+    legacy.update((state) => {
+      state.settings.tallySeconds = 89;
+      state.listings.find((row) => row.id === 'listing-1')!.paused = true;
+    });
+  } finally {
+    legacy.close();
+  }
+  const first = await startRuntime(options);
+  f.cleanups.push(() => first.stop());
+  const initial = (await (await fetch(`${first.record.url}/api/state`)).json()) as Snapshot;
+  assert.equal(initial.settings.tallySeconds, 89);
+  assert.equal(initial.listings.find((row) => row.id === 'listing-1')?.paused, true);
+  assert.ok(initial.companies.find((row) => row.id === 'demo-integration')?.stockTrackingFrom);
+  const pair = initial.listings.find((row) => row.id === 'demo-retail-pair');
+  assert.equal(pair?.itemId, 'demo-integration-tyre');
+  assert.equal(pair.packSize, 2);
+  assert.equal(pair.packageCount, 1);
+  assert.equal(pair.packSource, 'manual');
+  assert.equal(pair.marketplaceListingId, 'sample-demo-retail-pair');
+  const pending = initial.listings.find((row) => row.id === 'demo-retail-pickup');
+  assert.equal(pending?.location, '');
+  assert.deepEqual(pending.pickupChoices, ['Demo pickup']);
+  const filters = {
+    ACTIVE: ['DEMO-RETAIL-PAIR', 'DEMO-RETAIL-SINGLE', 'DEMO-RETAIL-UNMAPPED'],
+    INACTIVE: ['DEMO-RETAIL-WINTER'],
+    READY_FOR_ACTIVATION: ['DEMO-RETAIL-PICKUP'],
+    ARCHIVED: ['DEMO-RETAIL-DISCONTINUED'],
+    INACTIVATED_BY_FLIPKART: ['DEMO-RETAIL-CORRECTION'],
+  };
+  for (const [status, expected] of Object.entries(filters)) {
+    const query = new URLSearchParams({ accountId: 'demo-retail', status });
+    const response = await fetch(`${first.record.url}/api/marketplaces/listings?${query}`);
+    assert.equal(response.status, 200);
+    const page = (await response.json()) as MarketplacePage;
+    assert.equal(page.total, expected.length);
+    assert.deepEqual(page.listings.map((row) => row.sku).sort(), expected);
+  }
+  const removal = await fetch(`${first.record.url}/api/mappings/remove`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Stockbridge-Request': '1' },
+    body: JSON.stringify({
+      companyId: 'demo-integration',
+      listingId: pair.id,
+      leaveRemoteStock: true,
+    }),
+  });
+  assert.equal(removal.status, 200);
+  await removal.arrayBuffer();
+  await first.stop();
+
+  const second = await startRuntime(options);
+  f.cleanups.push(() => second.stop());
+  const reopened = (await (await fetch(`${second.record.url}/api/state`)).json()) as Snapshot;
+  assert.deepEqual(reopened.companies, initial.companies);
+  assert.deepEqual(reopened.accounts, initial.accounts);
+  assert.equal(reopened.listings.length, initial.listings.length);
+  assert.equal(reopened.listings.find((row) => row.id === pair.id)?.itemId, null);
+});
 
 test('health identifies this instance and authenticated shutdown removes only its runtime record', async (t) => {
   const f = fixture(t);
@@ -271,6 +337,8 @@ test(
     const headers = { 'Content-Type': 'application/json', 'X-Stockbridge-Request': '1' };
     const stateResponse = await fetch(`${runtime.record.url}/api/state`);
     const state = (await stateResponse.json()) as Snapshot;
+    assert.deepEqual(state.companies, []);
+    assert.deepEqual(state.accounts, []);
     const settingsResponse = await fetch(`${runtime.record.url}/api/settings`, {
       method: 'POST',
       headers,

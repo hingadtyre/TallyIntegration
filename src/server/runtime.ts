@@ -209,6 +209,7 @@ export async function startRuntime(
       legacyConnection: flipkart,
     });
     await marketplaces.initialize();
+    if (mode === 'demo') store.installDemoWorkspace();
     service = new InventoryService(store, { diagnostics, marketplaces });
     app = createApp(
       service,

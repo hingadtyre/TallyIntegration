@@ -20,7 +20,7 @@ import {
   type BillingEvidence,
   type BillingScope,
 } from './billing-matcher.js';
-import { sampleBills, sampleLedger } from './billing-sample.js';
+import { sampleBills, sampleLedger, sampleOrderDate } from './billing-sample.js';
 import { invalidateReservationDrafts } from './proposals.js';
 import type { BillingData } from './storage/billing-records.js';
 import { mergeRetainedBillOrders, type StockAvailabilityService } from './stock-availability.js';
@@ -336,8 +336,8 @@ export class BillingService {
     return { listingId, sku, location, rows } satisfies PendingListingCheck;
   }
 
-  private async listLedgers(state: Snapshot, company: Company) {
-    if (state.mode === 'demo') return [sampleLedger(company.id)];
+  private async listLedgers(state: Snapshot, company: Company, accountId: string) {
+    if (state.mode === 'demo') return [sampleLedger(company.id, accountId)];
     try {
       const tally = this.sources.tally(state.settings.tallyUrl);
       return await tally.listLedgers({
@@ -361,13 +361,13 @@ export class BillingService {
     verifyAccess: () => void,
   ): Promise<{ ledgerName: string; evidence: BillingEvidence }> {
     if (state.mode === 'demo') {
-      const ledger = sampleLedger(company.id);
+      const ledger = sampleLedger(company.id, scope.accountId);
       if (spec.rule.ledgerId !== ledger.externalId)
         throw new InputError('Select a sample ledger for this company.');
-      const observed = state.items.find((item) => item.id === 'item-a')?.observedAt ?? null;
+      const sample = sampleBills(scope, sampleOrderDate(scope, state.items), spec.from, spec.to);
       return {
         ledgerName: ledger.name,
-        evidence: sampleBills(scope, observed, spec.from, spec.to),
+        evidence: { orders: sample.previewOrders, bills: sample.bills },
       };
     }
     const access = await token();
@@ -423,7 +423,8 @@ export class BillingService {
     const session = this.sessions.get(key);
     const saved = this.store.readBilling();
     const rule = configuredRule(saved, scope);
-    if (path === '/api/billing/ledgers') return { ledgers: await this.listLedgers(state, company) };
+    if (path === '/api/billing/ledgers')
+      return { ledgers: await this.listLedgers(state, company, accountId) };
     const trackingFrom = rule ? this.store.readBillingTrackingStart(company.id) : undefined;
     if (path === '/api/billing/workspace') {
       const current =
