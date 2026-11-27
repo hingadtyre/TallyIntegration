@@ -47,11 +47,11 @@ export class PollingLoop {
 
   settingsChanged(): void {
     // An active check keeps its current configuration. Its finally block reads new settings.
-    if (!this.inFlight) this.reschedule();
+    if (!this.inFlight || this.cancelTimer) this.reschedule();
   }
 
   async idle(): Promise<void> {
-    await this.inFlight?.catch(() => undefined);
+    while (this.inFlight) await this.inFlight.catch(() => undefined);
   }
 
   /** Background notifications can share a running pass; the next tick picks up later changes. */
@@ -60,19 +60,27 @@ export class PollingLoop {
       void this.runNow().catch((error) => this.options.unexpectedError(error));
   }
 
-  async runNow(task = this.options.task): Promise<void> {
-    // Manual company-specific requests serialize too; they never borrow another company's result.
-    while (this.inFlight) await this.inFlight.catch(() => undefined);
-    this.clearTimer();
-    this.options.nextRunChanged(null);
-    const run = this.perform(task);
+  /** Serialize a company-scoped action without moving the workspace's next scheduled poll. */
+  async runScoped(task: () => Promise<void>): Promise<void> {
+    const run = this.inFlight ? this.inFlight.catch(() => undefined).then(task) : task();
     this.inFlight = run;
     try {
       await run;
     } finally {
-      this.inFlight = null;
-      this.reschedule();
+      if (this.inFlight === run) this.inFlight = null;
     }
+  }
+
+  runNow(task = this.options.task): Promise<void> {
+    return this.runScoped(async () => {
+      this.clearTimer();
+      this.options.nextRunChanged(null);
+      try {
+        await this.perform(task);
+      } finally {
+        this.reschedule();
+      }
+    });
   }
 
   private async perform(task: () => Promise<boolean>): Promise<void> {
@@ -99,7 +107,9 @@ export class PollingLoop {
     this.options.nextRunChanged(new Date(this.timers.now() + delay).toISOString());
     this.cancelTimer = this.timers.schedule(() => {
       this.cancelTimer = null;
-      void this.runNow().catch((error) => this.options.unexpectedError(error));
+      void this.runNow(() =>
+        this.running && this.options.enabled() ? this.options.task() : Promise.resolve(true),
+      ).catch((error) => this.options.unexpectedError(error));
     }, delay);
   }
 }

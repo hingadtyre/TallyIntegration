@@ -152,6 +152,18 @@ export function ItemRows({
                 <span className="branch-line" />
                 <div>
                   <span className="sku">{listing.sku}</span>
+                  {!demo && listing.productUrl && (
+                    <a
+                      className="icon-button listing-product-link"
+                      href={listing.productUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`View ${listing.sku} on Flipkart (opens in a new tab)`}
+                      title="View product on Flipkart (opens in a new tab)"
+                    >
+                      <Icon name="external-link" />
+                    </a>
+                  )}
                   <p className="listing-title" title={listing.title}>
                     {listing.title}
                   </p>

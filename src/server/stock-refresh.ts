@@ -134,7 +134,7 @@ export class StockRefresh {
           message:
             'Could not discover Tally companies. Open Tally, load your company and check the connection address. Any previously saved stock is retained.',
           lastChecked: new Date().toISOString(),
-          nextPoll: null,
+          nextPoll: state.connection.nextPoll,
         };
         recordActivity(state, 'tally-refresh', state.connection.message, { level: 'warning' });
       });
@@ -157,7 +157,7 @@ export class StockRefresh {
         tally: 'online',
         message: 'Connected to Tally. Checking company stock.',
         lastChecked: new Date().toISOString(),
-        nextPoll: null,
+        nextPoll: state.connection.nextPoll,
       };
     });
     if (!connected) return false;

@@ -26,6 +26,15 @@ test('settings retain edits after rejection and show confirmed values after a su
   await screen.findByRole('heading', { name: 'Inventory' });
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   const interval = screen.getByRole('spinbutton', { name: /Tally stock/ }) as HTMLInputElement;
+  assert.equal(interval.value, '60');
+  assert.equal(
+    (screen.getByRole('spinbutton', { name: /^Marketplace orders/ }) as HTMLInputElement).value,
+    '300',
+  );
+  assert.equal(
+    (screen.getByRole('spinbutton', { name: /^Listings/ }) as HTMLInputElement).value,
+    '3600',
+  );
   const folder = screen.getByRole('textbox', { name: /Backup folder/ }) as HTMLInputElement;
   fireEvent.change(interval, { target: { value: '45' } });
   fireEvent.change(folder, { target: { value: 'new-backups' } });

@@ -86,7 +86,7 @@ Complete this with your Tally administrator or Stockbridge provider during first
 3. Include an item with stock, an item with zero, and a newly created item. If the business uses negative balances or different units, include those too.
 4. Confirm a Tally item appears even if it has no Flipkart listing. Imported marketplace listings can exist without a Tally mapping. A listing import does not verify a pack size or create a stock mapping.
 5. If another company is loaded, switch companies and confirm its quantities stay separate.
-6. After an ordinary sale is billed in Tally, use **Refresh Tally** and check the resulting quantity. Do the same after an ordinary stock receipt when practical. Do not create a fictitious live bill just to test the app.
+6. After an ordinary sale is billed in Tally, choose **Refresh inventory** in **Inventory** and check the resulting quantity. Do the same after an ordinary stock receipt when practical. Do not create a fictitious live bill just to test the app.
 7. Ask the provider to record the verified Tally release, company/item identities, units, reporting period and results. Differences must be investigated before the display is accepted.
 
 **This version reads company-wide closing balances.** A godown is a Tally stock location. Confirm the mapping only when this entire item's balance can fulfil orders at the selected Flipkart location. A business that needs separate godown balances for different warehouses must first agree how to allocate that stock.
@@ -131,6 +131,8 @@ For example, eight tyres with two kept back and one already reserved leave five 
 3. Confirm that this item's entire company balance supplies this location. For an eligible tyre listing, you may also select **Apply the Flipkart tyre minimum of 5**. With that option a positive number of complete sets advertises at least five. With zero complete sets, it advertises zero. Each mapped listing draws on the same physical balance, so check low stock carefully when several listings use one item.
 4. Choose **Save mapping**. The listing row now shows its **Set of** value and source. Choose the pencil in that cell to edit it, then **Save Set of**. The same workspace restores your mapping and choice when Stockbridge restarts.
 
+To view the product on Flipkart, select the square-and-arrow icon beside its SKU in **Inventory**. The page opens in a new tab. The icon appears when Flipkart supplies a product link for that listing. After upgrading, choose **Refresh listings** in **Marketplaces** to pick up links immediately, or wait for the scheduled refresh.
+
 With **Set of 2** and the tyre minimum switched off, 13 physical units give six complete sets, two units give one set, and one unit gives zero.
 
 ### Publish stock from Inventory
@@ -148,7 +150,7 @@ Open the automatic updates preview in **Inventory**. It covers every seller acco
 
 To check one result first, choose **Try one listing**, review the location and calculated quantity, then approve that listing’s update. In live mode this can change stock on Flipkart. When the two quantities already match, Stockbridge reports that result without sending stock. The trial preserves your drafts, stock policy and company setting. Open a fresh preview to enable automatic updates for the company.
 
-A Tally stock change recalculates eligible listings across all its participating seller accounts. With order coverage set up, Stockbridge also checks for new Flipkart sales on the **Marketplace stock** schedule. If two tyres supply both singles and pairs, selling one single can set the pair listing to zero as soon as Stockbridge verifies the sale. An order-triggered check only lowers stock. Repeated checks and billing the same sale count it once. **Refresh Tally** requests a check now.
+A Tally stock change recalculates eligible listings across the company’s participating seller accounts. With starting stock confirmed, Stockbridge also checks for new Flipkart sales on the **Marketplace orders** schedule. If two tyres supply both singles and pairs, selling one single can set the pair listing to zero as soon as Stockbridge verifies the sale. An order-triggered check only lowers stock. Repeated checks and billing the same sale count it once. Choose **Refresh inventory** to check now.
 
 Stockbridge fills in the first **Proposed** quantity when it verifies an order and checks it against Tally. This works whether you mapped the listing before or after the order arrived. Any unbilled units reduce the balance available to all listings for the same Tally item. Stockbridge refreshes calculated proposals as stock, keep-back, listing settings or reservations change. You can see the proposal with company sync off or a listing paused. A quantity you enter yourself stays yours to review. If an order is waiting for verification, saving a zero draft keeps that check pending.
 
@@ -224,12 +226,17 @@ For a large order history, a full check may repeatedly take longer than the two-
 
 ## 6. Understand refresh and background checks
 
-- The default Tally check interval is **30 seconds after the preceding check finishes**. A slow or failed check can make the next check later; failures cause longer waits before retrying.
-- To change it, open **Settings**, change the Tally stock interval and select **Save settings**. No Stockbridge restart is needed. Start with the default unless your provider has measured a reason to change it.
-- **Refresh Tally** requests a check now for the selected company. **Connections > Check & discover companies** discovers and reads the loaded companies.
-- Newly created stock items appear after a successful read. Their records are then saved in the local database; the list is not permanently fixed at installation.
-- The dashboard periodically reads the saved state too. Allow a little time for an automatic background result to appear, or use the refresh action.
-- **Settings > Marketplace stock** controls how often Stockbridge checks participating sellers for new Flipkart orders. **Listing metadata** controls the separate refresh of package counts and listing details. **Marketplaces > Refresh listings** requests a catalogue refresh now.
+In **Inventory**, choose **Refresh inventory** to check the selected company now. Stockbridge reads its Tally stock and refreshes listing details and package counts for its participating sellers. It includes the seller selected in Inventory when that account is ready to refresh. If a seller’s catalogue import is already running, Stockbridge can use that import. With starting stock confirmed, it also checks orders from the tracking date and updates reservations for verified unbilled sales. Company sync can publish eligible pending stock changes during the refresh. Paused listings keep their pause. Read the result to see which checks completed and which need attention.
+
+| Setting                | New workspace default   | What Stockbridge checks                                                                  |
+| ---------------------- | ----------------------- | ---------------------------------------------------------------------------------------- |
+| **Tally stock**        | 1 minute (60 seconds)   | Stock and new items in the companies open in Tally.                                      |
+| **Marketplace orders** | 5 minutes (300 seconds) | Orders from the confirmed starting stock date and the units reserved for unbilled sales. |
+| **Listings**           | 1 hour (3,600 seconds)  | Listing details, observed stock and package counts for seller accounts already imported. |
+
+To change a schedule, enter its interval in seconds in **Settings** and choose **Save settings**. Each interval starts after the previous check finishes. A failed check can delay the next one. Upgrades retain the saved values. The dashboard periodically picks up the results as they are saved.
+
+**Connections > Check & discover companies** discovers and reads the loaded Tally companies. **Marketplaces > Refresh listings** requests a catalogue import for one seller.
 
 Tally must be open with the relevant company loaded for fresh stock. Turning off the PC, sleeping it, signing out, closing Tally or stopping Stockbridge interrupts some or all of these checks. A restart of Windows does not automatically start this pilot; follow the daily startup steps below.
 
@@ -326,7 +333,7 @@ An application backup is not a rollback of Tally bills or marketplace orders. Pr
 | Correct company is missing                        | Load it in Tally, then discover again. Do not select another company merely because its name is similar.                                                                                                                                                |
 | Stock differs from Tally                          | Compare company, date/reporting period, units and company-wide totals. Record the example and ask support to investigate; do not replace unknown values with zero.                                                                                      |
 | Old stock remains after a failure                 | This is the last saved observation, not a successful new read. Follow the connection error and refresh successfully.                                                                                                                                    |
-| New Tally item is missing                         | Confirm it belongs to the selected company and use Refresh Tally after saving it in Tally.                                                                                                                                                              |
+| New Tally item is missing                         | Confirm it belongs to the selected company, save it in Tally and choose **Refresh inventory** in **Inventory**.                                                                                                                                         |
 | No Flipkart listings or a stock update is blocked | Open the intended account and choose **Refresh listings**. Check Tally freshness and the listing's **Set of** cell. Open **Review changes** for the reason on each blocked row.                                                                         |
 | API credentials are rejected or need attention    | Check the application belongs to the intended seller, its access is active, and the ID/secret were copied correctly. Use Check connection or Update credentials on the intended account tile, then Refresh listings. Do not send the secret to support. |
 | Self Access registration asks for a website       | Enter the public website for your own business or application. Ask your provider if you need help identifying the correct address.                                                                                                                      |

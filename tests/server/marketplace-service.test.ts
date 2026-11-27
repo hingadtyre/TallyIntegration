@@ -6,7 +6,11 @@ import {
   type FlipkartBillingOrder,
 } from '../../src/adapters/flipkart-billing.js';
 import type { TallySalesBill } from '../../src/adapters/tally.js';
-import type { FlipkartConnectionStatus, Snapshot } from '../../src/shared/contracts.js';
+import type {
+  FlipkartConnectionStatus,
+  InventoryRefreshResult,
+  Snapshot,
+} from '../../src/shared/contracts.js';
 import type { MarketplaceListing } from '../../src/shared/marketplace-contracts.js';
 import {
   MarketplaceService,
@@ -474,6 +478,107 @@ async function mappedInventory(
     },
   };
 }
+
+test('Inventory refresh shares concurrent reads and verifies eligible stock after the catalogue import', async (t) => {
+  const s = await mappedInventory(t);
+  const { companyId } = s.item;
+  s.service.automation(companyId, true);
+  s.setPhysical(18);
+  s.f.transportCalls.length = 0;
+  const checkOrders = t.mock.method(s.f.service, 'checkStockOrders');
+  const [first, concurrent] = await Promise.all([
+    s.service.refreshInventory(companyId, s.account.id),
+    s.service.refreshInventory(companyId),
+  ]);
+  assert.equal(concurrent.refresh.partial, false, concurrent.refresh.message);
+  assert.equal(first.refresh.partial, false, first.refresh.message);
+  assert.match(first.refresh.message, /Checked marketplace orders/);
+  assert.match(first.refresh.message, /1 stock update confirmed/);
+  assert.equal(checkOrders.mock.callCount(), 2);
+  assert.equal(s.f.transportCalls[0], 'listListings');
+  assert.equal(s.f.transportCalls.filter((call) => call === 'listListings').length, 1);
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [9],
+  );
+
+  s.remote.locations[0].quantity = 3;
+  const repeated = await s.service.refreshInventory(companyId);
+  assert.equal(repeated.listings.find((row) => row.id === s.listing.id)?.observed, 3);
+  assert.match(repeated.refresh.message, /No eligible stock updates/);
+  assert.equal(checkOrders.mock.callCount(), 3);
+  assert.equal(s.f.writes.length, 1);
+});
+
+test('Inventory refresh imports mapped, billing and selected sellers while Connections only discovers Tally', async (t) => {
+  const s = await mappedInventory(t, 'manual', { coverage: false });
+  const selected = await s.f.add('selected-seller');
+  const billing = await s.f.add('billing-seller');
+  await s.f.add('unrelated-seller');
+  const { companyId } = s.item;
+  s.f.store.updateBilling((data) =>
+    data.rules.push({
+      companyId,
+      accountId: billing.id,
+      ledgerId: 'ledger-b',
+      ledgerName: 'Billing',
+      field: 'manual',
+      reference: 'orderItemId',
+    }),
+  );
+  const app = createApp(s.service, s.f.folder, undefined, undefined, s.f.service);
+  const address = await listen(app);
+  t.after(() => close(app));
+  const post = (path: string, body: Record<string, unknown>) =>
+    fetch(address + '/api/' + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Stockbridge-Request': '1' },
+      body: JSON.stringify(body),
+    });
+  s.f.transportCalls.length = 0;
+  assert.equal((await post('refresh', {})).status, 200);
+  assert.equal((await post('inventory/refresh', { companyId, accountId: 'missing' })).status, 400);
+  assert.deepEqual(s.f.transportCalls, []);
+  const reply = await post('inventory/refresh', { companyId, accountId: selected.id });
+  assert.equal(reply.status, 200);
+  const { refresh } = (await reply.json()) as InventoryRefreshResult;
+  assert.equal(refresh.partial, false, refresh.message);
+  for (const name of ['seller-a', selected.name, billing.name])
+    assert.ok(refresh.message.includes(name));
+  assert.doesNotMatch(refresh.message, /unrelated-seller/);
+  assert.match(refresh.message, /Order tracking for stock is off/);
+  assert.deepEqual(s.f.transportCalls, ['listListings', 'listListings', 'listListings']);
+});
+
+test('an incomplete Inventory refresh keeps fresh Tally stock, cached listings and guarded updates', async (t) => {
+  const s = await mappedInventory(t);
+  const { companyId } = s.item;
+  s.service.automation(companyId, true);
+  s.setPhysical(18);
+  s.f.setFailImport(true);
+  const failed = await s.service.refreshInventory(companyId);
+  assert.equal(failed.refresh.partial, true);
+  assert.match(failed.refresh.message, /Could not refresh listings for seller-a/);
+  assert.match(failed.refresh.message, /order check incomplete/);
+  assert.match(failed.refresh.message, /1 stock update needs attention/);
+  assert.equal(failed.items.find((row) => row.id === s.item.id)?.physical, 18);
+  assert.equal(failed.listings.find((row) => row.id === s.listing.id)?.observed, 5);
+  assert.equal(s.f.writes.length, 0);
+  s.f.setFailImport(false);
+  s.setOrdersOffline(true);
+  const ordersOffline = await s.service.refreshInventory(companyId);
+  assert.equal(ordersOffline.refresh.partial, true);
+  assert.match(ordersOffline.refresh.message, /Refreshed listings for seller-a/);
+  assert.match(ordersOffline.refresh.message, /order check incomplete/);
+  assert.equal(s.f.writes.length, 0);
+  s.setOrdersOffline(false);
+  const retry = await s.service.refreshInventory(companyId);
+  assert.equal(retry.refresh.partial, false, retry.refresh.message);
+  assert.deepEqual(
+    s.f.writes.map((row) => row.quantity),
+    [9],
+  );
+});
 
 test('a direct stock override needs confirmation for its quantity and current keep-back evidence', async (t) => {
   const s = await mappedInventory(t, 'manual', { physical: 8, packSize: 2, tyreFloor: true });
@@ -2830,13 +2935,16 @@ test('Inventory keeps its original manual ceiling and checks even fully held-bac
   );
 });
 
-test('Inventory reads saved Flipkart identifiers by seller, SKU and location without refreshing the catalogue', async (t) => {
+test('Inventory reads saved Flipkart identifiers and product links by seller, SKU and location without refreshing the catalogue', async (t) => {
   const f = fixture(t);
   const sellerA = await f.add();
   const sellerB = await f.add('seller-b');
   const remoteB = f.remote.get('seller-b')![0];
   remoteB.id = 'listing-b';
-  remoteB.productId = 'product-b';
+  remoteB.productId = 'VTEHKARHWFSTGEPZ';
+  const productUrl =
+    'https://www.flipkart.com/fixture-tyre/p/itma260cf9358121?pid=VTEHKARHWFSTGEPZ';
+  remoteB.productUrl = productUrl;
   await f.service.refresh(sellerB.id);
   await f.restart();
   f.setFailImport(true);
@@ -2847,54 +2955,57 @@ test('Inventory reads saved Flipkart identifiers by seller, SKU and location wit
   assert.deepEqual(
     rows
       .filter((row) => row.accountId === sellerA.id)
-      .map((row) => [row.marketplaceListingId, row.productId]),
+      .map((row) => [row.marketplaceListingId, row.productId, row.productUrl]),
     [
-      ['listing-one', 'product-one'],
-      ['listing-one', 'product-one'],
+      ['listing-one', 'product-one', undefined],
+      ['listing-one', 'product-one', undefined],
     ],
   );
   assert.deepEqual(
     rows
       .filter((row) => row.accountId === sellerB.id)
-      .map((row) => [row.marketplaceListingId, row.productId]),
+      .map((row) => [row.marketplaceListingId, row.productId, row.productUrl]),
     [
-      ['listing-b', 'product-b'],
-      ['listing-b', 'product-b'],
+      ['listing-b', remoteB.productId, productUrl],
+      ['listing-b', remoteB.productId, productUrl],
     ],
   );
   assert.equal(f.transportCalls.length, calls);
   assert.ok(
     f.store
       .read()
-      .listings.every((row) => !('marketplaceListingId' in row) && !('productId' in row)),
+      .listings.every(
+        (row) =>
+          !('marketplaceListingId' in row) && !('productId' in row) && !('productUrl' in row),
+      ),
   );
 
   f.setFailImport(false);
-  f.remote.get('seller-a')![0].locations.shift();
-  await f.service.refresh(sellerA.id);
-  const remaining = inventory.snapshot().listings.filter((row) => row.accountId === sellerA.id);
+  remoteB.locations.shift();
+  await f.service.refresh(sellerB.id);
+  const remaining = inventory.snapshot().listings.filter((row) => row.accountId === sellerB.id);
   assert.deepEqual(
-    remaining.map((row) => [row.location, row.marketplaceListingId, row.productId]),
+    remaining.map((row) => [row.location, row.marketplaceListingId, row.productId, row.productUrl]),
     [
-      ['warehouse-a', undefined, undefined],
-      ['warehouse-b', 'listing-one', 'product-one'],
+      ['warehouse-a', undefined, undefined, undefined],
+      ['warehouse-b', 'listing-b', remoteB.productId, productUrl],
     ],
   );
-  const listingWithoutLocation = f.remote.get('seller-a')![0];
-  listingWithoutLocation.locations = [];
-  await f.service.refresh(sellerA.id);
+  remoteB.locations = [];
+  await f.service.refresh(sellerB.id);
   const pending = inventory
     .snapshot()
-    .listings.find((row) => row.accountId === sellerA.id && row.location === '')!;
-  assert.equal(pending.marketplaceListingId, listingWithoutLocation.id);
+    .listings.find((row) => row.accountId === sellerB.id && row.location === '')!;
+  assert.equal(pending.marketplaceListingId, remoteB.id);
+  assert.equal(pending.productUrl, productUrl);
   assert.deepEqual(pending.pickupChoices, []);
-  f.remote.set('seller-a', []);
-  await f.service.refresh(sellerA.id);
+  f.remote.set('seller-b', []);
+  await f.service.refresh(sellerB.id);
   assert.ok(
     inventory
       .snapshot()
-      .listings.filter((row) => row.accountId === sellerA.id)
-      .every((row) => !row.productId && !row.marketplaceListingId),
+      .listings.filter((row) => row.accountId === sellerB.id)
+      .every((row) => !row.productId && !row.marketplaceListingId && !row.productUrl),
   );
 });
 

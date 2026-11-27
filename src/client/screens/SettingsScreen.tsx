@@ -61,7 +61,7 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
             <Icon name="refresh" />
             <div>
               <h2>Refresh intervals</h2>
-              <p>Each running check finishes before the next one begins.</p>
+              <p>Each interval starts when its previous check finishes.</p>
             </div>
           </div>
           <div className="setting-fields">
@@ -80,10 +80,13 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
                 />
                 <span>seconds</span>
               </div>
-              <small>Active when the Tally connection is available.</small>
+              <small>
+                Reads stock from companies open in Tally. With company sync on, balance changes can
+                update mapped listings.
+              </small>
             </label>
             <label className="field">
-              <span>Marketplace stock</span>
+              <span>Marketplace orders</span>
               <div className="input-with-unit">
                 <input
                   disabled={busy === 'Saving settings'}
@@ -98,12 +101,12 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
                 <span>seconds</span>
               </div>
               <small>
-                Checks Flipkart orders from each company’s confirmed tracking date. When company
-                sync is on, a sale can lower stock on other listings that share the item.
+                Checks orders from the confirmed stock-tracking date and reserves units for verified
+                sales awaiting a Tally bill.
               </small>
             </label>
             <label className="field">
-              <span>Listing metadata</span>
+              <span>Listings</span>
               <div className="input-with-unit">
                 <input
                   disabled={busy === 'Saving settings'}
@@ -117,7 +120,10 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
                 />
                 <span>seconds</span>
               </div>
-              <small>Refreshes listings and package counts for accounts already imported.</small>
+              <small>
+                Refreshes prices, stock by pickup location, package counts and product links from
+                connected seller catalogues.
+              </small>
             </label>
           </div>
         </section>

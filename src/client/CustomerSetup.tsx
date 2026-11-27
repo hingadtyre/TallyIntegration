@@ -32,8 +32,8 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           <span>
             Select the intended Tally company at the top, then open Inventory. Compare several items
             and quantities with Tally for the same company and date. The figures are company totals,
-            not separate godown balances. A dash means unknown, not zero. Use Refresh Tally after a
-            normal stock change and check the observation time.
+            not separate godown balances. A dash means unknown, not zero. After an ordinary stock
+            change, choose Refresh inventory and check the observation time.
           </span>
         </li>
         <li>
@@ -87,6 +87,18 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
       <details className="guide-topic">
         <summary>Map listings and manage stock updates</summary>
         <p>
+          Refresh inventory reads Tally stock and updates listings for the company’s participating
+          sellers. It also includes the seller selected in Inventory when its listings are available
+          to refresh. Once you confirm starting stock, it checks orders and the units reserved for
+          unbilled sales. With company sync on, eligible listings can update on Flipkart. The result
+          tells you which checks succeeded and which need attention.
+        </p>
+        <p>
+          New workspaces check Tally stock every minute, Marketplace orders every five minutes and
+          Listings every hour. To change a schedule, enter the interval in seconds in Settings and
+          choose Save settings. Upgrading keeps your saved intervals.
+        </p>
+        <p>
           In Inventory, select the company and seller account, then choose Map listing on the Tally
           item. Open Flipkart listing and search by seller SKU, product title when available, FSN
           (Flipkart product ID) or Flipkart listing ID. If Flipkart supplied no stock location,
@@ -96,6 +108,10 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           your own number. Confirm that the company-wide balance supplies the selected Flipkart
           location. Enable the tyre minimum only for eligible tyre listings. Stockbridge saves these
           choices in this workspace and reloads them on restart.
+        </p>
+        <p>
+          The arrow beside a mapped SKU in Inventory opens its public Flipkart product page in a new
+          tab. After upgrading, choose Refresh listings in Marketplaces to pick up product links.
         </p>
         <p>
           To set stock aside, edit Keep back from marketplaces beside the item's Tally stock. Enter

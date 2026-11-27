@@ -118,6 +118,8 @@ async function runCommand(
   switch (path) {
     case '/api/refresh':
       return service.refresh(input.companyId);
+    case '/api/inventory/refresh':
+      return service.refreshInventory(input.companyId, input.accountId);
     case '/api/calculate':
       return service.calculateAvailable(input.companyId, input.listingIds);
     case '/api/zero':

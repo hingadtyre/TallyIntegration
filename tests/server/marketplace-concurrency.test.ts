@@ -27,6 +27,8 @@ function fixture(t: TestContext) {
   const base = serverFixture(t, 'live');
   const credentials = new Map<string, string>();
   const remote = new Map<string, MarketplaceListing>();
+  const imports: string[] = [];
+  const failedImports = new Set<string>();
   const writes: Array<{ token: string; kind: 'stock' | 'price' }> = [];
   let importGate: ReturnType<typeof gate> | null = null;
   let readGate: ReturnType<typeof gate> | null = null;
@@ -63,6 +65,8 @@ function fixture(t: TestContext) {
   const legacy = connection('flipkart-primary');
   const client: ListingTransport = {
     async listListings(token, accountId) {
+      imports.push(token);
+      if (failedImports.has(token)) throw new FlipkartListingError('Fixture import failed');
       const row = remote.get(token);
       const result = row ? [{ ...structuredClone(row), accountId }] : [];
       const blocked = importGate;
@@ -129,13 +133,13 @@ function fixture(t: TestContext) {
   function listing(accountId: string) {
     return service.page(new URLSearchParams({ accountId })).listings[0];
   }
-  async function add() {
+  async function add(sellerId = 'seller-a', verify = false) {
     return service.add({
       marketplace: 'flipkart',
       name: 'Fixture seller',
-      applicationId: 'seller-a',
+      applicationId: sellerId,
       applicationSecret: 'fixture-only',
-      verify: false,
+      verify,
     });
   }
   function stock(accountId: string) {
@@ -153,6 +157,8 @@ function fixture(t: TestContext) {
     service,
     legacy,
     writes,
+    imports,
+    failedImports,
     listing,
     add,
     stock,
@@ -166,6 +172,99 @@ function fixture(t: TestContext) {
     },
   };
 }
+
+test('Inventory, scheduled and Marketplace refreshes share pending and active catalogue reads', async (t) => {
+  const f = fixture(t);
+  const account = await f.add('seller-a', true);
+  const ids = new Set([account.id]);
+  const gate = f.blockImport();
+  const scheduled = f.service.refreshInventoryAccounts();
+  const pending = f.service.refreshInventoryCatalogues(ids);
+  await gate.entered.promise;
+  const marketplace = f.service.refresh(account.id);
+  const active = f.service.refreshInventoryCatalogues(ids);
+  gate.released.resolve();
+  const [backgroundOk, inventory, market, secondInventory] = await Promise.all([
+    scheduled,
+    pending,
+    marketplace,
+    active,
+  ]);
+  assert.equal(backgroundOk, true);
+  assert.equal(market.account.catalogOwnershipVerified, true);
+  assert.deepEqual(inventory, [{ accountId: account.id, name: account.name, status: 'refreshed' }]);
+  assert.deepEqual(secondInventory, inventory);
+  assert.deepEqual(f.imports, ['seller-a', 'seller-a']); // First connection and one shared import.
+  assert.deepEqual(await f.service.refreshInventoryCatalogues(ids), inventory);
+  assert.deepEqual(f.imports, ['seller-a', 'seller-a', 'seller-a']);
+  assert.deepEqual(f.writes, []);
+});
+
+test('Inventory reports each requested seller, recovers a verified failed first import and skips saved-only access', async (t) => {
+  const f = fixture(t);
+  f.failedImports.add('seller-b');
+  const first = await f.add('seller-a', true);
+  const second = await f.add('seller-b', true);
+  const saved = await f.add('saved-only');
+  const requested = new Set([first.id, second.id, saved.id]);
+  const partial = await f.service.refreshInventoryCatalogues(requested);
+  assert.deepEqual(
+    partial.map((row) => row.status),
+    ['refreshed', 'failed', 'skipped'],
+  );
+  f.failedImports.clear();
+  const before = f.imports.length;
+  const recovered = await f.service.refreshInventoryCatalogues(new Set([second.id]));
+  assert.deepEqual(recovered, [{ accountId: second.id, name: second.name, status: 'refreshed' }]);
+  assert.deepEqual(f.imports.slice(before), ['seller-b']);
+  assert.ok(!f.imports.includes('saved-only'));
+  assert.deepEqual(f.writes, []);
+});
+
+test('Inventory shares an active connection-triggered import and the timer reads sellers sequentially', async (t) => {
+  const f = fixture(t);
+  const first = await f.add();
+  const importing = f.blockImport();
+  const check = f.service.changeConnection({ accountId: first.id, action: 'check' });
+  await importing.entered.promise;
+  const joined = f.service.refreshInventoryCatalogues(new Set([first.id]));
+  importing.released.resolve();
+  await check;
+  assert.equal((await joined)[0].status, 'refreshed');
+  assert.deepEqual(f.imports, ['seller-a']);
+  await f.add('seller-b', true);
+  const scheduledGate = f.blockImport();
+  const scheduled = f.service.refreshInventoryAccounts();
+  await scheduledGate.entered.promise;
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(f.imports, ['seller-a', 'seller-b', 'seller-a']);
+  } finally {
+    scheduledGate.released.resolve();
+  }
+  assert.equal(await scheduled, true);
+  assert.deepEqual(f.imports, ['seller-a', 'seller-b', 'seller-a', 'seller-b']);
+});
+
+test('Inventory refresh after a queued credential save skips the replacement and does not join the old import', async (t) => {
+  const f = fixture(t);
+  const seller = await f.add('seller-a', true);
+  const gate = f.blockImport();
+  const first = f.service.refresh(seller.id);
+  await gate.entered.promise;
+  const save = f.service.changeConnection({
+    accountId: seller.id,
+    action: 'save',
+    applicationId: 'seller-b',
+    applicationSecret: 'fixture-only',
+  });
+  const later = f.service.refreshInventoryCatalogues(new Set([seller.id]));
+  gate.released.resolve();
+  await Promise.all([first, save]);
+  assert.deepEqual(await later, [{ accountId: seller.id, name: seller.name, status: 'skipped' }]);
+  assert.deepEqual(f.imports, ['seller-a', 'seller-a']);
+  assert.equal(f.service.catalogVerified(seller.id), false);
+});
 
 test('queued refresh uses the seller binding established by an earlier refresh', async (t) => {
   const f = fixture(t);

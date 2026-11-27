@@ -74,6 +74,38 @@ test('Inventory orders mapped listings by the displayed Set of, then SKU and pic
   );
 });
 
+for (const mode of ['live', 'demo'] as const) {
+  test(`Inventory shows a product link only for a live listing with a supplied URL (${mode})`, async (t) => {
+    const state = initialState('demo', 'unused');
+    state.mode = mode;
+    const listing = state.listings.find((row) => row.itemId === 'item-a')!;
+    listing.productUrl = 'https://www.flipkart.com/sample-tyre/p/itm123?pid=FSN123';
+    t.mock.method(globalThis, 'fetch', async () => response(state));
+    render(<App />);
+
+    const select = (await screen.findByRole('checkbox', {
+      name: `Select ${listing.sku}`,
+    })) as HTMLInputElement;
+    const links = screen.queryAllByRole('link', { name: /on Flipkart \(opens in a new tab\)/ });
+    if (mode === 'demo') {
+      assert.equal(links.length, 0);
+      return;
+    }
+    assert.equal(links.length, 1);
+    const link = within(select.closest('tr')!).getByRole('link', {
+      name: `View ${listing.sku} on Flipkart (opens in a new tab)`,
+    });
+    assert.equal(link.getAttribute('href'), listing.productUrl);
+    assert.equal(link.getAttribute('target'), '_blank');
+    assert.ok(link.getAttribute('rel')?.includes('noopener'));
+    link.focus();
+    assert.equal(document.activeElement, link);
+    fireEvent.click(link);
+    assert.equal(select.checked, false);
+    assert.equal(screen.queryByRole('dialog'), null);
+  });
+}
+
 test('edits keep-back on a collapsed Tally item, previews order reservations, and saves only on request', async (t) => {
   const state = initialState('demo', 'unused');
   const item = state.items.find((row) => row.id === 'item-a')!;
@@ -1139,7 +1171,7 @@ for (const blocked of [false, true]) {
   });
 }
 
-test('failed refresh retains the shown stock and a retry uses the selected company', async (t) => {
+test('failed inventory refresh retains stock and retries the selected company and seller', async (t) => {
   const state = initialState('demo', 'unused');
   let refreshes = 0;
   t.mock.method(
@@ -1147,24 +1179,33 @@ test('failed refresh retains the shown stock and a retry uses the selected compa
     'fetch',
     async (input: string | URL | Request, options?: RequestInit) => {
       if (String(input) === '/api/state') return response(state);
-      assert.equal(String(input), '/api/refresh');
-      assert.deepEqual(JSON.parse(String(options?.body)), { companyId: 'demo-b' });
+      assert.equal(String(input), '/api/inventory/refresh');
+      assert.deepEqual(JSON.parse(String(options?.body)), {
+        companyId: 'demo-b',
+        accountId: 'flipkart-primary',
+      });
       refreshes++;
       return refreshes === 1
         ? response({ error: 'Tally is offline. Saved observations were retained.' }, 503)
-        : response(state);
+        : response({
+            ...state,
+            refresh: { partial: false, message: 'Stock and listings refreshed.' },
+          });
     },
   );
   render(<App />);
   await screen.findByRole('heading', { name: 'Inventory' });
   fireEvent.change(screen.getByLabelText('Tally company'), { target: { value: 'demo-b' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh Tally' }));
+  fireEvent.change(screen.getByLabelText('Seller account'), {
+    target: { value: 'flipkart-primary' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh inventory' }));
   assert.match((await screen.findByRole('alert')).textContent ?? '', /Tally is offline/);
   assert.ok(screen.getByText('SAMPLE-BRANCH-1'));
   assert.ok(within(screen.getByRole('row', { name: /SAMPLE-BRANCH-1/ })).getByText('20'));
 
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh Tally' }));
-  await screen.findByText('Refresh completed. Saved observations are shown below.');
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh inventory' }));
+  await screen.findByText('Stock and listings refreshed.');
   assert.equal(refreshes, 2);
   assert.equal(screen.queryByRole('alert'), null);
 });
@@ -1183,14 +1224,23 @@ for (const view of ['Inventory', 'Connections'] as const) {
       async (input: string | URL | Request, options?: RequestInit) => {
         if (String(input) === '/api/state') return response(state);
         if (String(input) === '/api/flipkart/connection') return response(disconnectedFlipkart);
-        assert.equal(String(input), '/api/refresh');
+        assert.equal(
+          String(input),
+          view === 'Inventory' ? '/api/inventory/refresh' : '/api/refresh',
+        );
         assert.deepEqual(
           JSON.parse(String(options?.body)),
-          view === 'Inventory' ? { companyId: 'demo-a' } : {},
+          view === 'Inventory' ? { companyId: 'demo-a', accountId: 'flipkart-primary' } : {},
         );
         refreshes++;
         return response({
           ...state,
+          ...(view === 'Inventory' && {
+            refresh: {
+              partial: refreshes === 1,
+              message: refreshes === 1 ? failure : 'Stock and listings refreshed.',
+            },
+          }),
           connection: {
             ...state.connection,
             tally: refreshes === 1 ? 'offline' : 'online',
@@ -1203,7 +1253,7 @@ for (const view of ['Inventory', 'Connections'] as const) {
     await screen.findByRole('heading', { name: 'Inventory' });
     if (view === 'Connections')
       fireEvent.click(screen.getByRole('button', { name: 'Connections' }));
-    const action = view === 'Inventory' ? 'Refresh Tally' : 'Check & discover companies';
+    const action = view === 'Inventory' ? 'Refresh inventory' : 'Check & discover companies';
     fireEvent.click(screen.getByRole('button', { name: action }));
 
     await waitFor(() =>
@@ -1225,7 +1275,11 @@ for (const view of ['Inventory', 'Connections'] as const) {
     if (view === 'Connections')
       fireEvent.click(screen.getByRole('button', { name: 'Connections' }));
     fireEvent.click(screen.getByRole('button', { name: action }));
-    await screen.findByText('Refresh completed. Saved observations are shown below.');
+    await screen.findByText(
+      view === 'Inventory'
+        ? 'Stock and listings refreshed.'
+        : 'Refresh completed. Saved observations are shown below.',
+    );
     assert.equal(screen.queryByRole('alert'), null);
     assert.ok(screen.getByText('Tally connected'));
     assert.equal(refreshes, 2);
@@ -1433,7 +1487,7 @@ test('a filtered quantity edit blocks review until saved and stays separate from
           };
         return response({ ...state, calculation: [{ listingId: 'listing-2', status: 'ready' }] });
       }
-      if (path === '/api/refresh') {
+      if (path === '/api/inventory/refresh') {
         state = {
           ...state,
           proposals: state.proposals.map((draft) => ({
@@ -1444,7 +1498,10 @@ test('a filtered quantity edit blocks review until saved and stays separate from
             createdAt: '2026-11-23T10:00:00.000Z',
           })),
         };
-        return response(state);
+        return response({
+          ...state,
+          refresh: { partial: false, message: 'Stock and listings refreshed.' },
+        });
       }
       if (path === '/api/proposals') {
         assert.equal(body.listingId, 'listing-2');
@@ -1481,8 +1538,8 @@ test('a filtered quantity edit blocks review until saved and stays separate from
   fireEvent.change(screen.getByLabelText('Proposed stock for SAMPLE-CEAT-2-2'), {
     target: { value: '1' },
   });
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh Tally' }));
-  await screen.findByText('Refresh completed. Saved observations are shown below.');
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh inventory' }));
+  await screen.findByText('Stock and listings refreshed.');
   assert.equal(
     (screen.getByLabelText('Proposed stock for SAMPLE-CEAT-2-2') as HTMLInputElement).value,
     '1',

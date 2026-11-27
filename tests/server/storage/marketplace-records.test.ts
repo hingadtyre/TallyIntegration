@@ -23,6 +23,7 @@ test('marketplace observations and changes survive restart and Inventory updates
   const f = fixture(t);
   const store = f.open();
   const expected = marketplaceData(store.read().accounts[0].id);
+  expected.listings[0].productUrl = 'https://www.flipkart.com/tyre/p/itm123?pid=product-1';
   const result = store.updateMarketplace((market, state) => {
     Object.assign(market, expected);
     state.listings[0].paused = true;
@@ -41,6 +42,20 @@ test('marketplace observations and changes survive restart and Inventory updates
   const backup = join(f.directory, 'marketplace.sqlite');
   reopened.backup(backup);
   assert.deepEqual(queryFile(backup, readMarketplace), expected);
+});
+
+test('missing or unsafe saved product links leave the catalogue readable', (t) => {
+  const f = fixture(t);
+  const store = f.open();
+  const expected = marketplaceData(store.read().accounts[0].id);
+  store.updateMarketplace((market) => Object.assign(market, expected));
+  assert.deepEqual(f.open().readMarketplace(), expected);
+  queryFile(f.file, (database) =>
+    database
+      .prepare("UPDATE marketplace_listings SET metadata = json_set(metadata, '$.productUrl', ?)")
+      .run('https://outside.example/tyre/p/itm123'),
+  );
+  assert.deepEqual(f.open().readMarketplace(), expected);
 });
 
 test('a failed marketplace update rolls back the change and its Inventory pause together', (t) => {

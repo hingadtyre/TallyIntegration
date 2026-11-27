@@ -64,13 +64,20 @@ test('a new live workspace is empty and a reopened workspace requires fresh sour
   assert.deepEqual(initial.proposals, []);
   assert.equal(initial.publishingEnabled, false);
   assert.deepEqual(initial.accounts, []);
+  assert.equal(initial.settings.tallySeconds, 60);
+  assert.equal(initial.settings.marketplaceSeconds, 300);
+  assert.equal(initial.settings.catalogSeconds, 3600);
   store.update((state) => {
-    state.settings.tallySeconds = 45;
+    state.settings.tallySeconds = 30;
+    state.settings.marketplaceSeconds = 420;
+    state.settings.catalogSeconds = 900;
     state.connection.tally = 'online';
     state.connection.nextPoll = new Date().toISOString();
   });
   const reopened = f.open('live').read();
-  assert.equal(reopened.settings.tallySeconds, 45);
+  assert.equal(reopened.settings.tallySeconds, 30);
+  assert.equal(reopened.settings.marketplaceSeconds, 420);
+  assert.equal(reopened.settings.catalogSeconds, 900);
   assert.equal(reopened.connection.tally, 'not-checked');
   assert.equal(reopened.connection.nextPoll, null);
   assert.deepEqual(reopened.accounts, []);

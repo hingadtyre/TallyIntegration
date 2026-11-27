@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { normalizeFlipkartProductUrl } from '../../shared/flipkart-product-url.js';
 import type {
   MarketplaceAccountRecord,
   MarketplaceChange,
@@ -120,6 +121,8 @@ function listing(value: unknown, field: string): MarketplaceListing {
     result.locations.map((entry) => entry.id),
     `${field}.locations`,
   );
+  const productUrl = normalizeFlipkartProductUrl(row.productUrl, result.productId);
+  if (productUrl) result.productUrl = productUrl;
   return result;
 }
 

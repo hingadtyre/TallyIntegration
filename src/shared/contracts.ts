@@ -41,6 +41,8 @@ export interface Listing {
   /** Read-only identifiers from this destination's last successful catalogue import. */
   productId?: string;
   marketplaceListingId?: string;
+  /** Public product page supplied by Flipkart for the matched listing. */
+  productUrl?: string;
   /** Read-only status of automatic publication for this destination. */
   automationStatus?: string;
   /** A tracked order needs a stock check, even when the seller has saved a manual draft. */
@@ -97,6 +99,9 @@ export interface CalculationRow {
 /** Per-row results belong only to the Calculate command that requested them. */
 export interface CalculationResult extends Snapshot {
   calculation: CalculationRow[];
+}
+export interface InventoryRefreshResult extends Snapshot {
+  refresh: { message: string; partial: boolean };
 }
 export interface Activity {
   id: string;

@@ -892,6 +892,17 @@ small {
   overflow-wrap: anywhere;
 }
 
+.listing-product-link {
+  margin-inline-start: 4px;
+  vertical-align: middle;
+  color: #2453df;
+}
+
+.listing-product-link .icon {
+  width: 20px;
+  height: 20px;
+}
+
 .listing-title {
   font-size: var(--font-caption);
   line-height: 1.5;

@@ -8,6 +8,8 @@ import type {
   CalculationResult,
   Listing,
   InventoryPublishResult,
+  InventoryPublishRow,
+  InventoryRefreshResult,
   Proposal,
   Review,
   Snapshot,
@@ -33,6 +35,7 @@ import {
 } from './proposals.js';
 import { saveSettings } from './settings.js';
 import { StockRefresh, type TallyReaderFactory } from './stock-refresh.js';
+import { stockConfiguration } from './stock-configuration.js';
 import type { Store } from './store.js';
 import { InputError, requireCompany, requireListings, requireWholeNumber } from './validation.js';
 
@@ -45,10 +48,40 @@ interface InventoryDependencies {
   timers?: PollingTimers;
 }
 
+interface StockPass {
+  ordersChecked: number;
+  orderFailures: number;
+  updates: Map<string, InventoryPublishRow>;
+}
+
+function describeStockPass(pass: StockPass) {
+  const messages = [];
+  if (pass.orderFailures) messages.push('Marketplace order check incomplete. See Activity.');
+  else if (pass.ordersChecked) messages.push('Checked marketplace orders for stock reservations.');
+  else messages.push('Order tracking for stock is off.');
+
+  const rows = [...pass.updates.values()];
+  const confirmed = rows.filter((row) => row.status === 'confirmed').length;
+  const unchanged = rows.filter((row) => row.status === 'unchanged').length;
+  const attention = rows.length - confirmed - unchanged;
+  if (confirmed)
+    messages.push(
+      `${confirmed} stock ${confirmed === 1 ? 'update confirmed' : 'updates confirmed'}.`,
+    );
+  if (unchanged) messages.push(`${unchanged} already at the calculated stock.`);
+  if (attention)
+    messages.push(
+      `${attention} stock ${attention === 1 ? 'update needs' : 'updates need'} attention. See Activity.`,
+    );
+  if (!rows.length) messages.push('No eligible stock updates were queued.');
+  return { message: messages.join(' '), partial: pass.orderFailures > 0 || attention > 0 };
+}
+
 /** Application commands own inventory transactions; collaborators own external work. */
 export class InventoryService {
   readonly diagnostics: Diagnostics;
   private readonly stockRefresh: StockRefresh;
+  private readonly inventoryRefreshes = new Set<Promise<InventoryRefreshResult>>();
   private readonly polling: PollingLoop;
   private readonly catalogPolling: PollingLoop;
   private readonly orderPolling: PollingLoop;
@@ -102,7 +135,7 @@ export class InventoryService {
       timers: dependencies.timers,
     });
     this.orderPolling = new PollingLoop({
-      task: () => this.syncPending(undefined, true),
+      task: async () => (await this.syncPending(undefined, true)).orderFailures === 0,
       intervalMilliseconds: () => store.read().settings.marketplaceSeconds * 1000,
       enabled: () => !!this.marketplaces && store.read().mode === 'live',
       nextRunChanged: () => {},
@@ -128,24 +161,18 @@ export class InventoryService {
       const matches = catalog.listingsFor(row);
       if (matches.length !== 1) continue;
       const [listing] = matches;
-      if (
-        listing.observedAt &&
-        row.skuMappingId === listing.id &&
-        (!row.location || !listing.locations.length)
-      ) {
+      if (!listing.observedAt) continue;
+      if (row.skuMappingId === listing.id && (!row.location || !listing.locations.length)) {
         if (!row.location) row.pickupChoices = pickupChoices(market.listings, listing);
-        row.productId = listing.productId;
-        row.marketplaceListingId = listing.id;
+      } else if (
+        !row.observedAt ||
+        !listing.locations.some((location) => location.id === row.location)
+      ) {
         continue;
       }
-      if (
-        !row.observedAt ||
-        !listing.observedAt ||
-        !listing.locations.some((location) => location.id === row.location)
-      )
-        continue;
       row.productId = listing.productId;
       row.marketplaceListingId = listing.id;
+      if (state.mode === 'live' && listing.productUrl) row.productUrl = listing.productUrl;
     }
     this.marketplaces?.describeAutomation(state, market, state.listings, catalog);
     if (state.mode === 'live') {
@@ -913,6 +940,86 @@ export class InventoryService {
     return this.snapshot();
   }
 
+  async refreshInventory(
+    companyId?: unknown,
+    accountId?: unknown,
+  ): Promise<InventoryRefreshResult> {
+    const state = this.snapshot();
+    // Before the first company is discovered, Refresh can read Tally without operating on
+    // another company's reservations or queued updates.
+    const company =
+      companyId === undefined && !state.companies.length
+        ? undefined
+        : requireCompany(state, companyId);
+    const accounts = new Set(
+      company
+        ? stockConfiguration(
+            state,
+            this.store.readMarketplace(),
+            this.store.readBilling(),
+            company.id,
+          ).accounts
+        : [],
+    );
+    if (accountId !== undefined) {
+      const account = state.accounts.find((row) => row.id === accountId);
+      if (!account) throw new InputError('Select a valid seller account.');
+      accounts.add(account.id);
+    }
+    const run = this.refreshInventorySources(company?.id, accounts);
+    this.inventoryRefreshes.add(run);
+    try {
+      return await run;
+    } finally {
+      this.inventoryRefreshes.delete(run);
+    }
+  }
+
+  private async refreshInventorySources(
+    companyId: string | undefined,
+    accounts: ReadonlySet<string>,
+  ): Promise<InventoryRefreshResult> {
+    const marketplaces = this.marketplaces;
+    const catalogues = marketplaces ? await marketplaces.refreshInventoryCatalogues(accounts) : [];
+    const messages: string[] = [];
+    let partial = false;
+    if (!marketplaces) {
+      messages.push('Marketplace checks are unavailable.');
+      partial = true;
+    } else if (!catalogues.length) {
+      messages.push('No participating sellers to refresh.');
+    } else {
+      const refreshed = catalogues.filter((row) => row.status === 'refreshed');
+      const failed = catalogues.filter((row) => row.status === 'failed');
+      const skipped = catalogues.filter((row) => row.status === 'skipped');
+      if (refreshed.length)
+        messages.push(`Refreshed listings for ${refreshed.map((row) => row.name).join(', ')}.`);
+      if (failed.length)
+        messages.push(
+          `Could not refresh listings for ${failed.map((row) => row.name).join(', ')}.`,
+        );
+      if (skipped.length)
+        messages.push(
+          `Skipped listings for ${skipped.map((row) => row.name).join(', ')}. Check the seller connection.`,
+        );
+      partial = failed.length > 0 || skipped.length > 0;
+    }
+    await this.polling.runScoped(async () => {
+      const tallyOk = await this.stockRefresh.run(companyId);
+      messages.unshift(this.store.read().connection.message);
+      if (!tallyOk) partial = true;
+      if (companyId && marketplaces) {
+        await this.orderPolling.runScoped(async () => {
+          const pass = await this.syncPending(companyId, true);
+          const report = describeStockPass(pass);
+          messages.push(report.message);
+          if (report.partial) partial = true;
+        });
+      }
+    });
+    return { ...this.snapshot(), refresh: { message: messages.join(' '), partial } };
+  }
+
   private async refreshAndSync(companyId?: string, checkOrders = false): Promise<boolean> {
     const success = await this.stockRefresh.run(companyId);
     if (!this.marketplaces || (!success && !checkOrders)) return success;
@@ -924,7 +1031,7 @@ export class InventoryService {
     companyId: string | undefined,
     checkOrders: boolean,
     batch = {},
-  ): Promise<boolean> {
+  ): Promise<StockPass> {
     this.publishingBatches.add(batch);
     try {
       return await this.runStockPass(companyId, checkOrders, batch);
@@ -934,12 +1041,11 @@ export class InventoryService {
   }
 
   private async runStockPass(companyId: string | undefined, checkOrders: boolean, batch: object) {
-    if (!this.marketplaces) return true;
-    const attempted = new Set<string>();
-    let success = true;
+    const pass: StockPass = { ordersChecked: 0, orderFailures: 0, updates: new Map() };
+    if (!this.marketplaces) return pass;
     if (checkOrders) {
       // Known zero quantities can proceed before reading order history.
-      await this.publishPending(companyId, batch, attempted, true);
+      await this.publishPending(companyId, batch, pass.updates, true);
       const state = this.store.read();
       for (const company of state.companies) {
         if ((companyId && companyId !== company.id) || !this.store.readStockCoverage(company.id))
@@ -947,11 +1053,12 @@ export class InventoryService {
         const key = 'orders:' + company.id;
         try {
           await this.marketplaces.checkStockOrders(company.id, batch);
+          pass.ordersChecked++;
           this.marketplaces.blockedSyncReasons.delete(key);
         } catch (error) {
-          success = false;
           const reason =
-            error instanceof InputError ? error.message : 'Check the Flipkart account and retry.';
+            error instanceof InputError ? error.message : 'Check the seller connection and retry.';
+          pass.orderFailures++;
           if (this.marketplaces.blockedSyncReasons.get(key) !== reason) {
             this.marketplaces.blockedSyncReasons.set(key, reason);
             this.store.update((current) =>
@@ -966,17 +1073,17 @@ export class InventoryService {
         }
       }
     }
-    await this.publishPending(companyId, batch, attempted, false);
+    await this.publishPending(companyId, batch, pass.updates, false);
     // A calculated Tally publication can itself discover orders for another
     // item. Pick up those destinations in this pass, without retrying failures.
-    if (attempted.size) await this.publishPending(companyId, batch, attempted, false);
-    return success;
+    if (pass.updates.size) await this.publishPending(companyId, batch, pass.updates, false);
+    return pass;
   }
 
   private async publishPending(
     companyId: string | undefined,
     batch: object,
-    attempted: Set<string>,
+    attempted: Map<string, InventoryPublishRow>,
     zeroOnly: boolean,
   ): Promise<void> {
     if (!this.marketplaces) return;
@@ -1007,7 +1114,6 @@ export class InventoryService {
     }
     work.sort((a, b) => Number(b.zero) - Number(a.zero));
     for (const { listing, item } of work) {
-      attempted.add(listing.id);
       const orderOnly = listing.syncPendingItemVersion == null ? listing.orderSyncPending : null;
       const result = await this.marketplaces.publishInventory(
         {
@@ -1019,6 +1125,7 @@ export class InventoryService {
         },
         batch,
       );
+      attempted.set(listing.id, result);
       if (result.status !== 'blocked') {
         this.marketplaces.blockedSyncReasons.delete(listing.id);
         continue;
@@ -1082,6 +1189,7 @@ export class InventoryService {
     this.draftPolling.stop();
   }
   async idle(): Promise<void> {
+    await Promise.allSettled(this.inventoryRefreshes);
     await Promise.all([
       this.polling.idle(),
       this.catalogPolling.idle(),

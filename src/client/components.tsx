@@ -16,6 +16,7 @@ export type IconName =
   | 'check'
   | 'close'
   | 'arrow'
+  | 'external-link'
   | 'lock'
   | 'pause'
   | 'box'
@@ -74,6 +75,9 @@ const iconPaths: Record<IconName, ReactNode> = {
   check: <path d="m5 12 4 4L19 6" />,
   close: <path d="m6 6 12 12M18 6 6 18" />,
   arrow: <path d="M4 12h16m-6-6 6 6-6 6" />,
+  'external-link': (
+    <path d="M10 5H5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-5M13 4h7v7m0-7L10 14" />
+  ),
   lock: (
     <>
       <rect x="5" y="10" width="14" height="11" rx="2" />

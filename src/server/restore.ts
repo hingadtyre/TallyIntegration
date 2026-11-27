@@ -272,7 +272,7 @@ function restoredSnapshot(
   recordActivity(
     restored,
     'pilot-restore',
-    'A backup was restored. Refresh Tally and verify each marketplace account with a fresh listing import. Uncertain updates must be checked, not replayed. Automatic Inventory publishing remains disabled.',
+    'A backup was restored. In Inventory, choose Refresh inventory. Verify each marketplace account with a fresh listing import. Uncertain updates must be checked, not replayed. Automatic Inventory publishing remains disabled.',
   );
   return restored;
 }

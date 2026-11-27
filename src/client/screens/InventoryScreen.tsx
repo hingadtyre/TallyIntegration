@@ -230,10 +230,10 @@ export function InventoryScreen({
         <button
           className="button secondary"
           disabled={!!busy}
-          onClick={() => void workspace.refreshTally(companyId || undefined)}
+          onClick={() => void workspace.refreshInventory(companyId, accountId)}
         >
-          <Icon name="refresh" className={busy === 'Refreshing Tally' ? 'spin' : ''} />
-          {busy === 'Refreshing Tally' ? 'Refreshing…' : 'Refresh Tally'}
+          <Icon name="refresh" className={busy === 'Refreshing inventory' ? 'spin' : ''} />
+          {busy === 'Refreshing inventory' ? 'Refreshing…' : 'Refresh inventory'}
         </button>
       </div>
       <div className="stat-grid inventory-summary" role="group" aria-label="Inventory views">

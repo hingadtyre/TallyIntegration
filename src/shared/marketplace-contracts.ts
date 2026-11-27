@@ -33,6 +33,7 @@ export interface MarketplaceListing {
   accountId: string;
   sellerId: string | null;
   productId: string;
+  productUrl?: string;
   sku: string;
   title: string;
   imageUrl: string | null;

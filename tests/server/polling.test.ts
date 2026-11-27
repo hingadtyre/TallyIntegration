@@ -108,6 +108,40 @@ test('failed checks back off and a successful check restores the configured inte
   loop.stop();
 });
 
+test('a company refresh preserves other companies’ poll deadline and serializes with the due poll', async () => {
+  const clock = new ManualClock();
+  const manual = deferred<void>();
+  const operations: string[] = [];
+  const loop = new PollingLoop({
+    task: async () => {
+      operations.push('all companies');
+      return true;
+    },
+    intervalMilliseconds: () => 300_000,
+    enabled: () => true,
+    nextRunChanged: () => undefined,
+    unexpectedError: (error) => {
+      throw error;
+    },
+    timers: clock,
+  });
+  loop.start();
+  clock.time = 290_000;
+  const refreshing = loop.runScoped(async () => {
+    operations.push('selected company');
+    await manual.promise;
+  });
+  assert.equal(clock.nextDelay, 10_000);
+  await clock.fireNext();
+  assert.deepEqual(operations, ['selected company']);
+  manual.resolve();
+  await refreshing;
+  await loop.idle();
+  assert.deepEqual(operations, ['selected company', 'all companies']);
+  assert.equal(clock.nextDelay, 300_000);
+  loop.stop();
+});
+
 test('manual requests serialize and stopping during a check prevents another automatic run', async () => {
   const clock = new ManualClock();
   const first = deferred<boolean>();

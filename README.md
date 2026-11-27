@@ -34,13 +34,15 @@ Stockbridge checks a tracked sale against Tally and creates the listing’s firs
 
 In **Inventory**, choose a summary card to show all Tally stock items, mapped listings, low physical stock or saved proposals. The cards show totals for the current company or seller. Search, brand and pack filters narrow the chosen view. On narrow screens, inventory, marketplace listings and order-matching results show labelled fields beneath each entry.
 
+The arrow beside a mapped listing’s SKU opens its public Flipkart product page in a new tab. Existing installations pick up these links on their next successful listing refresh.
+
 The sidebar starts collapsed at every screen size. Use the arrow below the Stockbridge logo to expand or collapse it. The collapsed view shows navigation icons, with labels on wider screens. On narrow screens, navigation expands over the page and closes after selecting a screen. Toggling the sidebar preserves the current screen and its unsaved inputs.
 
 **Marketplaces supports direct stock, MRP and selling-price edits with each editor's Apply action. In live mode Apply sends a real Flipkart request.** Accounts have independent credentials, seller binding, listing observations and outcomes. Refresh imports all five documented listing states and location stock; search and filters cover the complete last successful import. Tally setup is not required for this view. Settlement opens Seller Hub because a supported listing-settlement API has not been established.
 
 Applying a stock edit in Marketplaces pauses Tally sync for that mapped listing at that warehouse. Flipkart can still deduct customer orders. Choose **Resume sync** beside the lock when Stockbridge should manage the location again. If company sync is on, the next eligible update can apply the calculated stock.
 
-With automatic updates and order coverage enabled, a newly verified Flipkart sale can lower every eligible listing sharing that Tally item, including listings in another connected seller account. If two tyres supply both single and pair listings, selling one single leaves zero complete pairs. Stockbridge checks on the **Marketplace stock** schedule and can reduce the pair listing to zero before the Tally bill arrives. A Tally purchase can still increase available stock. Sellers can also calculate, review and publish manually.
+With automatic updates and order coverage enabled, a newly verified Flipkart sale can lower every eligible listing sharing that Tally item, including listings in another connected seller account. If two tyres supply both single and pair listings, selling one single leaves zero complete pairs. Stockbridge checks on the **Marketplace orders** schedule and can reduce the pair listing to zero before the Tally bill arrives. A Tally purchase can still increase available stock. Sellers can also calculate, review and publish manually.
 
 After importing listings, choose **Map listing** on a Tally item in Inventory. Search by seller SKU, available product title, FSN (Flipkart product ID) or Flipkart listing ID. An exact identifier appears first. The picker also shows imported listings for which Flipkart supplied no stock location. Select the SKU and confirm the pickup location that will fulfil it, or save the mapping and choose the location later in **Edit Set of**. Stockbridge uses the selected location for stock updates and verifies the result with Flipkart. Check any suggestion against the product and location before selecting it.
 
@@ -91,7 +93,7 @@ For the real workspace on the customer's Tally computer:
 npm start
 ```
 
-Open `http://127.0.0.1:4310`, enable Tally’s local HTTP server and load the intended company. Stockbridge discovers its items on a successful fetch. Use **Refresh Tally** to fetch immediately. The first connector reads company-wide stock. Confirm that balance supplies the Flipkart location when creating a mapping. **Marketplaces** also works independently of Tally.
+Open `http://127.0.0.1:4310`, enable Tally’s local HTTP server and load the intended company. Choose **Check & discover companies** in **Connections** to read its items. The connector reads company-wide stock. Confirm that balance supplies the Flipkart location when creating a mapping. **Marketplaces** also works independently of Tally.
 
 The run commands use the existing build; they do not rebuild changed source. See [the development workflow](CONTRIBUTING.md#build-and-reload-behavior) for rebuilding and frontend development with automatic reload. The optional Windows launcher, [scripts/app.ps1](scripts/app.ps1), calls the same npm scripts while selecting a project-local Node runtime when available. Prefer npm directly when Node.js 24 is already selected.
 
@@ -127,7 +129,7 @@ The runtime enforces one owner per workspace before opening SQLite, using an ope
 
 The backend continues while the browser is closed. The packaged Start command runs it without a persistent terminal; use Stop to shut it down cleanly. Source-checkout `npm start` remains a foreground process stopped with Ctrl+C. Shutdown drains an active Tally operation before closing SQLite. Windows automatic startup/service packaging is still pending.
 
-Tally polling defaults to 30 seconds, avoids overlapping reads and backs off after failures. The catalogue timer refreshes mapped accounts and compares package evidence, including after a restart. **Refresh listings** runs the check on demand. Demo keeps its own database.
+New workspaces check **Tally stock** every minute, **Marketplace orders** every five minutes and **Listings** every hour. Settings shows the intervals in seconds. Upgrades keep the workspace’s saved values. **Refresh inventory** checks the selected company’s Tally stock and participating sellers’ available catalogues, including an eligible seller selected in Inventory. Once starting stock is confirmed, it also checks orders and reservations. Company sync can publish eligible pending changes during the refresh. **Marketplaces > Refresh listings** updates one seller’s catalogue on demand.
 
 Self Access supports separate credential sets per added account. Demo mode uses clearly marked sample edits and never contacts Flipkart. Account credential checks and local disconnect affect only that account; disconnect does not delete its Flipkart application or change stock. Tokens remain memory-only and are renewed from returned expiry information. Credentials stay out of Git, logs, packages and SQLite backups; a new computer/Windows login needs its own setup.
 

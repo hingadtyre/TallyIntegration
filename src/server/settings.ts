@@ -20,14 +20,14 @@ function validateSettings(value: unknown): Settings {
   }
   const settings: Settings = {
     tallyUrl,
-    tallySeconds: requireWholeNumber(input.tallySeconds, 'Tally interval', 5, 86400),
+    tallySeconds: requireWholeNumber(input.tallySeconds, 'Tally stock interval', 5, 86400),
     marketplaceSeconds: requireWholeNumber(
       input.marketplaceSeconds,
-      'Marketplace interval',
+      'Marketplace orders interval',
       30,
       86400,
     ),
-    catalogSeconds: requireWholeNumber(input.catalogSeconds, 'Catalog interval', 60, 86400),
+    catalogSeconds: requireWholeNumber(input.catalogSeconds, 'Listings interval', 60, 86400),
     backupFolder: requireText(input.backupFolder, 'Backup folder'),
   };
   if (!isAbsolute(settings.backupFolder))

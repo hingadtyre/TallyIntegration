@@ -82,7 +82,7 @@ Synchronize stock from Tally to Flipkart initially, with support for other marke
 - Use React and TypeScript for the dashboard, Node.js and TypeScript for the backend, and SQLite locally initially. Preserve a practical path to a remote deployment/database later.
 - Resuming automation obtains fresh Tally stock and recalculates before publishing; do not replay old manually entered quantities. Apply any active allowance as well.
 - If source stock, pack size/mapping, or rules change after preparation, affected proposal rows require another review. Preserve the user's proposal visibly for comparison.
-- Polling intervals are user-configurable; the user wants to change them through settings. Proposed defaults remain 30 seconds for Tally, five minutes for marketplace observations, and 15 minutes for catalog metadata.
+- The original interview proposed configurable intervals of 30 seconds for Tally, five minutes for marketplace observations and 15 minutes for catalogue metadata. The [approved architecture](architecture.md) records the current defaults.
 - Low-stock highlighting starts at five or fewer physical pieces and is configurable per item.
 - Permit the verified one-tyre-per-package fallback. The 20 November clarification ties package-change review to the seller's chosen source for **Set of**. See the [refresh rules](architecture.md#calculation-and-publication-precedence).
 - During Tally outages retain the last published marketplace values, show stale/offline observations, and fetch fresh stock before resuming publication. Revalidate pending work rather than replaying stale quantities.
@@ -229,7 +229,9 @@ These are engineering checks or details, not additional blanket user-approval ga
 - [ADR-0001: Shared stock and the Flipkart tyre advertising policy](../adr/0001-shared-stock-flipkart-tyres.md)
 - [ADR-0002: Local TypeScript application with SQLite](../adr/0002-local-typescript-sqlite.md)
 
-## Proposed polling and diagnostics defaults
+## Original polling and diagnostics proposals
+
+These interview proposals predate the current [background check settings](../customer-setup.md#6-understand-refresh-and-background-checks). New workspaces now start with one minute for Tally stock, five minutes for marketplace orders and one hour for listings.
 
 - Read selected/configured Tally company stock every 30 seconds initially; make the interval configurable and measure extraction duration before increasing frequency.
 - Prevent overlapping polls and back off on connection failures. Publish changed mapped stock after a successful read; do not send unchanged values on every poll.

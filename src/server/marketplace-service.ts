@@ -57,6 +57,19 @@ interface MarketplaceDependencies {
   legacyConnection?: AccountConnection;
 }
 
+type CatalogueImport = { account: MarketplaceAccount };
+type InventoryCatalogueResult = {
+  accountId: string;
+  name: string;
+  status: 'refreshed' | 'failed' | 'skipped';
+};
+interface SharedCatalogueImport<
+  T extends CatalogueImport | undefined = CatalogueImport | undefined,
+> {
+  result: Promise<T>;
+  inventoryStatus?: Promise<InventoryCatalogueResult['status']>;
+}
+
 const sampleStatus: FlipkartConnectionStatus = {
   state: 'unavailable',
   checkedAt: null,
@@ -70,6 +83,7 @@ export class MarketplaceService {
   readonly blockedSyncReasons = new Map<string, string>();
   private readonly connections = new Map<string, AccountConnection>();
   private readonly pending = new Map<string, Promise<unknown>>();
+  private readonly catalogueImports = new Map<string, SharedCatalogueImport>();
   private readonly verifiedAccounts = new Set<string>();
   private readonly verificationRevision = new Map<string, number>();
   private readonly verifiedImportErrors = new Map<string, string>();
@@ -143,16 +157,19 @@ export class MarketplaceService {
     });
   }
 
-  private serial<T>(accountId: string, operation: () => Promise<T>): Promise<T> {
-    const run = (this.pending.get(accountId) ?? Promise.resolve()).then(() => {
+  private serial<T>(
+    accountId: string,
+    operation: (isLatest: () => boolean) => Promise<T>,
+  ): Promise<T> {
+    // A refresh requested after a credential change or stock edit must read after that command.
+    this.catalogueImports.delete(accountId);
+    const run: Promise<T> = (this.pending.get(accountId) ?? Promise.resolve()).then(() => {
       if (this.stopped)
         throw new InputError('Stockbridge is stopping. Try again after restarting.', 503);
-      return operation();
+      return operation(() => this.pending.get(accountId) === settled);
     });
-    this.pending.set(
-      accountId,
-      run.catch(() => undefined),
-    );
+    const settled = run.catch(() => undefined);
+    this.pending.set(accountId, settled);
     return run;
   }
 
@@ -306,7 +323,7 @@ export class MarketplaceService {
       return this.publicAccount(account);
     });
     if (this.mode === 'live' && input.verify === true && added.connection.state === 'verified')
-      return this.serial(added.id, () => this.importVerifiedAccount(added.id));
+      return this.serial(added.id, (isLatest) => this.importVerifiedAccount(added.id, isLatest));
     return added;
   }
 
@@ -321,7 +338,7 @@ export class MarketplaceService {
     operation: () => Promise<FlipkartConnectionStatus>,
     verifyAndImport = false,
   ): Promise<FlipkartConnectionStatus> {
-    return this.serial('flipkart-primary', async () => {
+    return this.serial('flipkart-primary', async (isLatest) => {
       this.invalidate('flipkart-primary');
       this.verifiedImportErrors.delete('flipkart-primary');
       this.store.update((state) => markPackageCountsUnavailable(state, 'flipkart-primary'));
@@ -336,7 +353,7 @@ export class MarketplaceService {
       }
       if (verifyAndImport && result.state === 'verified') {
         await this.adoptLegacyAccount();
-        const account = await this.importVerifiedAccount('flipkart-primary');
+        const account = await this.importVerifiedAccount('flipkart-primary', isLatest);
         return { ...result, message: account.catalogImportError ?? account.connection.message };
       }
       return result;
@@ -345,7 +362,7 @@ export class MarketplaceService {
 
   async changeConnection(input: Record<string, unknown>): Promise<MarketplaceAccount> {
     const account = this.account(input.accountId);
-    return this.serial(account.id, async () => {
+    return this.serial(account.id, async (isLatest) => {
       if (this.mode === 'demo')
         throw new InputError('Sample accounts do not use seller credentials.', 409);
       const connection = this.connection(account.id);
@@ -383,19 +400,24 @@ export class MarketplaceService {
         );
       });
       if (input.action === 'check' || input.action === 'connect')
-        return this.importVerifiedAccount(account.id);
+        return this.importVerifiedAccount(account.id, isLatest);
       return this.publicAccount(this.account(account.id));
     });
   }
 
   /** Caller holds this account's queue. Token verification may succeed even when
    * the catalogue import fails. Keep the saved connection and make it retryable. */
-  private async importVerifiedAccount(id: string): Promise<MarketplaceAccount> {
+  private async importVerifiedAccount(
+    id: string,
+    isLatest: () => boolean,
+  ): Promise<MarketplaceAccount> {
     const account = this.account(id);
     if ((await this.connection(id).status()).state !== 'verified')
       return this.publicAccount(account);
     try {
-      return (await this.refreshAccount(account)).account;
+      const reading = this.refreshAccount(account);
+      // Other callers can join this first import until another seller command is queued.
+      return (await (isLatest() ? this.shareCatalogueImport(id, reading).result : reading)).account;
     } catch (error) {
       const reason =
         error instanceof InputError || error instanceof FlipkartListingError
@@ -406,9 +428,28 @@ export class MarketplaceService {
     }
   }
 
-  async refresh(accountId: unknown): Promise<{ account: MarketplaceAccount }> {
-    const id = this.account(accountId).id;
-    return this.serial(id, () => this.refreshAccount(this.account(id)));
+  private shareCatalogueImport<T extends CatalogueImport | undefined>(
+    id: string,
+    reading: Promise<T>,
+  ): SharedCatalogueImport<T> {
+    const shared: SharedCatalogueImport<T> = {
+      result: reading.finally(() => {
+        if (this.catalogueImports.get(id) === shared) this.catalogueImports.delete(id);
+      }),
+    };
+    this.catalogueImports.set(id, shared);
+    return shared;
+  }
+
+  async refresh(accountId: unknown): Promise<CatalogueImport> {
+    const account = this.account(accountId);
+    const pending = this.catalogueImports.get(account.id);
+    if (pending) {
+      // Inventory skips saved-only credentials. An explicit Marketplace refresh can still use them.
+      return (await pending.result) ?? this.refresh(account.id);
+    }
+    const reading = this.serial(account.id, () => this.refreshAccount(this.account(account.id)));
+    return this.shareCatalogueImport(account.id, reading).result;
   }
 
   private async refreshAccount(
@@ -1024,35 +1065,53 @@ export class MarketplaceService {
     }
   }
 
-  /** Revisit imported accounts and retry a verified connection's failed first import. */
-  async refreshInventoryAccounts(): Promise<boolean> {
-    const data = this.store.readMarketplace();
-    const accounts = data.accounts.filter(
-      (account) => account.lastRefreshedAt || this.verifiedImportErrors.has(account.id),
-    );
-    let succeeded = true;
-    for (const account of accounts) {
-      if (this.stopped) break;
-      try {
-        await this.serial(account.id, async () => {
-          // A Save for later or Disconnect may have queued since the schedule was read.
-          const current = this.account(account.id);
-          if (current.lastRefreshedAt || this.verifiedImportErrors.has(account.id))
-            await this.refreshAccount(current);
-        });
-      } catch {
-        succeeded = false;
+  private refreshInventoryCatalogue(account: MarketplaceAccountRecord) {
+    const id = account.id;
+    const shared =
+      this.catalogueImports.get(id) ??
+      this.shareCatalogueImport(
+        id,
+        this.serial(id, async () => {
+          // A credential change may already be queued. Recheck eligibility once it finishes.
+          const current = this.account(id);
+          if (current.lastRefreshedAt || this.verifiedImportErrors.has(id))
+            return this.refreshAccount(current);
+        }),
+      );
+    return (shared.inventoryStatus ??= shared.result.then(
+      (imported) => (imported ? 'refreshed' : 'skipped'),
+      () => {
         this.store.update((state) =>
           recordActivity(
             state,
             'catalog-refresh',
-            `${account.name}: could not refresh Flipkart listings. Check the account connection.`,
+            `${account.name}: could not refresh marketplace listings. Check the seller account connection.`,
             { level: 'warning' },
           ),
         );
-      }
+        return 'failed';
+      },
+    ));
+  }
+
+  async refreshInventoryCatalogues(
+    accountIds?: ReadonlySet<string>,
+  ): Promise<InventoryCatalogueResult[]> {
+    const data = this.store.readMarketplace();
+    const accounts = new Map(data.accounts.map((account) => [account.id, account]));
+    const results: InventoryCatalogueResult[] = [];
+    for (const accountId of accountIds ?? accounts.keys()) {
+      const account = accounts.get(accountId);
+      const status =
+        account && !this.stopped ? await this.refreshInventoryCatalogue(account) : 'skipped';
+      results.push({ accountId, name: account?.name ?? 'Seller account', status });
     }
-    return succeeded;
+    return results;
+  }
+
+  /** Revisit imported accounts and retry a verified connection's failed first import. */
+  async refreshInventoryAccounts(): Promise<boolean> {
+    return (await this.refreshInventoryCatalogues()).every((result) => result.status !== 'failed');
   }
 
   reconcile(input: Record<string, unknown>) {

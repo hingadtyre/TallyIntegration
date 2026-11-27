@@ -4,6 +4,7 @@ import {
   type MarketplaceListingStatus,
   type MarketplaceLocation,
 } from '../shared/marketplace-contracts.js';
+import { normalizeFlipkartProductUrl } from '../shared/flipkart-product-url.js';
 
 const apiRoot = 'https://api.flipkart.net/sellers/listings/v3';
 const maximumResponseBytes = 2 * 1024 * 1024;
@@ -471,6 +472,7 @@ export class FlipkartListingsClient {
           typeof detail.product_title === 'string' && detail.product_title.trim()
             ? detail.product_title
             : listing.title,
+        productUrl: normalizeFlipkartProductUrl(detail.product_url, listing.productId),
         imageUrl: imageUrl(detail.product_image_url) ?? listing.imageUrl,
         status,
         packageCount:

@@ -51,6 +51,7 @@ function detail(index = 1) {
   return {
     listing_id: `listing-${index}`,
     product_id: `product-${index}`,
+    product_url: `https://www.flipkart.com/tyre/p/itm123?pid=product-${index}`,
     listing_status: 'ACTIVE',
     price: { mrp: 2200, selling_price: 1900, currency: 'INR' },
     locations: [
@@ -140,6 +141,7 @@ test('account import reads every state and page, batches details by ten and uses
   );
   assert.deepEqual(result[0], {
     ...listing,
+    productUrl: detail().product_url,
     packageCount: null,
     title: 'Tyre 1',
     mrp: 2200,
@@ -206,6 +208,34 @@ test('standard listing search uses the complete cursor chain and reads exact SKU
     ],
   );
   assert.deepEqual(result[1].locations, []);
+  assert.equal(result[0].productUrl, detail(1).product_url);
+});
+
+test('listing details keep only Flipkart buyer product links for the returned product', async () => {
+  for (const [input, expected] of [
+    ['/tyre/p/itm123?pid=product-1', 'https://www.flipkart.com/tyre/p/itm123?pid=product-1'],
+    ['http://flipkart.com/p/itm123', 'https://flipkart.com/p/itm123'],
+    [undefined, undefined],
+    [42, undefined],
+    ['https://www.flipkart.com/tyre/p/itm123?pid=other', undefined],
+    ['https://www.flipkart.com/tyre/p/itm123?pid=product-1&pid=other', undefined],
+    ['https://www.flipkart.com/tyre/p/itm123?pid=', undefined],
+    ['https://www.flipkart.com/search?q=product-1', undefined],
+    ['https://www.flipkart.com.example.org/tyre/p/itm123', undefined],
+    ['https://seller.flipkart.com/tyre/p/itm123', undefined],
+    ['//example.org/tyre/p/itm123', undefined],
+    ['https://user@www.flipkart.com/tyre/p/itm123', undefined],
+    ['https://www.flipkart.com:8000/tyre/p/itm123', undefined],
+    ['javascript:alert(1)', undefined],
+  ] as const) {
+    const client = clientForDetails({ ...detail(), product_url: input });
+    const refreshed = await client.getListing(token, {
+      ...listing,
+      productUrl: detail().product_url,
+    });
+    assert.equal(refreshed.productUrl, expected);
+    assert.equal(refreshed.sku, listing.sku);
+  }
 });
 
 test('a repeated standard-search cursor rejects the import before any details are applied', async () => {

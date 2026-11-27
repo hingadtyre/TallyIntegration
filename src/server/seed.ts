@@ -12,9 +12,9 @@ export function initialState(mode: 'live' | 'demo', backupFolder: string): Snaps
     accounts: [],
     settings: {
       tallyUrl: 'http://127.0.0.1:9000/',
-      tallySeconds: 30,
+      tallySeconds: 60,
       marketplaceSeconds: 300,
-      catalogSeconds: 900,
+      catalogSeconds: 3600,
       backupFolder,
     },
     connection: {

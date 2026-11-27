@@ -204,14 +204,14 @@ test('discovery invalidates unloaded companies and healthy reads are immediately
     assert.equal(inFlight.companies.find((c) => c.id === 'tally:c')?.stockIssue, 'unloaded');
     assert.equal(inFlight.items.find((i) => i.companyId === 'tally:c')?.observedAt, null);
     f.service.settings({ ...first.settings, tallyUrl: 'http://127.0.0.1:9001/' });
-    f.service.settings({ ...first.settings, tallySeconds: 60 });
+    f.service.settings({ ...first.settings, tallySeconds: 75 });
   } finally {
     releaseRead();
     await pending;
   }
   const after = f.service.snapshot();
   assert.equal(after.connection.tally, 'not-checked');
-  assert.equal(after.settings.tallySeconds, 60);
+  assert.equal(after.settings.tallySeconds, 75);
   assert.equal(after.items.find((i) => i.companyId === 'tally:b')?.physical, 4);
   assert.ok(after.companies.every((c) => c.stockIssue === 'not-checked'));
 });

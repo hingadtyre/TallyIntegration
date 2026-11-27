@@ -3,6 +3,7 @@ import type {
   CalculationResult,
   InventoryPublishResult,
   InventoryPublishRow,
+  InventoryRefreshResult,
   Review,
   Snapshot,
 } from '../shared/contracts.js';
@@ -189,6 +190,24 @@ export function useWorkspace() {
     [runAction],
   );
 
+  const refreshInventory = useCallback(
+    (companyId: string, accountId: string) =>
+      runAction(
+        'Refreshing inventory',
+        async () => {
+          const { refresh, ...next } = await requestJson<InventoryRefreshResult>(
+            '/inventory/refresh',
+            { companyId: companyId || undefined, accountId: accountId || undefined },
+          );
+          if (mounted.current) setState(next);
+          if (refresh.partial) throw new Error(refresh.message);
+          return refresh.message;
+        },
+        (message) => message,
+      ),
+    [runAction],
+  );
+
   const refreshTally = useCallback(
     (companyId?: string): Promise<ActionResult<Snapshot>> =>
       runAction(
@@ -244,6 +263,7 @@ export function useWorkspace() {
     mutate,
     calculate,
     refreshSnapshot,
+    refreshInventory,
     refreshTally,
     prepareReview,
     previewAutomation,
