@@ -671,7 +671,7 @@ small {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 21px 18px;
+  padding: 0 var(--panel-inset) 18px;
   flex-wrap: wrap;
 }
 
@@ -720,7 +720,7 @@ small {
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
-  padding: 12px 21px;
+  padding: 12px var(--panel-inset);
   background: #f5f8f6;
   border-block: 1px solid #e4eae6;
 }
@@ -806,7 +806,7 @@ small {
 }
 
 .parent-row td {
-  padding: 12px 16px;
+  padding: 12px var(--panel-inset);
   border-block: 1px solid #d6e1d6;
 }
 
@@ -918,6 +918,43 @@ small {
   font-size: var(--font-caption);
   color: var(--text-muted);
 }
+.inventory-seller img {
+  vertical-align: -3px;
+  margin-inline-end: 4px;
+}
+.reserved-quantity {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.reservation-popover {
+  position: fixed;
+  z-index: 10;
+  padding: 12px 16px;
+  width: max-content;
+  max-width: min(22rem, calc(100vw - 16px));
+  max-height: min(18rem, 45vh);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 4px 18px #182d2829;
+  font-size: var(--font-body);
+}
+.reservation-popover ul {
+  padding: 0;
+  margin: 8px 0;
+  list-style: none;
+}
+.reservation-popover li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding-block: 2px;
+}
+.reservation-popover small {
+  color: var(--muted);
+}
 
 .pack-tag {
   font-size: var(--font-caption);
@@ -975,7 +1012,7 @@ small {
   justify-content: space-between;
   gap: 12px;
   align-items: center;
-  margin: 0 20px 16px;
+  margin: 0 var(--panel-inset) 16px;
   padding: 9px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -994,7 +1031,7 @@ small {
 }
 
 .automation-review {
-  padding: 0 20px 18px;
+  padding-bottom: 18px;
 }
 
 .automation-review h3 {
@@ -1012,9 +1049,6 @@ small {
   display: none;
 }
 @media (max-width: 640px) {
-  .automation-review {
-    padding-inline: 0;
-  }
   .stock-review.review-table-wrap {
     overflow: visible;
     margin-block: 12px;
@@ -1280,7 +1314,7 @@ small {
 }
 
 .table-footer {
-  padding: 14px 21px;
+  padding: 14px var(--panel-inset);
   display: flex;
   justify-content: space-between;
   gap: 10px;
@@ -1351,6 +1385,13 @@ small {
 
 .message > span {
   flex: 1;
+}
+
+.diagnostic-panel > .message,
+.marketplace-listings > .message {
+  padding-inline: var(--panel-inset);
+  border-inline: 0;
+  border-radius: 0;
 }
 
 .message > .icon {
@@ -1485,7 +1526,7 @@ small {
   display: flex;
   gap: 14px;
   align-items: flex-start;
-  padding: 20px 23px;
+  padding: 20px var(--panel-inset);
   border-bottom: 1px solid #ecf0e8;
 }
 
@@ -1576,7 +1617,7 @@ small {
   margin: 0;
   min-height: 350px;
   max-height: 60vh;
-  padding: 22px;
+  padding: 22px var(--panel-inset);
   border-radius: 0 0 8px 8px;
   background: #1b302e;
   color: #a8c1a5;
@@ -1886,6 +1927,9 @@ small {
   border-radius: 4px;
   cursor: pointer;
 }
+.searchable-picker-popup > .text-button {
+  padding-inline: 8px;
+}
 .searchable-picker-option[aria-selected='true'],
 .searchable-picker-option:hover {
   color: var(--teal-dark);
@@ -1952,7 +1996,7 @@ small {
 .billing-table small {
   display: block;
 }
-.billing-listing-mappings > p,
+.billing-results > p,
 .billing-listing-mappings > details > summary {
   margin: 0 var(--panel-inset) 16px;
   overflow-wrap: anywhere;
@@ -2347,7 +2391,7 @@ small {
 }
 
 .draft-reminder {
-  padding: 12px 21px;
+  padding: 12px var(--panel-inset);
   background: #fff8e7;
   border-bottom: 1px solid #ecdfc0;
   color: #8a692c;
@@ -2480,7 +2524,6 @@ small {
     max-width: none;
   }
   .filters {
-    padding-inline: 18px;
     gap: 8px;
   }
   .search-input {
@@ -2489,7 +2532,6 @@ small {
     min-width: 0;
   }
   .scope-bar {
-    padding-inline: 18px;
     gap: 12px;
   }
   .scope-bar > div:first-child {
@@ -2507,7 +2549,6 @@ small {
     flex: 1;
   }
   .table-footer {
-    padding-inline: 18px;
     flex-direction: column;
     gap: 8px;
   }
@@ -2535,7 +2576,7 @@ small {
     gap: 8px;
   }
   .activity-list li {
-    padding: 18px;
+    padding-block: 18px;
     flex-wrap: wrap;
     gap: 10px;
   }
@@ -2587,11 +2628,6 @@ small {
   }
   .stat-card strong {
     font-size: 25px;
-  }
-  .filters,
-  .scope-bar {
-    padding-left: 13px;
-    padding-right: 13px;
   }
   .bulk-actions .button {
     padding: 7px;
@@ -2785,7 +2821,7 @@ small {
   font-size: var(--font-control);
 }
 .marketplace-filters {
-  padding: 20px 24px;
+  padding: 20px var(--panel-inset);
   display: flex;
   align-items: center;
   gap: 18px;
@@ -2810,7 +2846,7 @@ small {
   font-size: 12px;
 }
 .marketplace-loading {
-  padding: 34px 24px;
+  padding: 34px var(--panel-inset);
   color: var(--muted);
 }
 .marketplace-listings {
@@ -2843,7 +2879,7 @@ small {
 @container (width > 70rem) {
   .marketplace-table th:first-child,
   .marketplace-table td:first-child {
-    padding-left: 24px;
+    padding-inline-start: var(--panel-inset);
     width: 32%;
     min-width: 260px;
   }
@@ -2957,7 +2993,7 @@ small {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px 16px;
-    padding: 16px;
+    padding: 16px var(--panel-inset);
     border-bottom: 1px solid var(--line);
   }
   .marketplace-table tbody td {
@@ -3062,7 +3098,7 @@ small {
     padding: 20px;
   }
   .marketplace-filters {
-    padding: 16px;
+    padding-block: 16px;
     gap: 12px;
   }
   .marketplace-filters form {
@@ -3085,7 +3121,7 @@ small {
   }
 }
 .calculation-results {
-  padding: 0.75rem 1rem;
+  padding: 0.75rem var(--panel-inset);
   border-bottom: 1px solid var(--line);
 }
 .calculation-results ul {
@@ -3411,7 +3447,7 @@ small {
     text-align: left;
   }
   .inventory-table thead .select-column {
-    padding: 8px 14px;
+    padding: 8px var(--panel-inset);
   }
   .mobile-select-label {
     display: inline;
@@ -3447,11 +3483,8 @@ small {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px 16px;
-    padding: 16px;
+    padding: 16px var(--panel-inset);
     border-bottom: 1px solid var(--line);
-  }
-  .billing-table tbody tr {
-    padding-inline: var(--panel-inset);
   }
   .inventory-table .listing-row td,
   .billing-table tbody td {
@@ -3548,7 +3581,7 @@ small {
     height: 14px;
   }
   .company-sync {
-    margin: 0 13px 14px;
+    margin-bottom: 14px;
     gap: 8px;
   }
   .company-sync-actions {

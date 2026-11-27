@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { Icon } from './components.js';
 import { useWorkspace } from './useWorkspace.js';
 import { InventoryScreen } from './screens/InventoryScreen.js';
+import { useInventoryReservations } from './screens/InventoryReservations.js';
 import { ActivityScreen } from './screens/ActivityScreen.js';
 import { ConnectionsScreen } from './screens/ConnectionsScreen.js';
 import { SettingsScreen } from './screens/SettingsScreen.js';
@@ -33,6 +34,12 @@ export function App() {
   const [inventoryReset, setInventoryReset] = useState(0);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const sidebarToggle = useRef<HTMLButtonElement>(null);
+  const company =
+    state?.companies.find((value) => value.id === selectedCompanyId) ?? state?.companies[0];
+  const reservations = useInventoryReservations(
+    screen === 'inventory' ? company : undefined,
+    state?.settings.marketplaceSeconds ?? 300,
+  );
   useLayoutEffect(() => {
     document.documentElement.scrollTop = 0;
   }, [screen]);
@@ -48,13 +55,10 @@ export function App() {
       </main>
     );
 
-  const companyId = state.companies.some((company) => company.id === selectedCompanyId)
-    ? selectedCompanyId
-    : (state.companies[0]?.id ?? '');
+  const companyId = company?.id ?? '';
   const accountId = state.accounts.some((account) => account.id === selectedAccountId)
     ? selectedAccountId
     : (state.accounts[0]?.id ?? '');
-  const company = state.companies.find((value) => value.id === companyId);
   const companyItems = state.items.filter((item) => item.companyId === companyId);
   function leaveInventoryContext() {
     if (!unsavedInventory) return true;
@@ -238,6 +242,8 @@ export function App() {
 
           <div hidden={screen !== 'inventory'}>
             <InventoryScreen
+              reservations={reservations.items}
+              refreshReservations={reservations.refresh}
               key={JSON.stringify([companyId, accountId, inventoryReset])}
               active={screen === 'inventory'}
               state={state}

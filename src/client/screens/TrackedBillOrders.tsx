@@ -261,7 +261,7 @@ export function TrackedBillOrders({
       {visibleOrders &&
         (visibleOrders.length ? (
           <>
-            <p className="billing-filters">
+            <p>
               Showing {visibleOrders.length > limit && `${limit} of `}
               {visibleOrders.length} tracked order {visibleOrders.length === 1 ? 'item' : 'items'}
             </p>

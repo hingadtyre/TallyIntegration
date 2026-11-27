@@ -94,6 +94,13 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           tells you which checks succeeded and which need attention.
         </p>
         <p>
+          Inventory shows the marketplace logo and seller name beside each listing’s pickup
+          location. On the Tally item, hover over, focus or tap the reserved quantity to see each
+          seller’s share in Tally units. Changing the seller shows its listings and keeps the
+          company-wide reservation total for that item. Use Refresh inventory if a reservation check
+          is needed.
+        </p>
+        <p>
           New workspaces check Tally stock every minute, Marketplace orders every five minutes and
           Listings every hour. To change a schedule, enter the interval in seconds in Settings and
           choose Save settings. Upgrading keeps your saved intervals.

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import type {
   BillLookup,
@@ -280,6 +281,38 @@ test('verified seller counts remain visible while another seller or an invoice c
     { ...scope, checkId: 'partial-1', retryGroup: 'standard' },
     { ...scope, checkId: 'partial-2', retryGroup: 'express' },
   ]);
+});
+
+test('empty tracked orders share the horizontal inset of the status filter', async (t) => {
+  const style = document.createElement('style');
+  style.textContent = readFileSync('src/client/styles.css', 'utf8');
+  document.head.append(style);
+  t.after(() => style.remove());
+  t.mock.method(globalThis, 'fetch', async () => response({ orders: [], billed: [] }));
+  render(
+    <BillingResults
+      tracking={{
+        companyId: 'company',
+        accountId: 'seller',
+        revision: 0,
+        onFind: () => assert.fail(),
+        onRelease: () => assert.fail(),
+      }}
+      busy={false}
+    />,
+  );
+  const message = await screen.findByText(
+    'No tracked orders for this seller since the starting date.',
+  );
+  const filters = screen.getByLabelText('Order status').closest('.billing-filters')!;
+  const filterStyle = window.getComputedStyle(filters);
+  const messageStyle = window.getComputedStyle(message);
+  const inset = Number.parseFloat(filterStyle.paddingLeft);
+  assert.ok(inset > 0);
+  assert.equal(
+    Number.parseFloat(messageStyle.marginLeft) + Number.parseFloat(messageStyle.paddingLeft),
+    inset,
+  );
 });
 
 test('a failed check cannot announce zero orders, and expired or late retries cannot replace a new seller check', async (t) => {

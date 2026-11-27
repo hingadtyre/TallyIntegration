@@ -15,6 +15,7 @@ const contentTypes: Record<string, string> = {
   '.js': 'application/javascript',
   '.css': 'text/css',
   '.svg': 'image/svg+xml',
+  '.png': 'image/png',
   '.woff2': 'font/woff2',
 };
 
@@ -135,6 +136,8 @@ async function runCommand(
         input.itemVersion,
         input.keepBackUnits,
       );
+    case '/api/inventory/reservations':
+      return service.inventoryReservations(input.companyId);
     case '/api/items/keep-back/preview':
       return service.previewKeepBack(input.companyId, input.itemId);
     case '/api/automation':

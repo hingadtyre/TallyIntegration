@@ -1,6 +1,12 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { availableForMarketplaces } from '../../domain/stock-policy.js';
-import type { Listing, StockItem } from '../../shared/contracts.js';
+import type {
+  ItemReservations,
+  Listing,
+  SellerAccount,
+  StockItem,
+} from '../../shared/contracts.js';
+import { ReservationDetails } from './InventoryReservations.js';
 import { requestJson, type ActionResult } from '../api.js';
 import { formatQuantity } from '../format.js';
 
@@ -12,6 +18,8 @@ interface OrderCheck {
 
 export function KeepBackEditor({
   item,
+  reservations,
+  accounts,
   busy,
   syncOn,
   allListings,
@@ -20,6 +28,8 @@ export function KeepBackEditor({
   onSave,
 }: {
   item: StockItem;
+  reservations?: ItemReservations;
+  accounts: Map<string, SellerAccount>;
   busy: boolean;
   syncOn: boolean;
   allListings: Listing[];
@@ -133,8 +143,28 @@ export function KeepBackEditor({
         id={`${id}-balance`}
         aria-live={editing ? 'polite' : 'off'}
       >
-        <span>After keep-back</span>
-        <strong>{afterKeepBack === null ? '—' : `${formatQuantity(afterKeepBack)} ${unit}`}</strong>
+        {!editing && reservations && item.physical !== null ? (
+          <>
+            <span>Available for marketplaces</span>
+            <div>
+              <strong>
+                {formatQuantity(availableForMarketplaces(item.physical, reservations.units, saved))}{' '}
+                {unit}
+              </strong>
+              <ReservationDetails balance={reservations} accounts={accounts} unit={unit} />
+            </div>
+          </>
+        ) : (
+          <>
+            <span>After keep-back</span>
+            <div>
+              <strong>
+                {afterKeepBack === null ? '-' : `${formatQuantity(afterKeepBack)} ${unit}`}
+              </strong>
+              {!editing && <small>Reservation check needed</small>}
+            </div>
+          </>
+        )}
       </div>
       {editing && (
         <div className="keep-back-edit-details">

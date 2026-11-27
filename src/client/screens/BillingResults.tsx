@@ -132,9 +132,7 @@ function BillingPreview({
                 </table>
               </div>
             ) : (
-              <p className="billing-filters">
-                All order items in this preview have a matched bill.
-              </p>
+              <p>All order items in this preview have a matched bill.</p>
             )}
           </>
         )}

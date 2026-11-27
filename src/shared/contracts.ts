@@ -7,6 +7,7 @@ export interface Company {
   automation: boolean;
   source: 'tally' | 'demo';
   lastSuccess: string | null;
+  stockTrackingFrom?: string;
   stockIssue?: 'read-failed' | 'unloaded' | 'not-checked';
 }
 export interface StockItem {
@@ -28,6 +29,16 @@ export interface SellerAccount {
   marketplace: 'flipkart';
   name: string;
   status: 'not-connected' | 'demo';
+}
+export const reservationCheckMaxAgeMs = 120_000;
+
+/** Latest complete company order check for this stock item, in Tally base units. */
+export interface ItemReservations {
+  itemVersion: number;
+  physical: number;
+  checkedAt: string;
+  units: number;
+  bySeller: { accountId: string; units: number }[];
 }
 /** Token issuance is not verification of seller identity, listings or publication access. */
 export interface FlipkartConnectionStatus {

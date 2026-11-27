@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   render,
+  renderHook,
   screen,
   within,
   fireEvent,
@@ -16,6 +17,8 @@ import type {
 } from '../../src/shared/marketplace-contracts.js';
 import { initialState } from '../../src/server/seed.js';
 import { App } from '../../src/client/App.js';
+import { useInventoryReservations } from '../../src/client/screens/InventoryReservations.js';
+import { reservationCheckMaxAgeMs } from '../../src/shared/contracts.js';
 
 const disconnectedFlipkart: FlipkartConnectionStatus = {
   state: 'not-configured',
@@ -105,6 +108,94 @@ for (const mode of ['live', 'demo'] as const) {
     assert.equal(screen.queryByRole('dialog'), null);
   });
 }
+
+test('the seller filter changes listing identities while preserving the shared item reservation breakdown', async (t) => {
+  const state = initialState('demo', 'unused');
+  const item = state.items[0];
+  item.physical = 10;
+  item.keepBackUnits = 2;
+  const first = state.accounts[0];
+  first.name = 'Main Store';
+  const other = { ...first, id: 'other-seller', name: 'Outlet Store' };
+  state.accounts.push(other);
+  const listing = state.listings.find((row) => row.itemId === item.id)!;
+  state.listings.push({ ...listing, id: 'other-listing', accountId: other.id });
+  state.companies[0].stockTrackingFrom = new Date().toISOString();
+  const balances = {
+    [item.id]: {
+      physical: item.physical,
+      itemVersion: item.version,
+      units: 4,
+      checkedAt: new Date().toISOString(),
+      bySeller: [
+        { accountId: first.id, units: 3 },
+        { accountId: other.id, units: 1 },
+      ],
+    },
+  };
+  const requests: unknown[] = [];
+  let finishCheck: (value: Response) => void;
+  t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+    if (url === '/api/inventory/reservations') {
+      requests.push(JSON.parse(String(init?.body)));
+      if (requests.length > 1)
+        return new Promise<Response>((resolve) => {
+          finishCheck = resolve;
+        });
+      return response(balances);
+    }
+    return response(state);
+  });
+  render(<App />);
+  const picker = await screen.findByLabelText('Seller account');
+  await screen.findByRole('button', { name: '4 reserved' });
+  for (const seller of [first, other]) {
+    fireEvent.change(picker, { target: { value: seller.id } });
+    fireEvent.change(screen.getByLabelText('Search stock items and listings'), {
+      target: { value: item.name },
+    });
+    const listingRow = screen
+      .getByRole('checkbox', { name: 'Select ' + listing.sku })
+      .closest('tr')!;
+    assert.ok(within(listingRow).getByText(seller.name));
+    assert.ok(within(listingRow).getByRole('img', { name: 'Flipkart' }));
+    assert.ok(screen.getByText('4 ' + item.unit));
+    const trigger = screen.getByRole('button', { name: '4 reserved' });
+    fireEvent.click(trigger);
+    const popup = screen.getByRole('region', { name: 'Reserved for orders' });
+    assert.deepEqual(
+      within(popup)
+        .getAllByRole('listitem')
+        .map((row) => row.textContent),
+      ['Main Store3', 'Outlet Store1'],
+    );
+    fireEvent.keyDown(trigger, { key: 'Escape' });
+    assert.equal(screen.queryByRole('region', { name: 'Reserved for orders' }), null);
+  }
+  assert.deepEqual(requests, [{ companyId: item.companyId }]);
+  fireEvent.click(screen.getByRole('button', { name: 'Activity' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+  assert.equal(screen.queryByRole('button', { name: '4 reserved' }), null);
+  await act(async () => finishCheck(response(balances)));
+  await screen.findByRole('button', { name: '4 reserved' });
+});
+
+test('a verified zero expires even when the next scheduled order check is hours away', async (t) => {
+  const company = initialState('demo', 'unused').companies[0];
+  const checkedAt = new Date().toISOString();
+  company.stockTrackingFrom = checkedAt;
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.parse(checkedAt) });
+  t.mock.method(globalThis, 'fetch', async () =>
+    response({
+      item: { physical: 8, units: 0, itemVersion: 1, checkedAt, bySeller: [] },
+    }),
+  );
+  const { result } = renderHook(() => useInventoryReservations(company, 86_400));
+  await act(async () => {});
+  assert.equal(result.current.items?.item.units, 0);
+  act(() => t.mock.timers.tick(reservationCheckMaxAgeMs));
+  assert.equal(result.current.items, undefined);
+});
 
 test('edits keep-back on a collapsed Tally item, previews order reservations, and saves only on request', async (t) => {
   const state = initialState('demo', 'unused');

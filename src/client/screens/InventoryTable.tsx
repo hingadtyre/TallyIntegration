@@ -1,5 +1,12 @@
 import { useState } from 'react';
-import type { Listing, Proposal, Snapshot, StockItem } from '../../shared/contracts.js';
+import type {
+  ItemReservations,
+  Listing,
+  Proposal,
+  SellerAccount,
+  Snapshot,
+  StockItem,
+} from '../../shared/contracts.js';
 import type { ActionResult } from '../api.js';
 import { Icon, ResumeSyncButton } from '../components.js';
 import {
@@ -10,6 +17,7 @@ import {
 import { isLowStock } from '../selectors.js';
 import { QuantityEditor } from './QuantityEditor.js';
 import { KeepBackEditor } from './KeepBackEditor.js';
+import { MarketplaceSeller } from './InventoryReservations.js';
 
 function compareListingRows(a: Listing, b: Listing): number {
   if (a.packSize !== b.packSize) return (a.packSize ?? Infinity) - (b.packSize ?? Infinity);
@@ -26,7 +34,8 @@ export function ItemRows({
   selected,
   proposals,
   busy,
-  accountName,
+  accounts,
+  reservations,
   allListings,
   demo,
   syncOn,
@@ -51,7 +60,8 @@ export function ItemRows({
   selected: string[];
   proposals: Map<string, Proposal>;
   busy: boolean;
-  accountName: string;
+  accounts: Map<string, SellerAccount>;
+  reservations?: ItemReservations;
   allListings: Listing[];
   demo: boolean;
   syncOn: boolean;
@@ -117,6 +127,13 @@ export function ItemRows({
             </div>
             <KeepBackEditor
               item={item}
+              accounts={accounts}
+              reservations={
+                reservations?.itemVersion === item.version &&
+                reservations.physical === item.physical
+                  ? reservations
+                  : undefined
+              }
               busy={busy}
               syncOn={syncOn}
               allListings={allListings}
@@ -168,7 +185,8 @@ export function ItemRows({
                     {listing.title}
                   </p>
                   <small>
-                    {accountName} · {listing.location || 'Pickup location pending'}
+                    <MarketplaceSeller account={accounts.get(listing.accountId)} /> ·{' '}
+                    {listing.location || 'Pickup location pending'}
                   </small>
                 </div>
               </div>

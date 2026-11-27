@@ -175,6 +175,10 @@ export class InventoryService {
       if (state.mode === 'live' && listing.productUrl) row.productUrl = listing.productUrl;
     }
     this.marketplaces?.describeAutomation(state, market, state.listings, catalog);
+    for (const company of state.companies) {
+      const from = this.store.readStockTrackingStart(company.id);
+      if (from) company.stockTrackingFrom = from;
+    }
     if (state.mode === 'live') {
       const visibleAccounts = new Set(market.accounts.map((account) => account.id));
       // Older releases saved a placeholder seller before any account was added.
@@ -318,6 +322,13 @@ export class InventoryService {
     });
     this.marketplaces?.supersedeInventoryReview(String(listingId));
     return this.snapshot();
+  }
+
+  async inventoryReservations(companyId: unknown) {
+    const company = requireCompany(this.store.read(), companyId);
+    if (!this.marketplaces || company.stockIssue)
+      throw new InputError('Reservation check needed.', 409);
+    return this.marketplaces.inventoryReservations(company.id);
   }
 
   async previewKeepBack(companyId: unknown, itemId: unknown) {

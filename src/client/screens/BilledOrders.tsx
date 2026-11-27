@@ -60,7 +60,7 @@ export function BilledOrders({ report }: { report: BillingReport }) {
       </div>
       {matches.length > 0 ? (
         <>
-          <p className="billing-filters">
+          <p>
             {matches.length > limit ? 'Showing ' + limit + ' of ' : ''}
             {matches.length} billed order {matches.length === 1 ? 'item' : 'items'}
           </p>
@@ -107,7 +107,7 @@ export function BilledOrders({ report }: { report: BillingReport }) {
           )}
         </>
       ) : (
-        <p className="billing-filters" role="status">
+        <p role="status">
           {search
             ? 'No billed order items match your search.'
             : 'No billed order items were found.'}

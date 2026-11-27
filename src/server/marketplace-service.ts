@@ -5,6 +5,7 @@ import { FlipkartListingError, FlipkartListingsClient } from '../adapters/flipka
 import type {
   FlipkartConnectionStatus,
   InventoryPublishRow,
+  ItemReservations,
   Listing,
   Snapshot,
 } from '../shared/contracts.js';
@@ -83,6 +84,7 @@ export class MarketplaceService {
   readonly blockedSyncReasons = new Map<string, string>();
   private readonly connections = new Map<string, AccountConnection>();
   private readonly pending = new Map<string, Promise<unknown>>();
+  private readonly inventoryReads = new Map<string, Promise<Record<string, ItemReservations>>>();
   private readonly catalogueImports = new Map<string, SharedCatalogueImport>();
   private readonly verifiedAccounts = new Set<string>();
   private readonly verificationRevision = new Map<string, number>();
@@ -895,6 +897,16 @@ export class MarketplaceService {
     return this.serial('stock-evidence:' + companyId, () =>
       this.availability.checkOrders(companyId, batch),
     );
+  }
+
+  inventoryReservations(companyId: string) {
+    const pending = this.inventoryReads.get(companyId);
+    if (pending) return pending;
+    const read = this.serial('stock-evidence:' + companyId, () =>
+      this.availability.inventoryReservations(companyId),
+    ).finally(() => this.inventoryReads.delete(companyId));
+    this.inventoryReads.set(companyId, read);
+    return read;
   }
 
   onStockOrdersPending(listener: (companyId: string, batch?: object) => void): () => void {

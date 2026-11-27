@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import type { AutomationPreview } from '../../shared/automation.js';
 import type {
   CalculationRow,
+  ItemReservations,
   Listing,
   Review,
   Snapshot,
@@ -19,6 +20,8 @@ import { AutomationDialog } from './AutomationDialog.js';
 import { CalculationFeedback } from './CalculationFeedback.js';
 
 interface InventoryScreenProps {
+  reservations?: Record<string, ItemReservations>;
+  refreshReservations: () => void;
   active: boolean;
   state: Snapshot;
   companyId: string;
@@ -31,6 +34,8 @@ interface InventoryScreenProps {
 
 /** App keys this screen by company and seller so pending reviews stay in their original scope. */
 export function InventoryScreen({
+  reservations,
+  refreshReservations,
   active,
   state,
   companyId,
@@ -114,6 +119,10 @@ export function InventoryScreen({
   );
   const company = state.companies.find((value) => value.id === companyId);
   const account = state.accounts.find((value) => value.id === accountId);
+  const sellerAccounts = useMemo(
+    () => new Map(state.accounts.map((seller) => [seller.id, seller])),
+    [state.accounts],
+  );
   const companyItems = state.items.filter((item) => item.companyId === companyId);
   const companyItemIds = new Set(companyItems.map((item) => item.id));
   const companyListings = state.listings.filter(
@@ -230,7 +239,10 @@ export function InventoryScreen({
         <button
           className="button secondary"
           disabled={!!busy}
-          onClick={() => void workspace.refreshInventory(companyId, accountId)}
+          onClick={async () => {
+            await workspace.refreshInventory(companyId, accountId);
+            refreshReservations();
+          }}
         >
           <Icon name="refresh" className={busy === 'Refreshing inventory' ? 'spin' : ''} />
           {busy === 'Refreshing inventory' ? 'Refreshing…' : 'Refresh inventory'}
@@ -567,7 +579,10 @@ export function InventoryScreen({
                     selected={selected}
                     proposals={proposals}
                     busy={!!busy}
-                    accountName={account?.name || 'Flipkart'}
+                    accounts={sellerAccounts}
+                    reservations={
+                      active && visibleItems.has(item.id) ? reservations?.[item.id] : undefined
+                    }
                     allListings={state.listings}
                     demo={state.mode === 'demo'}
                     syncOn={!!company?.automation}

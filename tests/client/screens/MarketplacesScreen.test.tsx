@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   act,
@@ -786,6 +787,32 @@ test('account-wide search, status and pagination go to the backend and reset the
   fireEvent.change(screen.getByLabelText('Listing status'), { target: { value: 'ARCHIVED' } });
   await waitFor(() => assert.equal(requests.at(-1)?.get('status'), 'ARCHIVED'));
   assert.equal(requests.at(-1)?.get('accountId'), 'seller-a');
+});
+
+test('listing filters, loading text and the result count follow the same panel inset', async (t) => {
+  const style = document.createElement('style');
+  style.textContent = readFileSync('src/client/styles.css', 'utf8');
+  document.head.append(style);
+  t.after(() => style.remove());
+  let finishListings!: (value: Response) => void;
+  const listings = new Promise<Response>((resolve) => {
+    finishListings = resolve;
+  });
+  t.mock.method(globalThis, 'fetch', (input: string) =>
+    input.startsWith('/api/marketplaces/listings?') ? listings : baseResponse(input),
+  );
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Open listings' }));
+  const panel = screen.getByRole<HTMLElement>('region', { name: 'Marketplace listings' });
+  panel.style.setProperty('--panel-inset', '17px');
+  const filters = screen
+    .getByLabelText('Search marketplace listings')
+    .closest('.marketplace-filters')!;
+  assert.equal(window.getComputedStyle(filters).paddingLeft, '17px');
+  assert.equal(window.getComputedStyle(screen.getByText('Loading listings…')).paddingLeft, '17px');
+  finishListings(response(page()));
+  const count = await screen.findByText('1 matching listing');
+  assert.equal(window.getComputedStyle(count.parentElement!).paddingLeft, '17px');
 });
 
 test('a failed filter hides the previous listings and retries the selected status', async (t) => {

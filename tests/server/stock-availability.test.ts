@@ -186,6 +186,7 @@ function setup(t: TestContext, sellerPacks = [1], flipkart?: FlipkartBillingClie
       ),
     refreshHistory: (accountId?: string) => service.refreshPendingOrders(companyId, accountId),
     scan: () => service.checkOrders(companyId, {}),
+    inventoryBalance: async () => (await service.inventoryReservations(companyId))[itemId],
     restoreService() {
       f.reopen();
       service = makeService();
@@ -574,6 +575,45 @@ test('order checks keep calculated proposals current across sellers with sync of
   });
   await s.scan();
   assert.deepEqual(quantities(), [5, 2], 'saved receipts remain available after restart');
+});
+
+test('Inventory reports verified Tally units by seller and withholds an incomplete company balance', async (t) => {
+  const s = setup(t, [3, 1]);
+  s.confirm();
+  await s.scan();
+  assert.equal((await s.inventoryBalance()).units, 4);
+  assert.deepEqual((await s.inventoryBalance()).bySeller, [
+    { accountId: 'seller-0', units: 3 },
+    { accountId: 'seller-1', units: 1 },
+  ]);
+  s.bills.set('seller-0', [s.bill(0)]);
+  await s.scan();
+  assert.equal((await s.inventoryBalance()).units, 1);
+  assert.deepEqual((await s.inventoryBalance()).bySeller, [{ accountId: 'seller-1', units: 1 }]);
+  s.source.unavailable = 'seller-1';
+  await assert.rejects(s.scan());
+  await assert.rejects(s.inventoryBalance());
+  s.source.unavailable = '';
+  s.bills.set('seller-1', [s.bill(1, 'other-voucher')]);
+  await s.scan();
+  assert.equal((await s.inventoryBalance()).units, 0);
+  assert.deepEqual((await s.inventoryBalance()).bySeller, []);
+  s.setStock(2);
+  assert.equal((await s.inventoryBalance()).physical, 2);
+});
+
+test('a sale first seen in Inventory stays reserved across a restart and a shorter seller response', async (t) => {
+  const s = setup(t, [3, 1]);
+  s.confirm();
+  assert.equal((await s.inventoryBalance()).units, 4);
+  s.restoreService();
+  s.orders.set('seller-0', []);
+  assert.deepEqual((await s.inventoryBalance()).bySeller, [
+    { accountId: 'seller-0', units: 3 },
+    { accountId: 'seller-1', units: 1 },
+  ]);
+  s.bills.set('seller-0', [s.bill(0)]);
+  assert.equal((await s.inventoryBalance()).units, 1);
 });
 
 test('sum pack units across accounts even when both sellers use the same order-item ID', async (t) => {

@@ -3,6 +3,8 @@ import { FlipkartBillingClient, type FlipkartBillingOrder } from '../adapters/fl
 import { TallyClient, type TallySalesBill, type TallyStockItem } from '../adapters/tally.js';
 import { availableForMarketplaces } from '../domain/stock-policy.js';
 import type { BilledOrderItem, PendingOrderResult } from '../shared/billing-contracts.js';
+import type { ItemReservations, StockItem } from '../shared/contracts.js';
+import { reservationCheckMaxAgeMs } from '../shared/contracts.js';
 import {
   isVerifiedCancellation,
   isVerifiedSale,
@@ -48,6 +50,8 @@ type CheckedStock = {
 };
 type ReviewedOrder = { order: StockCoverageOrder; result: PendingOrderResult };
 type CompanyCheck = {
+  canReuseForInventory: () => boolean;
+  inventoryBalances: () => Promise<Record<string, ItemReservations>>;
   reservationItems: () => Set<string>;
   forItem: (id: string) => Promise<CheckedStock>;
   review: (accountId: string, orderItemIds?: string[]) => Promise<ReviewedOrder[]>;
@@ -61,7 +65,7 @@ export type CompanyBillEvidence = {
   orders: ReconciledOrder[];
   verify: () => void;
 };
-type CheckMode = 'publish' | 'preview' | 'review' | 'bills';
+type CheckMode = 'publish' | 'preview' | 'review' | 'bills' | 'inventory';
 type ReviewScope = { accountId: string; orderItemIds?: string[] | 'all' };
 
 function configuration(store: Store, companyId: string) {
@@ -525,8 +529,9 @@ export function reconcileOrders(
   return reconciled;
 }
 
-function unbilledUnits(orders: ReconciledOrder[], itemId: string) {
+function reservationTotals(orders: ReconciledOrder[], itemId: string) {
   let heldUnits = 0;
+  const bySeller = new Map<string, number>();
   let billingIssue: string | undefined;
   for (const entry of orders) {
     const { affectedItems, result } = entry;
@@ -535,17 +540,25 @@ function unbilledUnits(orders: ReconciledOrder[], itemId: string) {
       if (!entry.itemId || !affectedItems) throw hold(result.reason);
       billingIssue ??= result.reason;
     }
-    if (result.status === 'reserved') heldUnits += result.baseUnits!;
+    if (result.status === 'reserved') {
+      const units = result.baseUnits!;
+      heldUnits += units;
+      bySeller.set(entry.accountId, (bySeller.get(entry.accountId) ?? 0) + units);
+    }
   }
   if (billingIssue) throw hold(billingIssue);
   if (!Number.isSafeInteger(heldUnits))
     throw hold('The unbilled order quantity could not be verified.');
-  return heldUnits;
+  return {
+    units: heldUnits,
+    bySeller: Array.from(bySeller, ([accountId, units]) => ({ accountId, units })),
+  };
 }
 
 export class StockAvailabilityService {
   private readonly sources: BillingSources;
   private readonly pending = new Map<string, Promise<unknown>>();
+  private readonly recentScans = new Map<string, { until: number; check: WeakRef<CompanyCheck> }>();
   private readonly batches = new WeakMap<
     object,
     Map<string, { until: number; read: Promise<CompanyCheck> }>
@@ -635,6 +648,7 @@ export class StockAvailabilityService {
   }
 
   async checkOrders(companyId: string, batch: object): Promise<void> {
+    this.recentScans.delete(companyId);
     let check: CompanyCheck | InputError;
     try {
       check = await this.companyCheck(companyId, batch);
@@ -671,6 +685,16 @@ export class StockAvailabilityService {
       saveCalculation(this.store, state, companyId, selected, { sources, refreshStale: true });
     }
     if (check instanceof InputError) throw check;
+    this.recentScans.set(companyId, { until: Date.now() + 20_000, check: new WeakRef(check) });
+  }
+
+  async inventoryReservations(companyId: string) {
+    const recent = this.recentScans.get(companyId);
+    const shared = recent && Date.now() <= recent.until ? recent.check.deref() : undefined;
+    if (shared?.canReuseForInventory()) return shared.inventoryBalances();
+    this.recentScans.delete(companyId);
+    const check = await this.companyCheck(companyId, undefined, 'inventory');
+    return check.inventoryBalances();
   }
 
   async refreshPendingOrders(companyId: string, accountId?: string): Promise<void> {
@@ -792,7 +816,7 @@ export class StockAvailabilityService {
     const issue = coverageIssue(coverage, ctx.signature, Date.parse(to));
     if (issue) throw hold(issue);
     if (mode === 'bills' && previewFrom && previewFrom < coverage.from) coverage.from = previewFrom;
-    const persistOrders = mode === 'publish' || mode === 'review';
+    const persistOrders = mode === 'publish' || mode === 'review' || mode === 'inventory';
     const demo = ctx.state.mode === 'demo';
     const rules = rulesForCheck(ctx, coverage, scope, mode === 'bills');
     const checkInspectedInvoices =
@@ -870,7 +894,7 @@ export class StockAvailabilityService {
             rule.accountId,
             merged.changedItems,
             merged.proposalListings,
-            mode === 'review',
+            mode !== 'publish',
           );
           expected = journalVersion(coverage);
           if (queued) this.onPending?.(companyId, batch);
@@ -961,13 +985,11 @@ export class StockAvailabilityService {
       };
       let books: ReturnType<typeof readBooks> | undefined;
       const checked = new Map<string, CheckedStock>();
-      const checkBalance = async (itemId: string) => {
-        const item = ctx.items.get(itemId);
-        if (!item || item.companyId !== companyId)
-          throw hold('Refresh the current Tally stock item before publishing.');
-        const { before, after, orders } = await (books ??= readBooks());
-        // A bill can reach Tally before Inventory's next stock poll. Order
-        // matching can use the live balance. Publishing must also match Inventory.
+      function checkedPhysical(
+        item: StockItem,
+        before: Map<string, TallyStockItem>,
+        after: Map<string, TallyStockItem>,
+      ) {
         const physical =
           mode === 'review' && !demo
             ? (before.get(item.externalId)?.physical ?? null)
@@ -984,16 +1006,18 @@ export class StockAvailabilityService {
           throw hold(
             'The Tally balance changed while checking bills. Refresh Tally stock and retry.',
           );
+        return physical;
+      }
+      const checkBalance = async (itemId: string) => {
+        const item = ctx.items.get(itemId);
+        if (!item || item.companyId !== companyId)
+          throw hold('Refresh the current Tally stock item before publishing.');
+        const { before, after, orders } = await (books ??= readBooks());
+        // A bill can reach Tally before Inventory's next stock poll. Order
+        // matching can use the live balance. Publishing must also match Inventory.
+        const physical = checkedPhysical(item, before, after);
         const verifyItem = () => {
-          if (saleDay(nowIso()) !== saleDay(to))
-            throw hold(
-              'The Tally business date changed during the order check. Refresh the company and retry.',
-            );
-          if (!isRecentObservation(to, 120_000))
-            throw hold(
-              'The order check is outside the current two-minute window. Retry, or reconcile older sales and confirm a more recent starting date in Order matching.',
-            );
-          const current = verify().items.get(itemId);
+          const current = verifyStockCheck().items.get(itemId);
           if (
             mode !== 'review' &&
             (current?.version !== item.version || current.physical !== item.physical)
@@ -1003,7 +1027,60 @@ export class StockAvailabilityService {
         verifyItem();
         return { item, physical, orders, verify: verifyItem };
       };
+      function verifyStockCheck() {
+        if (saleDay(nowIso()) !== saleDay(to))
+          throw hold(
+            'The Tally business date changed during the order check. Refresh the company and retry.',
+          );
+        if (!isRecentObservation(to, reservationCheckMaxAgeMs))
+          throw hold(
+            'The order check is outside the current two-minute window. Retry, or reconcile older sales and confirm a more recent starting date in Order matching.',
+          );
+        return verify();
+      }
       return {
+        canReuseForInventory: () => {
+          try {
+            const current = verifyStockCheck();
+            return [...current.items.values()].every(
+              (item) =>
+                item.companyId !== companyId || ctx.items.get(item.id)?.version === item.version,
+            );
+          } catch {
+            return false;
+          }
+        },
+        inventoryBalances: async () => {
+          const { before, after, orders } = await (books ??= readBooks());
+          const current = verifyStockCheck();
+          const items: Record<string, ItemReservations> = {};
+          const byItem = new Map<string, ReconciledOrder[]>();
+          for (const row of orders) {
+            if (row.result.status !== 'reserved' && row.result.status !== 'review') continue;
+            if (!row.affectedItems) return items;
+            for (const id of row.affectedItems) {
+              const rows = byItem.get(id);
+              if (rows) rows.push(row);
+              else byItem.set(id, [row]);
+            }
+          }
+          for (const item of ctx.items.values()) {
+            if (
+              item.companyId !== companyId ||
+              current.items.get(item.id)?.version !== item.version
+            )
+              continue;
+            try {
+              const physical = checkedPhysical(item, before, after);
+              const totals = reservationTotals(byItem.get(item.id) ?? [], item.id);
+              items[item.id] = { checkedAt: to, itemVersion: item.version, physical, ...totals };
+            } catch (error) {
+              if (!(error instanceof InputError)) throw error;
+              // Incomplete evidence for one item leaves its balance unknown.
+            }
+          }
+          return items;
+        },
         billEvidence: async () => {
           try {
             const vouchers = await readVouchers();
@@ -1041,7 +1118,7 @@ export class StockAvailabilityService {
             return previous;
           }
           const evidence = await checkBalance(itemId);
-          const reservedUnits = unbilledUnits(evidence.orders, itemId);
+          const reservedUnits = reservationTotals(evidence.orders, itemId).units;
           const value = {
             itemVersion: evidence.item.version,
             physical: evidence.physical,
