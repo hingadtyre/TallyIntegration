@@ -660,6 +660,33 @@ small {
   color: var(--text-muted);
 }
 
+.account-select .searchable-picker {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: inherit;
+  width: 100%;
+}
+
+.account-select .searchable-picker > label {
+  font-size: var(--font-caption);
+  color: var(--text-muted);
+  font-weight: inherit;
+}
+
+.searchable-picker-prefix {
+  position: absolute;
+  inset-inline-start: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  pointer-events: none;
+}
+
+.field.searchable-picker .searchable-picker-prefix + input {
+  padding-inline-start: 32px;
+}
+
 .account-select select {
   color: #49655f;
   font-size: var(--font-control);
@@ -921,7 +948,6 @@ small {
 }
 .inventory-seller img {
   vertical-align: -3px;
-  margin-inline-end: 4px;
 }
 .reserved-quantity {
   text-decoration: underline dotted;

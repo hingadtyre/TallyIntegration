@@ -23,8 +23,7 @@ export function MarketplaceSeller({
   if (!account) return <>Seller account unavailable</>;
   return (
     <span className="inventory-seller" title={account.name}>
-      <MarketplaceLogo marketplace={account.marketplace} />
-      {account.name}
+      <MarketplaceLogo marketplace={account.marketplace} /> {account.name}
     </span>
   );
 }

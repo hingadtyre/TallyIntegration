@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Icon } from './components.js';
 
 export function SearchablePicker<T>({
+  inputId,
+  openOnFocus = true,
   label,
   placeholder,
   options,
@@ -10,6 +12,7 @@ export function SearchablePicker<T>({
   getLabel,
   filterOptions,
   renderOption = getLabel,
+  selectedIcon,
   groupLabel,
   pageSize = Infinity,
   moreLabel = 'Show more',
@@ -17,6 +20,8 @@ export function SearchablePicker<T>({
   disabled,
   onSelect,
 }: {
+  inputId?: string;
+  openOnFocus?: boolean;
   label: string;
   placeholder: string;
   options: T[];
@@ -25,6 +30,7 @@ export function SearchablePicker<T>({
   getLabel: (option: T) => string;
   filterOptions?: (options: T[], query: string) => T[];
   renderOption?: (option: T) => ReactNode;
+  selectedIcon?: ReactNode;
   groupLabel?: (option: T, query: string) => string;
   pageSize?: number;
   moreLabel?: string;
@@ -32,7 +38,8 @@ export function SearchablePicker<T>({
   disabled: boolean;
   onSelect: (id: string) => void;
 }) {
-  const id = useId();
+  const generatedId = useId();
+  const id = inputId ?? generatedId;
   const listId = id + '-options';
   // Keep the text being edited separate from the choice used by the form.
   const [open, setOpen] = useState(false);
@@ -114,11 +121,17 @@ export function SearchablePicker<T>({
       </label>
       <div className="searchable-picker-control">
         <div className="searchable-picker-input">
+          {query === null && selectedIcon && (
+            <span id={id + '-prefix'} className="searchable-picker-prefix">
+              {selectedIcon}
+            </span>
+          )}
           <input
             id={id}
             ref={input}
             role="combobox"
             aria-autocomplete="list"
+            aria-describedby={query === null && selectedIcon ? id + '-prefix' : undefined}
             aria-expanded={open}
             aria-controls={open ? listId : undefined}
             aria-activedescendant={open && active ? listId + '-' + activeIndex : undefined}
@@ -129,7 +142,7 @@ export function SearchablePicker<T>({
             value={query ?? (selected ? getLabel(selected) : '')}
             onFocus={(event) => {
               event.currentTarget.select();
-              openList();
+              if (openOnFocus) openList();
             }}
             onClick={(event) => {
               if (query === null) event.currentTarget.select();

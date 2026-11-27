@@ -122,7 +122,7 @@ The four totals at the top of **Inventory** also select what appears below. Choo
 
 Under each Tally item, listings appear in ascending **Set of** order. The number shown is the package count you accepted or the Tally units per sale you entered. Listings with the same number are ordered by seller SKU, then pickup location. **Unknown** sizes appear last.
 
-Each mapped listing shows the marketplace logo, its exact saved seller account name and pickup location. The Tally item above it shows **Available for marketplaces** after a verified stock check. Hover over, focus or tap **reserved** to see how many Tally units each seller’s unbilled orders have reserved. Choosing another seller changes the listings in view. The item’s total and breakdown cover all participating sellers in that Tally company.
+The **Seller account** dropdown shows the marketplace logo beside the selected seller’s exact saved name and beside each account in the menu. Each mapped listing also shows its marketplace logo, seller name and pickup location. The Tally item above it shows **Available for marketplaces** after a verified stock check. Hover over, focus or tap **reserved** to see how many Tally units each seller’s unbilled orders have reserved. Choosing another seller changes the listings in view. The item’s total and breakdown cover all participating sellers in that Tally company.
 
 **Reservation check needed** means Inventory has no current verified total for the item. A verified balance is current for two minutes. With starting stock confirmed in **Order matching**, use **Refresh inventory** to check again before the next scheduled order check. **After keep-back** shows the Tally balance after the standing keep-back alone.
 

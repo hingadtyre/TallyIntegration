@@ -148,10 +148,26 @@ test('the seller filter changes listing identities while preserving the shared i
     return response(state);
   });
   render(<App />);
-  const picker = await screen.findByLabelText('Seller account');
   await screen.findByRole('button', { name: '4 reserved' });
   for (const seller of [first, other]) {
-    fireEvent.change(picker, { target: { value: seller.id } });
+    const picker = screen.getByRole<HTMLInputElement>('combobox', { name: 'Seller account' });
+    fireEvent.click(picker);
+    const menu = within(screen.getByRole('listbox', { name: 'Seller account' }));
+    for (const account of [first, other]) {
+      const option = menu.getByRole('option', { name: 'Flipkart ' + account.name });
+      assert.ok(within(option).getByRole('img', { name: 'Flipkart' }));
+    }
+    if (seller === first)
+      fireEvent.click(menu.getByRole('option', { name: 'Flipkart Main Store' }));
+    else {
+      fireEvent.keyDown(picker, { key: 'ArrowDown' });
+      fireEvent.keyDown(picker, { key: 'Enter' });
+    }
+    const selected = screen.getByRole<HTMLInputElement>('combobox', { name: 'Seller account' });
+    assert.equal(selected.value, seller.name);
+    assert.equal(document.activeElement, selected);
+    assert.ok(within(selected.parentElement!).getByRole('img', { name: 'Flipkart' }));
+    assert.equal(screen.queryByRole('listbox', { name: 'Seller account' }), null);
     fireEvent.change(screen.getByLabelText('Search stock items and listings'), {
       target: { value: item.name },
     });
@@ -167,7 +183,7 @@ test('the seller filter changes listing identities while preserving the shared i
     assert.deepEqual(
       within(popup)
         .getAllByRole('listitem')
-        .map((row) => row.textContent),
+        .map((row) => row.textContent?.trim()),
       ['Main Store3', 'Outlet Store1'],
     );
     fireEvent.keyDown(trigger, { key: 'Escape' });
@@ -446,12 +462,10 @@ test('an empty live workspace guides the user to connections and disables listin
   });
   render(<App />);
   await screen.findByRole('heading', { name: 'Start with your Tally company' });
-  assert.deepEqual(
-    within(screen.getByRole('combobox', { name: 'Seller account' }))
-      .getAllByRole('option')
-      .map((option) => option.textContent),
-    ['No seller account'],
-  );
+  const seller = screen.getByRole<HTMLInputElement>('combobox', { name: 'Seller account' });
+  assert.equal(seller.disabled, true);
+  assert.equal(seller.placeholder, 'No seller account');
+  assert.equal(within(seller.parentElement!).queryByRole('img'), null);
   assert.equal(
     (screen.getByRole('button', { name: 'Calculate' }) as HTMLButtonElement).disabled,
     true,
@@ -613,9 +627,9 @@ test('returning to Inventory immediately loads an added account and its imported
   assert.equal(stateReads, 1);
 
   fireEvent.click(screen.getByRole('button', { name: /^Inventory/ }));
-  await screen.findByRole('option', { name: account.name });
+  await screen.findByDisplayValue(account.name);
   assert.equal(stateReads, 2);
-  assert.equal((screen.getByLabelText('Seller account') as HTMLSelectElement).value, account.id);
+  assert.equal(screen.getByLabelText<HTMLInputElement>('Seller account').value, account.name);
   const parent = screen.getByRole('row', { name: /Bridgestone Sturdo/ });
   fireEvent.click(within(parent).getByRole('button', { name: 'Map listing' }));
   const dialog = screen.getByRole('dialog', { name: 'Map an existing listing' });
@@ -1288,9 +1302,8 @@ test('failed inventory refresh retains stock and retries the selected company an
   render(<App />);
   await screen.findByRole('heading', { name: 'Inventory' });
   fireEvent.change(screen.getByLabelText('Tally company'), { target: { value: 'demo-b' } });
-  fireEvent.change(screen.getByLabelText('Seller account'), {
-    target: { value: 'flipkart-primary' },
-  });
+  fireEvent.click(screen.getByLabelText('Seller account'));
+  fireEvent.click(screen.getByRole('option', { name: 'Flipkart ' + state.accounts[0].name }));
   fireEvent.click(screen.getByRole('button', { name: 'Refresh inventory' }));
   assert.match((await screen.findByRole('alert')).textContent ?? '', /Tally is offline/);
   assert.ok(screen.getByText('SAMPLE-BRANCH-1'));
@@ -1848,15 +1861,13 @@ test('a pending Inventory review stays with the screen and seller that requested
   const dialog = screen.getByRole('dialog', { name: 'Review proposed stock' });
   fireEvent.click(within(dialog).getByRole('button', { name: 'Close dialog' }));
   fireEvent.click(prepare);
-  fireEvent.change(screen.getByLabelText('Seller account'), { target: { value: 'other-seller' } });
+  fireEvent.click(screen.getByLabelText('Seller account'));
+  fireEvent.click(screen.getByRole('option', { name: 'Flipkart Other seller' }));
   await act(async () =>
     finish(
       response({ id: 'old-seller-review', companyId: 'demo-a', rows: [], publishingEnabled: true }),
     ),
   );
   assert.equal(document.querySelector('dialog[open]'), null);
-  assert.equal(
-    (screen.getByLabelText('Seller account') as HTMLSelectElement).value,
-    'other-seller',
-  );
+  assert.equal(screen.getByLabelText<HTMLInputElement>('Seller account').value, 'Other seller');
 });

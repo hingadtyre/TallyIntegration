@@ -11,6 +11,8 @@ import type {
 } from '../../shared/contracts.js';
 import { actionScope, inventoryGroups, isLowStock, type StockView } from '../selectors.js';
 import { Icon, Stat } from '../components.js';
+import { MarketplaceLogo, MarketplaceSeller } from '../MarketplaceSeller.js';
+import { SearchablePicker } from '../SearchablePicker.js';
 import { formatCompanyStockIssue, formatDateTime as time } from '../format.js';
 import type { Workspace } from '../useWorkspace.js';
 import { ItemRows } from './InventoryTable.js';
@@ -31,6 +33,8 @@ interface InventoryScreenProps {
   onUnsavedChange: (unsaved: boolean) => void;
   onOpenConnections: () => void;
 }
+
+const sellerPickerId = 'inventory-seller-account';
 
 /** App keys this screen by company and seller so pending reviews stay in their original scope. */
 export function InventoryScreen({
@@ -101,7 +105,9 @@ export function InventoryScreen({
     });
   }, []);
   function changeAccount(id: string) {
-    if (onAccountChange(id)) setSelected([]);
+    // Switching sellers remounts Inventory. Return focus to the replacement picker.
+    flushSync(() => onAccountChange(id));
+    document.getElementById(sellerPickerId)?.focus({ preventScroll: true });
   }
   const filters = { companyId, accountId, query, brand, pack, view };
   const groups = inventoryGroups(state, filters);
@@ -368,21 +374,25 @@ export function InventoryScreen({
               {groups.length} {groups.length === 1 ? 'item' : 'items'}
             </span>
           </div>
-          <label className="account-select">
-            <span>Seller account</span>
-            <select
-              aria-label="Seller account"
-              value={accountId}
-              onChange={(event) => changeAccount(event.target.value)}
-            >
-              {!state.accounts.length && <option value="">No seller account</option>}
-              {state.accounts.map((value) => (
-                <option key={value.id} value={value.id}>
-                  {value.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="account-select">
+            <SearchablePicker
+              inputId={sellerPickerId}
+              openOnFocus={false}
+              label="Seller account"
+              placeholder={state.accounts.length ? 'Choose seller account' : 'No seller account'}
+              options={state.accounts}
+              selected={account}
+              getId={(seller) => seller.id}
+              getLabel={(seller) => seller.name}
+              selectedIcon={
+                account?.marketplace && <MarketplaceLogo marketplace={account.marketplace} />
+              }
+              renderOption={(seller) => <MarketplaceSeller account={seller} />}
+              emptyMessage="No matching seller accounts."
+              disabled={!state.accounts.length}
+              onSelect={changeAccount}
+            />
+          </div>
         </div>
         {company && (
           <div className="company-sync">
