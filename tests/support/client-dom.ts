@@ -32,3 +32,11 @@ export function response(value: unknown, status = 200): Response {
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+export function pendingResponse() {
+  let resolve!: (response: Response) => void;
+  const promise = new Promise<Response>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}

@@ -8,6 +8,7 @@ import {
   fireEvent,
   waitFor,
   response,
+  pendingResponse,
   act,
 } from '../support/client-dom.js';
 import type { FlipkartConnectionStatus, Review, Snapshot } from '../../src/shared/contracts.js';
@@ -1295,10 +1296,72 @@ test('failed inventory refresh retains stock and retries the selected company an
   assert.ok(screen.getByText('SAMPLE-BRANCH-1'));
   assert.ok(within(screen.getByRole('row', { name: /SAMPLE-BRANCH-1/ })).getByText('20'));
 
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh inventory' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Retry refresh' }));
   await screen.findByText('Stock and listings refreshed.');
   assert.equal(refreshes, 2);
   assert.equal(screen.queryByRole('alert'), null);
+});
+
+test('first inventory discovery keeps its partial result and can retry for the discovered company', async (t) => {
+  const discovered = initialState('demo', 'unused');
+  const submitted: unknown[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+    if (url === '/api/state')
+      return response({ ...discovered, companies: [], items: [], listings: [] });
+    assert.equal(url, '/api/inventory/refresh');
+    submitted.push(JSON.parse(String(init?.body)));
+    return response({
+      ...discovered,
+      refresh:
+        submitted.length === 1
+          ? { partial: true, message: 'Tally discovered the company. Listings need attention.' }
+          : { partial: false, message: 'Stock and listings refreshed.' },
+    });
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Refresh inventory' }));
+  const alert = await screen.findByRole('alert');
+  assert.ok(within(alert).getByText('Tally discovered the company. Listings need attention.'));
+  fireEvent.click(within(alert).getByRole('button', { name: 'Retry refresh' }));
+  await screen.findByText('Stock and listings refreshed.');
+  const accountId = discovered.accounts[0].id;
+  assert.deepEqual(submitted, [
+    { accountId },
+    { companyId: discovered.companies[0].id, accountId },
+  ]);
+});
+
+test('inventory refresh feedback stays with the initiating company and seller', async (t) => {
+  const state = initialState('demo', 'unused');
+  const pending = pendingResponse();
+  let requests = 0;
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    if (url === '/api/state') return response(state);
+    assert.equal(url, '/api/inventory/refresh');
+    requests++;
+    return pending.promise;
+  });
+  render(<App />);
+  const button = await screen.findByRole('button', { name: 'Refresh inventory' });
+  button.focus();
+  fireEvent.click(button);
+  assert.ok(screen.getByRole('button', { name: 'Refreshing inventory…' }));
+  assert.equal(document.activeElement, button);
+  assert.ok(screen.getByRole('row', { name: /SAMPLE-CEAT-2-2/ }));
+  fireEvent.click(button);
+  fireEvent.change(screen.getByLabelText('Tally company'), { target: { value: 'demo-b' } });
+  assert.ok(screen.getByRole('button', { name: 'Refresh inventory' }));
+  await act(async () =>
+    pending.resolve(
+      response({ ...state, refresh: { partial: true, message: 'Seller catalogue unavailable.' } }),
+    ),
+  );
+  assert.equal(screen.queryByRole('alert'), null);
+  fireEvent.change(screen.getByLabelText('Tally company'), { target: { value: 'demo-a' } });
+  const alert = screen.getByRole('alert');
+  assert.ok(within(alert).getByText('Seller catalogue unavailable.'));
+  assert.ok(within(alert).getByRole('button', { name: 'Retry refresh' }));
+  assert.equal(requests, 1);
 });
 
 for (const view of ['Inventory', 'Connections'] as const) {

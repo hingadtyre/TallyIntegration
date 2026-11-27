@@ -45,9 +45,11 @@ const money = new Intl.NumberFormat('en-IN', {
 
 export function MarketplacesScreen({
   mode,
+  active = true,
   onOpenInventory,
 }: {
   mode: Snapshot['mode'];
+  active?: boolean;
   onOpenInventory: () => void;
 }) {
   const [accounts, setAccounts] = useState<MarketplaceAccount[]>([]);
@@ -56,24 +58,46 @@ export function MarketplacesScreen({
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [form, setForm] = useState<'add' | MarketplaceAccount | null>(null);
+  const [imports, setImports] = useState<Record<string, ListingImport>>({});
+  const importing = useRef(new Set<string>());
+  const updatesDuringAccountRead = useRef<Map<string, MarketplaceAccount> | null>(null);
   useEffect(() => {
+    if (!active) {
+      setLoading(true);
+      setError('');
+      setSelected(null);
+      setForm(null);
+      return;
+    }
     const controller = new AbortController();
+    const newerAccounts = new Map<string, MarketplaceAccount>();
+    updatesDuringAccountRead.current = newerAccounts;
     setLoading(true);
     setError('');
     void marketplaceApi
       .accounts(controller.signal)
       .then((result) => {
-        if (!controller.signal.aborted) setAccounts(result.accounts);
+        if (controller.signal.aborted) return;
+        const merged = new Map(result.accounts.map((account) => [account.id, account]));
+        for (const [id, account] of newerAccounts) merged.set(id, account);
+        setAccounts([...merged.values()]);
       })
       .catch((failure: unknown) => {
         if (!controller.signal.aborted) setError(errorMessage(failure));
       })
       .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted) {
+          updatesDuringAccountRead.current = null;
+          setLoading(false);
+        }
       });
-    return () => controller.abort();
-  }, [loadAttempt]);
+    return () => {
+      controller.abort();
+      updatesDuringAccountRead.current = null;
+    };
+  }, [loadAttempt, active]);
   function updateAccount(account: MarketplaceAccount) {
+    updatesDuringAccountRead.current?.set(account.id, account);
     setAccounts((current) =>
       current.some((item) => item.id === account.id)
         ? current.map((item) => (item.id === account.id ? account : item))
@@ -81,6 +105,34 @@ export function MarketplacesScreen({
     );
   }
   const account = accounts.find((item) => item.id === selected);
+  async function refreshListings(id: string, lastSuccess: string | null) {
+    if (importing.current.has(id)) return;
+    importing.current.add(id);
+    setImports((current) => ({
+      ...current,
+      [id]: { revision: current[id]?.revision ?? 0, pending: true },
+    }));
+    try {
+      const result = await marketplaceApi.refresh(id);
+      updateAccount(result.account);
+      setImports((current) => ({
+        ...current,
+        [id]: { revision: current[id].revision + 1, pending: false },
+      }));
+    } catch (failure) {
+      setImports((current) => ({
+        ...current,
+        [id]: {
+          ...current[id],
+          pending: false,
+          error: { message: errorMessage(failure), lastSuccess },
+        },
+      }));
+    } finally {
+      importing.current.delete(id);
+    }
+  }
+  if (!active) return null;
   return (
     <section className="marketplaces-screen">
       {account ? (
@@ -89,7 +141,8 @@ export function MarketplacesScreen({
           account={account}
           demo={mode === 'demo'}
           onBack={() => setSelected(null)}
-          onAccountUpdated={updateAccount}
+          catalogueImport={imports[account.id]}
+          onRefresh={(lastSuccess) => void refreshListings(account.id, lastSuccess)}
           onOpenInventory={onOpenInventory}
         />
       ) : (
@@ -124,16 +177,18 @@ export function MarketplacesScreen({
             </div>
           )}
           <div className="marketplace-account-grid">
-            {accounts.map((item) => (
-              <MarketplaceAccountTile
-                key={item.id}
-                account={item}
-                demo={mode === 'demo'}
-                onOpen={() => setSelected(item.id)}
-                onCredentials={() => setForm(item)}
-                onUpdated={updateAccount}
-              />
-            ))}
+            {!loading &&
+              !error &&
+              accounts.map((item) => (
+                <MarketplaceAccountTile
+                  key={item.id}
+                  account={item}
+                  demo={mode === 'demo'}
+                  onOpen={() => setSelected(item.id)}
+                  onCredentials={() => setForm(item)}
+                  onUpdated={updateAccount}
+                />
+              ))}
             <button
               className="marketplace-add-tile"
               aria-label="Add another marketplace account"
@@ -275,17 +330,25 @@ interface ResumedProposal {
   quantity: number;
 }
 
+type ListingImport = {
+  pending: boolean;
+  revision: number;
+  error?: { message: string; lastSuccess: string | null };
+};
+
 function MarketplaceListings({
   account,
   demo,
   onBack,
-  onAccountUpdated,
+  catalogueImport,
+  onRefresh,
   onOpenInventory,
 }: {
   account: MarketplaceAccount;
   demo: boolean;
   onBack: () => void;
-  onAccountUpdated: (account: MarketplaceAccount) => void;
+  catalogueImport?: ListingImport;
+  onRefresh: (lastSuccess: string | null) => void;
   onOpenInventory: () => void;
 }) {
   const [searchText, setSearchText] = useState('');
@@ -295,9 +358,19 @@ function MarketplaceListings({
     page: number;
   }>({ search: '', status: '', page: 1 });
   const [data, setData] = useState<MarketplacePage | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const importRevision = catalogueImport?.revision ?? 0;
+  const [loadedRevision, setLoadedRevision] = useState(importRevision);
   const [readError, setReadError] = useState('');
-  const [refreshError, setRefreshError] = useState('');
+  const lastSuccess =
+    [account.lastRefreshedAt, data?.lastRefreshedAt]
+      .filter((value): value is string => !!value)
+      .sort()
+      .at(-1) ?? null;
+  const failure = catalogueImport?.error;
+  const refreshError =
+    failure && (!lastSuccess || lastSuccess <= (failure.lastSuccess ?? ''))
+      ? failure.message
+      : undefined;
   const [revision, setRevision] = useState(0);
   const [editor, setEditor] = useState<MarketplaceEditorTarget | null>(null);
   const [recovery, setRecovery] = useState<MarketplaceChange | null>(null);
@@ -311,6 +384,9 @@ function MarketplaceListings({
   const alive = useRef(true);
   const request = useRef(0);
   const readInFlight = useRef(false);
+  const initialRevision = useRef(importRevision);
+  const searchInput = useRef<HTMLInputElement>(null);
+  const refreshButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -321,7 +397,6 @@ function MarketplaceListings({
     const controller = new AbortController();
     const generation = ++request.current;
     readInFlight.current = true;
-    setData(null);
     setReadError('');
     void marketplaceApi
       .listings(account.id, query.search, query.status, query.page, controller.signal)
@@ -333,6 +408,7 @@ function MarketplaceListings({
             return;
           }
           setData(result);
+          setLoadedRevision(importRevision);
           setRowErrors({});
         }
       })
@@ -345,21 +421,12 @@ function MarketplaceListings({
           readInFlight.current = false;
       });
     return () => controller.abort();
-  }, [account.id, query, revision]);
-  async function refresh() {
-    if (refreshing) return;
-    setRefreshing(true);
-    setRefreshError('');
-    try {
-      const result = await marketplaceApi.refresh(account.id);
-      if (!alive.current) return;
-      onAccountUpdated(result.account);
-      setRevision((value) => value + 1);
-    } catch (failure) {
-      if (alive.current) setRefreshError(errorMessage(failure));
-    } finally {
-      if (alive.current) setRefreshing(false);
-    }
+  }, [account.id, query, revision, importRevision]);
+  function browse(next: typeof query) {
+    // A different filter or page must not show rows from the previous selection.
+    setData(null);
+    setReadError('');
+    setQuery(next);
   }
   function updateListing(listing: MarketplaceListingView) {
     if (!alive.current || listing.accountId !== account.id) return;
@@ -405,6 +472,8 @@ function MarketplaceListings({
     setRecovery(change);
   }
   const loading = !data && !readError;
+  const refreshing = catalogueImport?.pending || (loadedRevision !== importRevision && !readError);
+  const firstImport = refreshing && !data?.total && !data?.lastRefreshedAt;
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   return (
     <>
@@ -421,27 +490,43 @@ function MarketplaceListings({
         </div>
         <button
           className="button secondary"
-          disabled={refreshing || loading}
-          onClick={() => void refresh()}
+          ref={refreshButton}
+          disabled={loading && !refreshing}
+          aria-disabled={!!refreshing || loading}
+          onClick={() => {
+            if (!refreshing && !loading) onRefresh(lastSuccess);
+          }}
         >
-          <Icon name="refresh" />
+          <Icon name="refresh" className={refreshing ? 'spin' : ''} />
           {refreshing ? 'Refreshing listings…' : 'Refresh listings'}
         </button>
       </div>
+      <span role="status" className="sr-only">
+        {refreshing
+          ? `Refreshing listings for ${account.name}.`
+          : loadedRevision > initialRevision.current && !refreshError && !readError
+            ? `Listings refreshed for ${account.name}.`
+            : ''}
+      </span>
       <div className="marketplace-refresh-note">
         <span
           className={`badge ${account.connection.state === 'verified' ? 'badge-green' : 'badge-amber'}`}
         >
           {demo ? 'Sample simulation' : connectionLabels[account.connection.state]}
         </span>
-        <span>
-          Last successful refresh: {time(data?.lastRefreshedAt ?? account.lastRefreshedAt)}
-        </span>
+        <span>Last successful refresh: {time(lastSuccess)}</span>
       </div>
       {refreshError && (
         <div className="message error" role="alert">
           <span>{refreshError}</span>
-          <button className="button secondary" disabled={loading} onClick={() => void refresh()}>
+          <button
+            className="button secondary"
+            disabled={loading || !!refreshing}
+            onClick={() => {
+              refreshButton.current?.focus();
+              onRefresh(lastSuccess);
+            }}
+          >
             Retry refresh
           </button>
         </div>
@@ -451,13 +536,14 @@ function MarketplaceListings({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              setQuery((current) => ({ ...current, search: searchText.trim(), page: 1 }));
+              browse({ ...query, search: searchText.trim(), page: 1 });
             }}
           >
             <label className="search-input">
               <Icon name="search" />
               <input
                 aria-label="Search marketplace listings"
+                ref={searchInput}
                 placeholder="Search title, SKU or product ID"
                 value={searchText}
                 onChange={(event) => setSearchText(event.target.value)}
@@ -473,11 +559,11 @@ function MarketplaceListings({
               aria-label="Listing status"
               value={query.status}
               onChange={(event) =>
-                setQuery((current) => ({
-                  ...current,
+                browse({
+                  ...query,
                   status: event.target.value as MarketplaceListingStatus | '',
                   page: 1,
-                }))
+                })
               }
             >
               {statuses.map((status) => (
@@ -488,17 +574,27 @@ function MarketplaceListings({
             </select>
           </label>
         </div>
-        {loading ? (
-          <p className="marketplace-loading" role="status">
-            Loading listings…
-          </p>
-        ) : readError ? (
+        {readError && (
           <div className="message error" role="alert">
-            <span>{readError}</span>
-            <button className="button secondary" onClick={() => setRevision((value) => value + 1)}>
+            <span>
+              {readError}
+              {data && ' Showing the last loaded listings.'}
+            </span>
+            <button
+              className="button secondary"
+              onClick={() => {
+                (data ? refreshButton : searchInput).current?.focus({ preventScroll: true });
+                setRevision((value) => value + 1);
+              }}
+            >
               Retry listings
             </button>
           </div>
+        )}
+        {loading || firstImport ? (
+          <p className="marketplace-loading" role="status">
+            Loading listings…
+          </p>
         ) : data?.listings.length ? (
           <div className="marketplace-table-scroll">
             <table className="marketplace-table">
@@ -533,7 +629,7 @@ function MarketplaceListings({
               </tbody>
             </table>
           </div>
-        ) : (
+        ) : data ? (
           <div className="marketplace-empty">
             <h2>No listings to show</h2>
             <p>
@@ -542,8 +638,8 @@ function MarketplaceListings({
                 : 'Refresh listings to load this seller account’s marketplace catalogue.'}
             </p>
           </div>
-        )}
-        {data && (
+        ) : null}
+        {data && !firstImport && (
           <div className="table-footer">
             <span>
               {data.total} matching listing{data.total === 1 ? '' : 's'}
@@ -552,7 +648,7 @@ function MarketplaceListings({
               <button
                 className="button secondary"
                 disabled={data.page <= 1}
-                onClick={() => setQuery((current) => ({ ...current, page: current.page - 1 }))}
+                onClick={() => browse({ ...query, page: data.page - 1 })}
               >
                 Previous
               </button>
@@ -562,7 +658,7 @@ function MarketplaceListings({
               <button
                 className="button secondary"
                 disabled={data.page >= totalPages}
-                onClick={() => setQuery((current) => ({ ...current, page: current.page + 1 }))}
+                onClick={() => browse({ ...query, page: data.page + 1 })}
               >
                 Next
               </button>

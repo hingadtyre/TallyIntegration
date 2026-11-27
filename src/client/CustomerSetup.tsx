@@ -91,7 +91,9 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           sellers. It also includes the seller selected in Inventory when its listings are available
           to refresh. Once you confirm starting stock, it checks orders and the units reserved for
           unbilled sales. With company sync on, eligible listings can update across the company’s
-          seller accounts. The result tells you which checks succeeded and which need attention.
+          seller accounts. You can browse the saved inventory during the refresh. The result tells
+          you which checks succeeded and which need attention. Choose Retry refresh to run them
+          again.
         </p>
         <p>
           Inventory shows the marketplace logo and seller name beside each listing’s pickup

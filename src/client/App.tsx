@@ -258,12 +258,11 @@ export function App() {
           <div hidden={screen !== 'activity'}>
             <ActivityScreen state={state} companyId={companyId} active={screen === 'activity'} />
           </div>
-          {screen === 'marketplaces' && (
-            <MarketplacesScreen
-              mode={state.mode}
-              onOpenInventory={() => selectScreen('inventory')}
-            />
-          )}
+          <MarketplacesScreen
+            active={screen === 'marketplaces'}
+            mode={state.mode}
+            onOpenInventory={() => selectScreen('inventory')}
+          />
           {screen === 'billing' && (
             <BillingScreen
               companyId={companyId}

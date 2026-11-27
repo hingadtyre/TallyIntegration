@@ -119,6 +119,18 @@ export function InventoryScreen({
   );
   const company = state.companies.find((value) => value.id === companyId);
   const account = state.accounts.find((value) => value.id === accountId);
+  const refreshFeedback = workspace.inventoryRefreshFeedback(companyId, accountId);
+  const refreshButton = useRef<HTMLButtonElement>(null);
+  async function refreshInventory() {
+    if (busy) return;
+    const scope = [company?.name, account?.name].filter(Boolean).join(' / ');
+    await workspace.refreshInventory(
+      companyId,
+      accountId,
+      scope ? 'Refreshing inventory for ' + scope : 'Refreshing inventory',
+    );
+    refreshReservations();
+  }
   const sellerAccounts = useMemo(
     () => new Map(state.accounts.map((seller) => [seller.id, seller])),
     [state.accounts],
@@ -238,16 +250,51 @@ export function InventoryScreen({
         <h1>Inventory</h1>
         <button
           className="button secondary"
-          disabled={!!busy}
-          onClick={async () => {
-            await workspace.refreshInventory(companyId, accountId);
-            refreshReservations();
-          }}
+          ref={refreshButton}
+          disabled={!!busy && !refreshFeedback?.pending}
+          aria-disabled={!!busy}
+          onClick={() => void refreshInventory()}
         >
-          <Icon name="refresh" className={busy === 'Refreshing inventory' ? 'spin' : ''} />
-          {busy === 'Refreshing inventory' ? 'Refreshing…' : 'Refresh inventory'}
+          <Icon name="refresh" className={refreshFeedback?.pending ? 'spin' : ''} />
+          {refreshFeedback?.pending ? 'Refreshing inventory…' : 'Refresh inventory'}
         </button>
       </div>
+      {refreshFeedback?.result && (
+        <div
+          className={refreshFeedback.result.ok ? 'message success' : 'message error'}
+          role={refreshFeedback.result.ok ? 'status' : 'alert'}
+        >
+          <Icon name={refreshFeedback.result.ok ? 'check' : 'info'} />
+          <span>
+            {refreshFeedback.result.ok
+              ? refreshFeedback.result.value
+              : refreshFeedback.result.error}
+          </span>
+          {!refreshFeedback.result.ok && (
+            <button
+              className="button secondary"
+              disabled={!!busy}
+              onClick={() => {
+                refreshButton.current?.focus();
+                void refreshInventory();
+              }}
+            >
+              Retry refresh
+            </button>
+          )}
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Dismiss refresh result"
+            onClick={() => {
+              refreshButton.current?.focus();
+              workspace.dismissInventoryRefresh(companyId, accountId);
+            }}
+          >
+            <Icon name="close" />
+          </button>
+        </div>
+      )}
       <div className="stat-grid inventory-summary" role="group" aria-label="Inventory views">
         <Stat
           icon="box"
@@ -502,7 +549,11 @@ export function InventoryScreen({
             onFixPack={(item, listingId) => setMapping({ item, listingId })}
           />
         )}
-        {companyItems.length === 0 ? (
+        {companyItems.length === 0 && refreshFeedback?.pending ? (
+          <p className="marketplace-loading" role="status">
+            Loading inventory…
+          </p>
+        ) : companyItems.length === 0 ? (
           <div className="empty-state">
             <div className="empty-icon">
               <Icon name="box" />
@@ -632,6 +683,9 @@ export function InventoryScreen({
             <span className="status-dot" />
             {company?.stockIssue && `${formatCompanyStockIssue(company.stockIssue)}. `}
             Last successful Tally read: {time(company?.lastSuccess)}
+            {refreshFeedback?.lastSuccess && (
+              <> - Last successful inventory refresh: {time(refreshFeedback.lastSuccess)}</>
+            )}
           </span>
         </div>
       </section>

@@ -15,6 +15,16 @@ interface BackupResult {
   verified: true;
 }
 
+type InventoryRefreshFeedback = {
+  pending: boolean;
+  result?: ActionResult<string>;
+  lastSuccess?: string;
+};
+
+function inventoryScope(companyId: string, accountId: string) {
+  return JSON.stringify([companyId, accountId]);
+}
+
 /** Owns the server snapshot and command feedback, not individual screen controls. */
 export function useWorkspace() {
   const [state, setState] = useState<Snapshot | null>(null);
@@ -22,6 +32,9 @@ export function useWorkspace() {
   const [error, setError] = useState('');
   const [pollError, setPollError] = useState('');
   const [notice, setNotice] = useState('');
+  const [inventoryRefreshes, setInventoryRefreshes] = useState<
+    Record<string, InventoryRefreshFeedback>
+  >({});
   const mounted = useRef(false);
   const actionInFlight = useRef(false);
   const snapshotGeneration = useRef(0);
@@ -63,7 +76,7 @@ export function useWorkspace() {
     async <T>(
       label: string,
       operation: () => Promise<T>,
-      success: string | ((value: T) => string),
+      success: string | ((value: T) => string) | null,
     ): Promise<ActionResult<T>> => {
       if (actionInFlight.current)
         return { ok: false, error: 'Wait for the current action to finish.' };
@@ -75,11 +88,12 @@ export function useWorkspace() {
       setNotice('');
       try {
         const value = await operation();
-        if (mounted.current) setNotice(typeof success === 'function' ? success(value) : success);
+        if (mounted.current && success !== null)
+          setNotice(typeof success === 'function' ? success(value) : success);
         return { ok: true, value };
       } catch (cause) {
         const message = errorMessage(cause);
-        if (mounted.current) setError(message);
+        if (mounted.current && success !== null) setError(message);
         return { ok: false, error: message };
       } finally {
         actionInFlight.current = false;
@@ -191,20 +205,47 @@ export function useWorkspace() {
   );
 
   const refreshInventory = useCallback(
-    (companyId: string, accountId: string) =>
-      runAction(
-        'Refreshing inventory',
+    async (companyId: string, accountId: string, label: string) => {
+      if (actionInFlight.current) return;
+      const key = inventoryScope(companyId, accountId);
+      let resultKey = key;
+      setInventoryRefreshes((current) => ({
+        ...current,
+        [key]: { lastSuccess: current[key]?.lastSuccess, pending: true },
+      }));
+      const result = await runAction(
+        label,
         async () => {
           const { refresh, ...next } = await requestJson<InventoryRefreshResult>(
             '/inventory/refresh',
             { companyId: companyId || undefined, accountId: accountId || undefined },
           );
+          // Discovery can replace the empty selector before even a partial result is shown.
+          if (!companyId && next.companies.length) {
+            resultKey = inventoryScope(
+              next.companies[0].id,
+              accountId || next.accounts[0]?.id || '',
+            );
+          }
           if (mounted.current) setState(next);
           if (refresh.partial) throw new Error(refresh.message);
           return refresh.message;
         },
-        (message) => message,
-      ),
+        null,
+      );
+      const finished = new Date().toISOString();
+      if (mounted.current)
+        setInventoryRefreshes((current) => {
+          const updated = { ...current };
+          if (resultKey !== key) delete updated[key];
+          updated[resultKey] = {
+            pending: false,
+            result,
+            lastSuccess: result.ok ? finished : current[resultKey]?.lastSuccess,
+          };
+          return updated;
+        });
+    },
     [runAction],
   );
 
@@ -264,6 +305,15 @@ export function useWorkspace() {
     calculate,
     refreshSnapshot,
     refreshInventory,
+    inventoryRefreshFeedback: (companyId: string, accountId: string) =>
+      inventoryRefreshes[inventoryScope(companyId, accountId)],
+    dismissInventoryRefresh: (companyId: string, accountId: string) => {
+      const key = inventoryScope(companyId, accountId);
+      setInventoryRefreshes((current) => ({
+        ...current,
+        [key]: { ...current[key], result: undefined },
+      }));
+    },
     refreshTally,
     prepareReview,
     previewAutomation,

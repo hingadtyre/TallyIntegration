@@ -10,6 +10,10 @@ export function useInventoryReservations(company: Company | undefined, intervalS
   const [revision, setRevision] = useState(0);
   const [result, setResult] = useState<{ key: string; items: Record<string, ItemReservations> }>();
   const companyId = company?.id;
+  const activeCompany = useRef(companyId);
+  useLayoutEffect(() => {
+    activeCompany.current = companyId;
+  }, [companyId]);
   const key =
     company?.stockTrackingFrom && !company.stockIssue
       ? JSON.stringify([companyId, company.stockTrackingFrom, revision])
@@ -51,7 +55,9 @@ export function useInventoryReservations(company: Company | undefined, intervalS
   }, [key, companyId, intervalSeconds]);
   return {
     items: key && result?.key === key ? result.items : undefined,
-    refresh: () => setRevision((value) => value + 1),
+    refresh: () => {
+      if (companyId && activeCompany.current === companyId) setRevision((value) => value + 1);
+    },
   };
 }
 

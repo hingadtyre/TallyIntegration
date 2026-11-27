@@ -9,6 +9,7 @@ import {
   fireEvent,
   waitFor,
   response,
+  pendingResponse,
 } from '../../support/client-dom.js';
 import type {
   MarketplaceAccount,
@@ -18,6 +19,7 @@ import type {
   MarketplacePage,
 } from '../../../src/shared/marketplace-contracts.js';
 import { MarketplacesScreen } from '../../../src/client/screens/MarketplacesScreen.js';
+import { formatDateTime } from '../../../src/client/format.js';
 
 const account = (id = 'seller-a'): MarketplaceAccount => ({
   id,
@@ -109,6 +111,129 @@ function baseResponse(input: string | URL | Request, item = listing()) {
   if (String(input).startsWith('/api/marketplaces/listings?')) return response(page(item));
   throw new Error(`Unexpected request: ${String(input)}`);
 }
+
+test('refresh keeps the current listings and keyboard focus through import, reload failure and retry', async (t) => {
+  const importing = pendingResponse();
+  const reading = pendingResponse();
+  let imports = 0;
+  let reads = 0;
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    if (url === '/api/marketplaces') return response({ accounts: [account()] });
+    if (url === '/api/marketplaces/refresh') {
+      imports++;
+      return importing.promise;
+    }
+    reads++;
+    if (reads === 2) return reading.promise;
+    return response(page(reads === 1 ? listing() : { ...listing(), title: 'Verified tyre' }));
+  });
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  const button = screen.getByRole('button', { name: 'Refresh listings' });
+  const table = screen.getByRole('table');
+  button.focus();
+  fireEvent.click(button);
+  assert.ok(screen.getByRole('button', { name: 'Refreshing listings…' }));
+  fireEvent.click(button);
+  await act(async () => importing.resolve(response({ account: account() })));
+  assert.equal(reads, 2);
+  assert.equal(screen.getByRole('table'), table);
+  assert.equal(document.activeElement, button);
+  assert.equal(button.getAttribute('aria-disabled'), 'true');
+  fireEvent.click(button);
+  assert.equal(imports, 1);
+  await act(async () => reading.resolve(response({ error: 'Could not read listings.' }, 503)));
+  const alert = await screen.findByRole('alert');
+  assert.ok(within(table).getByText('Marketplace tyre'));
+  const retry = within(alert).getByRole('button', { name: 'Retry listings' });
+  retry.focus();
+  fireEvent.click(retry);
+  assert.ok(await within(table).findByText('Verified tyre'));
+  assert.equal(document.activeElement, button);
+  assert.equal(imports, 1);
+});
+
+test('an ongoing catalogue refresh follows the original seller through account switches', async (t) => {
+  const pending = pendingResponse();
+  let imports = 0;
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    if (url === '/api/marketplaces')
+      return response({ accounts: [account(), account('seller-b')] });
+    if (url === '/api/marketplaces/refresh') {
+      imports++;
+      return pending.promise;
+    }
+    const id = new URL(url, 'http://localhost').searchParams.get('accountId')!;
+    return response(page(listing(id)));
+  });
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh listings' }));
+  fireEvent.click(screen.getByRole('button', { name: /All marketplace accounts/ }));
+  fireEvent.click(
+    within(screen.getByRole('article', { name: 'Second store' })).getByRole('button', {
+      name: 'Open listings',
+    }),
+  );
+  await screen.findByText('Second account tyre');
+  assert.ok(screen.getByRole('button', { name: 'Refresh listings' }));
+  fireEvent.click(screen.getByRole('button', { name: /All marketplace accounts/ }));
+  await openListings();
+  fireEvent.click(screen.getByRole('button', { name: 'Refreshing listings…' }));
+  await act(async () => pending.resolve(response({ account: account() })));
+  await screen.findByText('Listings refreshed for Main store.');
+  assert.equal(imports, 1);
+});
+
+test('the first catalogue import shows progress and survives a late account-list response', async (t) => {
+  const first = { ...account(), lastRefreshedAt: null };
+  const completed = account();
+  const importing = pendingResponse();
+  const reloading = pendingResponse();
+  let reads = 0;
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    if (url === '/api/marketplaces')
+      return ++reads === 1 ? response({ accounts: [first] }) : reloading.promise;
+    if (url === '/api/marketplaces/refresh') return importing.promise;
+    return response({ ...page(), lastRefreshedAt: null, listings: [], total: 0 });
+  });
+  const view = (active: boolean) => (
+    <MarketplacesScreen active={active} mode="live" onOpenInventory={() => {}} />
+  );
+  const { rerender } = render(view(true));
+  fireEvent.click(await screen.findByRole('button', { name: 'Open listings' }));
+  await screen.findByText('No listings to show');
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh listings' }));
+  assert.ok(screen.getByText('Loading listings…'));
+  assert.equal(screen.queryByText('No listings to show'), null);
+  rerender(view(false));
+  rerender(view(true));
+  assert.ok(screen.getByText('Loading marketplace accounts…'));
+  assert.equal(screen.queryByRole('button', { name: 'Check connection' }), null);
+  await act(async () => importing.resolve(response({ account: completed })));
+  await act(async () => reloading.resolve(response({ accounts: [first] })));
+  const tile = within(await screen.findByRole('article', { name: 'Main store' }));
+  assert.ok(tile.getByText(formatDateTime(completed.lastRefreshedAt)));
+});
+
+test('a newer verified import clears a previous manual refresh failure', async (t) => {
+  const verified = { ...account(), lastRefreshedAt: '2026-11-19T10:00:00Z' };
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    if (url === '/api/marketplaces/refresh')
+      return response({ error: 'Catalogue unavailable' }, 503);
+    if (url === '/api/marketplaces/connection') return response(verified);
+    return baseResponse(url);
+  });
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh listings' }));
+  await screen.findByText('Catalogue unavailable');
+  fireEvent.click(screen.getByRole('button', { name: /All marketplace accounts/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Check connection' }));
+  await screen.findByText(formatDateTime(verified.lastRefreshedAt));
+  await openListings();
+  assert.equal(screen.queryByRole('button', { name: 'Retry refresh' }), null);
+});
 
 test('empty live marketplace view has Add account and no invented marketplace tiles or Tally requirement', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => response({ accounts: [] }));
@@ -1251,6 +1376,7 @@ test('stock editors require a known pickup status, leaving other locations and p
 });
 
 test('a catalogue refresh that removes the last page returns to the last available page', async (t) => {
+  const correctedPage = pendingResponse();
   let total = 21;
   const requests: number[] = [];
   t.mock.method(globalThis, 'fetch', async (url: string) => {
@@ -1261,6 +1387,7 @@ test('a catalogue refresh that removes the last page returns to the last availab
     }
     const number = Number(new URL(url, 'http://localhost').searchParams.get('page'));
     requests.push(number);
+    if (total === 18 && number === 1) return correctedPage.promise;
     return response({
       ...page(),
       total,
@@ -1272,7 +1399,12 @@ test('a catalogue refresh that removes the last page returns to the last availab
   await openListings();
   fireEvent.click(screen.getByRole('button', { name: 'Next' }));
   await screen.findByText('Page 2 of 2');
+  const table = screen.getByRole('table');
   fireEvent.click(screen.getByRole('button', { name: 'Refresh listings' }));
+  await waitFor(() => assert.deepEqual(requests, [1, 2, 2, 1]));
+  assert.ok(within(table).getByText('Marketplace tyre'));
+  assert.equal(screen.getByRole('table'), table);
+  await act(async () => correctedPage.resolve(response({ ...page(), total: 18 })));
   await screen.findByText('Page 1 of 1');
   assert.ok(screen.getByText('Marketplace tyre'));
   assert.deepEqual(requests, [1, 2, 2, 1]);
