@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import {
   render,
   renderHook,
@@ -17,6 +17,10 @@ import type {
   MarketplaceListingView,
 } from '../../src/shared/marketplace-contracts.js';
 import { initialState } from '../../src/server/seed.js';
+import { createApp } from '../../src/server/http.js';
+import { InventoryService } from '../../src/server/service.js';
+import { MarketplaceService } from '../../src/server/marketplace-service.js';
+import { close, listen, serverFixture } from '../support/server-fixture.js';
 import { App } from '../../src/client/App.js';
 import { useInventoryReservations } from '../../src/client/screens/InventoryReservations.js';
 import { reservationCheckMaxAgeMs } from '../../src/shared/contracts.js';
@@ -1425,7 +1429,7 @@ for (const blocked of [false, true]) {
     assert.ok(
       blocked
         ? row.getByText(/Check the stock balance in Tally.*Calculate to retry/)
-        : row.getByText('Calculated draft'),
+        : row.getByText('Matches the last Flipkart check'),
     );
     await waitFor(() => {
       assert.ok(!screen.queryByText(/unsaved quantity edit/i), 'Resume clears the unsaved edit');
@@ -1660,10 +1664,116 @@ test('failed mapping keeps the dialog, selected listing and confirmation availab
   assert.equal(mappingAttempts, 1);
 });
 
+async function openZeroStockInventory(t: TestContext, observed: Array<number | null>) {
+  const f = serverFixture(t);
+  const listings = f.store.update((state) => {
+    state.items = state.items.filter((item) => item.id === 'item-a');
+    state.items[0].physical = 0;
+    state.listings = state.listings
+      .filter((row) => row.itemId === 'item-a')
+      .slice(0, observed.length);
+    for (const [index, row] of state.listings.entries()) {
+      row.observed = observed[index];
+      if (row.observed === null) row.observedAt = null;
+      row.paused = false;
+    }
+    return state.listings;
+  });
+  const markets = new MarketplaceService(f.store, f.folder);
+  const inventory = new InventoryService(f.store, { marketplaces: markets });
+  const app = createApp(inventory, f.folder, undefined, undefined, markets);
+  const address = await listen(app);
+  const dispose = async () => {
+    await close(app);
+    inventory.stop();
+    await inventory.idle();
+    markets.stop();
+    await markets.idle();
+  };
+  const send = globalThis.fetch;
+  const requests = t.mock.method(globalThis, 'fetch', (path: string, init?: RequestInit) =>
+    send(new URL(path, address), init),
+  );
+  const view = render(<App />);
+  return { listings, requests, view, [Symbol.asyncDispose]: dispose };
+}
+
+test('five calculated zeros already observed on Flipkart stay out of review after Calculate, repeat and reload', async (t) => {
+  await using workspace = await openZeroStockInventory(t, [0, 0, 0, 0, 0]);
+  const { listings, requests, view } = workspace;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    fireEvent.click(await screen.findByRole('button', { name: 'Calculate' }));
+    await screen.findByText('5 match the last Flipkart check · 0 to publish');
+    assert.equal(
+      requests.mock.calls.filter((call) => call.arguments[0] === '/api/calculate').length,
+      attempt + 1,
+    );
+    assert.ok(screen.getByRole<HTMLButtonElement>('button', { name: /Review changes/ }).disabled);
+  }
+  view.unmount();
+  render(<App />);
+  for (const listing of listings) {
+    const checkbox = await screen.findByRole('checkbox', { name: 'Select ' + listing.sku });
+    const row = within(checkbox.closest('tr')!);
+    assert.equal(
+      row.getByLabelText<HTMLInputElement>('Proposed stock for ' + listing.sku).value,
+      '0',
+    );
+    assert.ok(row.getByText('Matches the last Flipkart check'));
+    fireEvent.click(row.getByLabelText('Actions for ' + listing.sku));
+    assert.ok(row.getByRole<HTMLButtonElement>('button', { name: 'Review proposal' }).disabled);
+  }
+  assert.ok(screen.getByRole<HTMLButtonElement>('button', { name: /Review changes/ }).disabled);
+  fireEvent.click(screen.getByRole('button', { name: /Show saved proposals, 0/ }));
+  assert.equal(screen.queryByRole('checkbox', { name: 'Select ' + listings[0].sku }), null);
+  assert.equal(
+    requests.mock.calls.some((call) =>
+      ['/api/review', '/api/publish'].includes(String(call.arguments[0])),
+    ),
+    false,
+  );
+});
+
+test('mixed stock reviews the difference, an unknown observation and an explicit zero pause', async (t) => {
+  await using workspace = await openZeroStockInventory(t, [0, 3, null, 0]);
+  const { listings, requests } = workspace;
+  const [matched, different, unknown, manual] = listings;
+  fireEvent.click(await screen.findByRole('checkbox', { name: 'Select ' + manual.sku }));
+  fireEvent.click(screen.getByRole('button', { name: /Set to zero/ }));
+  await screen.findByText(/Zero-stock drafts saved/);
+  fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Calculate' }));
+  await screen.findByText('Matches the last Flipkart check');
+  const unknownRow = within(
+    screen.getByRole('checkbox', { name: 'Select ' + unknown.sku }).closest('tr')!,
+  );
+  assert.ok(unknownRow.getByText('Needs a Flipkart stock check'));
+  fireEvent.click(screen.getByRole('button', { name: /Review (changes|ready drafts)/ }));
+  const dialog = within(await screen.findByRole('dialog', { name: 'Review proposed stock' }));
+  assert.equal(dialog.queryByText(matched.sku), null);
+  for (const listing of [different, unknown, manual]) assert.ok(dialog.getByText(listing.sku));
+  assert.ok(dialog.getByText('Tally sync paused'));
+  const reviewCalls = requests.mock.calls.filter((call) => call.arguments[0] === '/api/review');
+  assert.equal(reviewCalls.length, 1);
+  const body = JSON.parse(String(reviewCalls[0].arguments[1]?.body));
+  assert.deepEqual(body.listingIds.sort(), [different.id, unknown.id, manual.id].sort());
+  fireEvent.click(dialog.getByRole('button', { name: /^Publish \d eligible listings/ }));
+  const results = within(await screen.findByRole('dialog', { name: 'Stock publication results' }));
+  assert.equal(results.queryByText(matched.sku), null);
+  assert.ok(results.getByText('Stock is already zero. Tally sync paused for this location.'));
+  fireEvent.click(results.getByRole('button', { name: 'Back to inventory' }));
+  const manualRow = within(
+    screen.getByRole('checkbox', { name: 'Select ' + manual.sku }).closest('tr')!,
+  );
+  assert.ok(manualRow.getByRole('button', { name: /Resume sync/ }));
+});
+
 test('a mixed calculation links to the affected Set of and reviews only the ready draft', async (t) => {
   const state = initialState('demo', 'unused');
   state.listings = state.listings.filter((l) => ['listing-1', 'listing-2'].includes(l.id));
   const [ready, blocked] = state.listings;
+  ready.observed = 3;
+  blocked.observed = 3;
   blocked.verified = false;
   const draft = {
     listingId: ready.id,
@@ -1725,7 +1835,7 @@ test('a mixed calculation links to the affected Set of and reviews only the read
             account: 'Sample seller',
             location: 'Sample warehouse',
             quantity: 5,
-            observed: 5,
+            observed: 3,
             policy: 'Auto',
             stale: false,
             problem: null,
@@ -1917,6 +2027,7 @@ test('an unsaved edit survives collapse, changing filters and a stock change tha
   const state = initialState('demo', 'unused');
   const listing = state.listings[0];
   listing.paused = true;
+  listing.observed = 2;
   state.proposals = [
     {
       listingId: listing.id,

@@ -91,9 +91,12 @@ export function prepareProposal(
   };
 }
 
-export function isStaleProposal(state: Snapshot, draft: Proposal): boolean {
-  const listing = state.listings.find((row) => row.id === draft.listingId);
-  const item = state.items.find((row) => row.id === listing?.itemId);
+export function isStaleProposal(
+  state: Snapshot,
+  draft: Proposal,
+  listing = state.listings.find((row) => row.id === draft.listingId),
+  item = state.items.find((row) => row.id === listing?.itemId),
+): boolean {
   return (
     draft.stale ||
     draftStockLimitIssue(draft.quantity) !== null ||

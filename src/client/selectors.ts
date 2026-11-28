@@ -1,4 +1,9 @@
-import type { Listing, Snapshot, StockItem } from '../shared/contracts.js';
+import {
+  calculatedStockMatchesObservation,
+  type Listing,
+  type Snapshot,
+  type StockItem,
+} from '../shared/contracts.js';
 
 export type StockView = 'all' | 'mapped' | 'low' | 'drafts';
 
@@ -19,11 +24,29 @@ export interface ItemGroup {
   listings: Listing[];
 }
 
+export function inventoryReviewDraftIds(
+  state: Snapshot,
+  proposals = new Map(state.proposals.map((draft) => [draft.listingId, draft])),
+): Set<string> {
+  return new Set(
+    state.listings
+      .filter((listing) => {
+        const draft = proposals.get(listing.id);
+        return draft && !calculatedStockMatchesObservation(listing, draft);
+      })
+      .map((listing) => listing.id),
+  );
+}
+
 /** A matching child never brings an unmatched sibling into a bulk operation. */
-export function inventoryGroups(state: Snapshot, filters: InventoryFilters): ItemGroup[] {
+export function inventoryGroups(
+  state: Snapshot,
+  filters: InventoryFilters,
+  reviewDraftIds?: Set<string>,
+): ItemGroup[] {
   const query = filters.query.trim().toLocaleLowerCase();
   const drafts =
-    filters.view === 'drafts' ? new Set(state.proposals.map((row) => row.listingId)) : null;
+    filters.view === 'drafts' ? (reviewDraftIds ?? inventoryReviewDraftIds(state)) : null;
   const byItem = new Map<string, Listing[]>();
   for (const listing of state.listings) {
     if (!listing.itemId || (filters.accountId && listing.accountId !== filters.accountId)) continue;

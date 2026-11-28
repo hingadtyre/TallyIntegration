@@ -396,7 +396,8 @@ test('a failed source refresh retains observations and drafts but blocks review'
     assert.equal(failed.connection.tally, 'offline');
     assert.deepEqual(failed.items, before.items);
     assert.deepEqual(failed.listings, before.listings);
-    assert.deepEqual(failed.proposals, before.proposals);
+    assert.deepEqual(f.store.read().proposals, before.proposals);
+    assert.match(failed.proposals[0].reviewProblem!, /Tally stock is stale/);
     assert.match(
       f.service.review('tally:company-a', ['live-listing']).rows[0].problem!,
       /stale|refresh/i,

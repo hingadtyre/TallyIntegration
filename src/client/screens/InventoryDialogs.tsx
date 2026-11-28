@@ -10,7 +10,7 @@ import type {
 } from '../../shared/contracts.js';
 import type { ActionResult } from '../api.js';
 import { ActivityList, Icon, Modal } from '../components.js';
-import { formatDateTime, formatQuantity } from '../format.js';
+import { formatDateTime, formatQuantity, formatStockMatches } from '../format.js';
 
 function publicationSummary(result: InventoryPublishResult) {
   const counts = {
@@ -123,6 +123,20 @@ export function ReviewDialog({
   const currentListings = changed.length
     ? new Map(state.listings.map((listing) => [listing.id, listing]))
     : null;
+  if (!rows.length && review.matchedCount) {
+    return (
+      <Modal title="Review proposed stock" onClose={onClose}>
+        <p className="modal-intro" role="status">
+          {formatStockMatches(review.matchedCount)} · 0 to publish
+        </p>
+        <div className="modal-actions">
+          <button className="button secondary" onClick={onClose}>
+            Back to inventory
+          </button>
+        </div>
+      </Modal>
+    );
+  }
   return (
     <Modal
       title={result ? 'Stock publication results' : 'Review proposed stock'}
@@ -147,6 +161,11 @@ export function ReviewDialog({
           <strong>{formatDateTime(review.createdAt)}</strong>
         </div>
       </div>
+      {!!review.matchedCount && !result && (
+        <p className="modal-intro" role="status">
+          <strong>{formatStockMatches(review.matchedCount)}</strong>
+        </p>
+      )}
       {result ? (
         <p className="modal-intro" role="status">
           <strong>{publicationSummary(result) || 'No publication results returned.'}</strong>
@@ -227,7 +246,9 @@ export function ReviewDialog({
                     <span className="review-cell-label" aria-hidden="true">
                       Observed
                     </span>
-                    {formatQuantity(row.observed)}
+                    {row.observed === null
+                      ? 'Needs a Flipkart stock check'
+                      : formatQuantity(row.observed)}
                   </td>
                   <td className="review-quantity">
                     <span className="review-cell-label" aria-hidden="true">

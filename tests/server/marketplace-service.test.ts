@@ -1017,8 +1017,11 @@ test('reviewed Inventory publication sends only the captured destination, confir
   );
   assert.equal(s.remote.locations[1].quantity, 3);
   await assert.rejects(s.service.publish(review.id), /fresh Inventory review/);
-  const unchanged = await s.service.publish(s.prepare().id);
-  assert.equal(unchanged.rows[0].status, 'unchanged');
+  const matched = s.prepare();
+  assert.equal(matched.matchedCount, 1);
+  assert.deepEqual(matched.rows, []);
+  s.remote.locations[0].quantity = 6;
+  await s.f.service.refresh(s.account.id);
   const earlier = s.prepare();
   s.setPhysical(1);
   await s.service.refresh();
@@ -1113,11 +1116,122 @@ test('a fixed bulk review rechecks each pack and saves only changed quantities f
   );
 });
 
+test('Calculate keeps matching stock visible and repeated bulk reviews publish only changes', async (t) => {
+  const s = await mappedInventory(t, 'manual', { physical: 0, coverage: false });
+  const company = s.item.companyId;
+  const second = s.service.snapshot().listings.find((row) => row.location === 'warehouse-b')!;
+  s.service.mapping({
+    listingId: second.id,
+    itemId: s.item.id,
+    listingVersion: second.version,
+    confirmPackEvidence: true,
+    packSize: 2,
+    packSource: 'manual',
+    sourceScope: 'company',
+    tyreFloor: false,
+  });
+  s.remote.locations[0].quantity = 0;
+  await s.f.service.refresh(s.account.id);
+  const ids = [s.listing.id, second.id];
+  const first = await s.service.calculateAvailable(company, ids);
+  assert.deepEqual(
+    first.proposals.map((draft) => draft.quantity),
+    [0, 0],
+  );
+  const review = await s.service.prepareReview(company, ids);
+  assert.equal(review.matchedCount, 1);
+  assert.deepEqual(
+    review.rows.map((row) => row.listingId),
+    [second.id],
+  );
+  assert.equal((await s.service.publish(review.id)).rows[0].status, 'confirmed');
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [0],
+  );
+
+  const reads = s.f.listingReadStatusChecks.length;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await s.service.calculateAvailable(company, ids);
+    const repeated = await s.service.prepareReview(company, ids);
+    assert.equal(repeated.matchedCount, 2);
+    assert.deepEqual(repeated.rows, []);
+    assert.deepEqual((await s.service.publish(repeated.id)).rows, []);
+  }
+  assert.equal(s.f.listingReadStatusChecks.length, reads);
+  assert.equal(s.f.writes.length, 1);
+});
+
+test('a calculated match still shows an earlier stock update that needs its result checked', async (t) => {
+  const s = await mappedInventory(t, 'manual', { physical: 0, coverage: false });
+  s.remote.locations[0].quantity = 0;
+  await s.f.service.refresh(s.account.id);
+  s.f.setFailWrite('lost-readback');
+  const previous = await s.f.stock(s.account.id, 2);
+  assert.equal(previous.change.state, 'uncertain');
+
+  const company = s.item.companyId;
+  const ids = [s.listing.id];
+  const state = await s.service.calculateAvailable(company, ids);
+  const draft = state.proposals.find((entry) => entry.listingId === s.listing.id)!;
+  assert.equal(state.listings.find((entry) => entry.id === s.listing.id)?.observed, 0);
+  assert.equal(draft.quantity, 0);
+  assert.match(draft.reviewProblem ?? '', /previous update|earlier update/i);
+  const review = await s.service.prepareReview(company, ids);
+  assert.equal(review.rows[0].problem, draft.reviewProblem);
+  assert.equal((await s.service.publish(review.id)).rows[0].status, 'blocked');
+  assert.equal(s.f.store.readMarketplace().changes[0].state, 'uncertain');
+  assert.deepEqual(
+    s.f.writes.map((entry) => entry.quantity),
+    [2],
+  );
+});
+
+test('mixed Calculate distinguishes a normal match from a blocked live Limited sales increase', async (t) => {
+  const s = await mappedInventory(t, 'manual', { physical: 10, coverage: false });
+  const second = s.service.snapshot().listings.find((row) => row.location === 'warehouse-b')!;
+  s.service.mapping({
+    listingId: second.id,
+    itemId: s.item.id,
+    listingVersion: second.version,
+    confirmPackEvidence: true,
+    packSize: 2,
+    packSource: 'manual',
+    sourceScope: 'company',
+    tyreFloor: false,
+  });
+  s.f.store.update((state) => {
+    const row = state.listings.find((entry) => entry.id === second.id)!;
+    row.policy = 'limited';
+    row.remaining = 2;
+  });
+  s.remote.locations[1].quantity = 1;
+  await s.f.service.refresh(s.account.id);
+  await s.enableCoverage();
+  const company = s.item.companyId;
+  const ids = [s.listing.id, second.id];
+  const state = await s.service.calculateAvailable(company, ids);
+  const limited = state.proposals.find((draft) => draft.listingId === second.id)!;
+  assert.equal(limited.quantity, 2);
+  assert.match(limited.reviewProblem ?? '', /order reconciliation/i);
+  const review = await s.service.prepareReview(company, ids);
+  assert.equal(review.matchedCount, 1);
+  assert.deepEqual(
+    review.rows.map((row) => [row.listingId, row.observed, row.quantity, row.problem]),
+    [[second.id, 1, 2, limited.reviewProblem]],
+  );
+  assert.equal((await s.service.publish(review.id)).rows[0].status, 'blocked');
+  assert.deepEqual(s.f.writes, []);
+});
+
 test('a fixed review verifies a newer automatic sync without resending or consuming newer pending work', async (t) => {
   const s = await mappedInventory(t);
   s.service.automation(s.item.companyId, true);
   await s.service.refresh();
+  s.remote.locations[0].quantity = 5;
+  await s.f.service.refresh(s.account.id);
   const review = s.prepare();
+  assert.deepEqual([review.rows[0].observed, review.rows[0].quantity], [5, 7]);
   s.setPhysical(12);
   await s.service.refresh();
   s.f.store.update((state) => {
@@ -1159,8 +1273,10 @@ test('a reviewed no-op preserves a newly discovered sale even when the tyre floo
   const s = await mappedInventory(t, 'manual', { physical: 11, packSize: 2, tyreFloor: true });
   s.service.automation(s.item.companyId, true);
   await s.service.refresh();
+  s.remote.locations[0].quantity = 6;
+  await s.f.service.refresh(s.account.id);
   const review = s.prepare();
-  assert.equal(review.rows[0].quantity, 5);
+  assert.deepEqual([review.rows[0].observed, review.rows[0].quantity], [6, 5]);
   s.orders.push({
     orderItemId: 'floor-sale',
     orderId: 'floor-order',
@@ -1171,6 +1287,7 @@ test('a reviewed no-op preserves a newly discovered sale even when the tyre floo
     quantity: 1,
     orderDate: new Date().toISOString(),
   });
+  s.remote.locations[0].quantity = 5;
   const [row] = (await s.service.publish(review.id)).rows;
   assert.equal(row.status, 'unchanged');
   assert.deepEqual(s.f.writes, []);
@@ -1179,27 +1296,38 @@ test('a reviewed no-op preserves a newly discovered sale even when the tyre floo
   assert.equal(snapshot.proposals[0].quantity, 5);
 });
 
-test('a reviewed no-op completes the stock check that was already queued when the seller opened review', async (t) => {
+test('a match in review leaves a queued stock check for automation to verify', async (t) => {
   const s = await mappedInventory(t, 'manual', { physical: 10 });
   s.service.automation(s.item.companyId, true);
   const review = s.prepare();
   const before = s.service.snapshot().listings.find((entry) => entry.id === s.listing.id)!;
   assert.equal(before.syncPendingItemVersion, s.item.version);
-  assert.equal(review.rows[0].quantity, review.rows[0].observed);
-  const [result] = (await s.service.publish(review.id)).rows;
-  assert.equal(result.status, 'unchanged');
+  assert.equal(review.matchedCount, 1);
+  assert.deepEqual(review.rows, []);
+  const reads = s.f.listingReadStatusChecks.length;
+  assert.deepEqual((await s.service.publish(review.id)).rows, []);
+  assert.equal(s.f.listingReadStatusChecks.length, reads);
+  assert.equal(
+    s.service.snapshot().listings.find((entry) => entry.id === s.listing.id)!
+      .syncPendingItemVersion,
+    s.item.version,
+  );
+  await s.service.refresh();
+  assert.deepEqual(s.f.listingReadStatusChecks.slice(reads), [true]);
   const snapshot = s.service.snapshot();
   assert.equal(
     snapshot.listings.find((entry) => entry.id === s.listing.id)!.syncPendingItemVersion,
     null,
   );
-  assert.deepEqual(snapshot.proposals, []);
+  assert.equal(snapshot.proposals.find((draft) => draft.listingId === s.listing.id)?.quantity, 5);
   assert.deepEqual(s.f.writes, []);
 });
 
 test('a sale changing both the calculated and remote quantities offers the verified draft without writing', async (t) => {
   for (const importBeforePublish of [false, true]) {
     const s = await mappedInventory(t, 'manual', { physical: 5, packSize: 1, tyreFloor: false });
+    s.remote.locations[0].quantity = 4;
+    await s.f.service.refresh(s.account.id);
     const review = s.prepare();
     s.orders.push({
       orderItemId: 'sale',
@@ -1833,8 +1961,11 @@ test('Calculate with automation off reviews and publishes five, then catches ano
   const first = review();
   assert.equal(first.rows[0].quantity, 5);
   assert.equal((await s.service.publish(first.id)).rows[0].status, 'confirmed');
+  s.remote.locations[0].quantity = 6;
+  await s.f.service.refresh(s.account.id);
   await calculate();
   const earlier = review();
+  assert.deepEqual([earlier.rows[0].observed, earlier.rows[0].quantity], [6, 5]);
   s.orders.push({ ...s.orders[0], orderItemId: 'line-2', orderId: 'order-2' });
   const blocked = (await s.service.publish(earlier.id)).rows[0];
   assert.equal(blocked.status, 'blocked');
@@ -2949,6 +3080,8 @@ test('Inventory review requests a per-listing keep-back override only for a manu
   const company = s.item.companyId;
   s.service.setKeepBack(company, s.item.id, s.item.version, 2);
   const review = () => s.service.prepareReview(company, [s.listing.id]);
+  s.remote.locations[0].quantity = 3;
+  await s.f.service.refresh(s.account.id);
   await s.service.calculateAvailable(company, [s.listing.id]);
   const calculated = (await review()).rows[0];
   assert.equal(calculated.quantity, 5);

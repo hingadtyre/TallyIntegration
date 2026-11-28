@@ -9,7 +9,13 @@ import type {
   Snapshot,
   StockItem,
 } from '../../shared/contracts.js';
-import { actionScope, inventoryGroups, isLowStock, type StockView } from '../selectors.js';
+import {
+  actionScope,
+  inventoryGroups,
+  inventoryReviewDraftIds,
+  isLowStock,
+  type StockView,
+} from '../selectors.js';
 import { Icon, Stat } from '../components.js';
 import { SellerAccountPicker } from '../MarketplaceSeller.js';
 import { formatCompanyStockIssue, formatDateTime as time } from '../format.js';
@@ -109,15 +115,26 @@ export function InventoryScreen({
     document.getElementById(sellerPickerId)?.focus({ preventScroll: true });
   }
   const filters = { companyId, accountId, query, brand, pack, view };
-  const groups = inventoryGroups(state, filters);
-  const scope = actionScope(state, filters, selected, groups);
-  const scopeKey = JSON.stringify([companyId, accountId, [...scope].sort()]);
   const proposals = new Map(state.proposals.map((proposal) => [proposal.listingId, proposal]));
+  const reviewDraftIds = inventoryReviewDraftIds(state, proposals);
+  const groups = inventoryGroups(state, filters, reviewDraftIds);
+  const scope = actionScope(state, filters, selected, groups);
+  // Calculating in Saved proposals can remove matching rows from that view.
+  const scopeKey = JSON.stringify([
+    companyId,
+    accountId,
+    view === 'drafts' ? [view, query, brand, pack, [...selected].sort()] : [...scope].sort(),
+  ]);
   const calculation =
     lastCalculation?.scope === scopeKey
-      ? lastCalculation.rows.filter(
-          (row) => row.status === 'blocked' || proposals.has(row.listingId),
-        )
+      ? lastCalculation.rows.flatMap((row): CalculationRow[] => {
+          if (row.status === 'blocked') return [row];
+          const draft = proposals.get(row.listingId);
+          if (!draft) return [];
+          if (draft.reviewProblem)
+            return [{ listingId: row.listingId, status: 'blocked', reason: draft.reviewProblem }];
+          return [row];
+        })
       : null;
   const blockedIds = new Set(
     calculation?.filter((row) => row.status === 'blocked').map((row) => row.listingId),
@@ -176,11 +193,9 @@ export function InventoryScreen({
     }
   }
   const hiddenSelected = selected.filter((id) => !visibleIds.includes(id)).length;
-  const reviewIds = calculation
-    ? calculation.filter((row) => row.status !== 'blocked').map((row) => row.listingId)
-    : scope.filter((id) => proposals.has(id));
+  const reviewIds = scope.filter((id) => reviewDraftIds.has(id) && !blockedIds.has(id));
   const scopedProposalCount = reviewIds.length;
-  const draftCount = companyListings.filter((listing) => proposals.has(listing.id)).length;
+  const draftCount = companyListings.filter((listing) => reviewDraftIds.has(listing.id)).length;
   const brandOptions = [...new Set(companyItems.map((item) => item.brand).filter(Boolean))].sort();
   const packOptions = [
     ...new Set(
@@ -583,6 +598,7 @@ export function InventoryScreen({
         {!!calculation?.length && (
           <CalculationFeedback
             rows={calculation}
+            reviewDraftIds={reviewDraftIds}
             state={state}
             busy={!!busy}
             onFixPack={(item, listingId) => setMapping({ item, listingId })}
@@ -648,6 +664,7 @@ export function InventoryScreen({
                     collapsed={collapsed.includes(item.id)}
                     selected={selected}
                     proposals={proposals}
+                    reviewDraftIds={reviewDraftIds}
                     busy={!!busy}
                     accounts={sellerAccounts}
                     reservations={

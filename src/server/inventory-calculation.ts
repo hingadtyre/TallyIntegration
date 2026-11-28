@@ -217,7 +217,7 @@ export function saveCalculation(
     recordActivity(
       state,
       options.zero ? 'zero-draft' : 'calculate',
-      `${rows.length - blocked} drafts available for review. ${blocked} listings need attention.`,
+      `${rows.length - blocked} drafts prepared. ${blocked} listings need attention.`,
       { companyId, level: blocked ? 'warning' : 'info' },
     );
     return rows;

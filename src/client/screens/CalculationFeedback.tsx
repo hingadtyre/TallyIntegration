@@ -1,21 +1,40 @@
 import type { CalculationRow, Snapshot, StockItem } from '../../shared/contracts.js';
+import { formatStockMatches } from '../format.js';
 
 export function CalculationFeedback({
   rows,
+  reviewDraftIds,
   state,
   busy,
   onFixPack,
 }: {
   rows: CalculationRow[];
+  reviewDraftIds: Set<string>;
   state: Snapshot;
   busy: boolean;
   onFixPack: (item: StockItem, listingId: string) => void;
 }) {
-  const ready = rows.filter((row) => row.status === 'ready').length;
+  const listings = new Map(state.listings.map((listing) => [listing.id, listing]));
+  const ready = rows.filter((row) => row.status === 'ready');
+  const matched = ready.filter((row) => !reviewDraftIds.has(row.listingId)).length;
+  const unchecked = rows.filter((row) => {
+    if (row.status === 'blocked') return false;
+    const listing = listings.get(row.listingId);
+    return listing && (listing.observed === null || !listing.observedAt);
+  }).length;
   const preserved = rows.filter((row) => row.status === 'preserved').length;
   const blocked = rows.filter((row) => row.status === 'blocked');
   const packOnly = blocked.every((row) => row.fix === 'pack');
-  const summary = [`${ready} draft${ready === 1 ? '' : 's'} ready`];
+  const summary: string[] = [];
+  if (matched) summary.push(formatStockMatches(matched));
+  const toPublish = ready.length + preserved - matched - unchecked;
+  if (matched || unchecked) {
+    if (toPublish || !unchecked) summary.push(`${toPublish} to publish`);
+  } else {
+    summary.push(`${ready.length} draft${ready.length === 1 ? '' : 's'} ready`);
+  }
+  if (unchecked)
+    summary.push(`${unchecked} ${unchecked === 1 ? 'needs' : 'need'} a Flipkart check`);
   if (preserved) summary.push(`${preserved} edited draft${preserved === 1 ? '' : 's'} kept`);
   if (blocked.length)
     summary.push(
@@ -27,7 +46,7 @@ export function CalculationFeedback({
       {blocked.length > 0 && (
         <ul>
           {blocked.map((row) => {
-            const listing = state.listings.find((entry) => entry.id === row.listingId);
+            const listing = listings.get(row.listingId);
             const item = state.items.find((entry) => entry.id === listing?.itemId);
             const account = state.accounts.find((entry) => entry.id === listing?.accountId);
             return (

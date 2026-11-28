@@ -35,6 +35,7 @@ export function ItemRows({
   collapsed,
   selected,
   proposals,
+  reviewDraftIds,
   busy,
   accounts,
   reservations,
@@ -61,6 +62,7 @@ export function ItemRows({
   collapsed: boolean;
   selected: string[];
   proposals: Map<string, Proposal>;
+  reviewDraftIds: Set<string>;
   busy: boolean;
   accounts: Map<string, SellerAccount>;
   reservations?: ItemReservations;
@@ -232,7 +234,7 @@ export function ItemRows({
               )}
             </td>
             <td className="observed-cell" data-label="Observed stock">
-              <strong>{quantity(listing.observed)}</strong>
+              <strong>{quantity(listing.observedAt ? listing.observed : null)}</strong>
               <small title={time(listing.observedAt)}>
                 {listing.observedAt
                   ? new Date(listing.observedAt).toLocaleTimeString(undefined, {
@@ -286,7 +288,7 @@ export function ItemRows({
                 <summary aria-label={`Actions for ${listing.sku}`}>•••</summary>
                 <div>
                   <button
-                    disabled={busy || !!dirtyListings.length || !proposals.has(listing.id)}
+                    disabled={busy || !!dirtyListings.length || !reviewDraftIds.has(listing.id)}
                     onClick={(event) => {
                       event.currentTarget.closest('details')?.removeAttribute('open');
                       onReview(listing);

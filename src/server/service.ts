@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { TallyClient } from '../adapters/tally.js';
 import { availableForMarketplaces } from '../domain/stock-policy.js';
-import { billingOnlyMapping } from '../shared/contracts.js';
+import { billingOnlyMapping, calculatedStockMatchesObservation } from '../shared/contracts.js';
 import { draftStockLimitIssue } from '../shared/marketplace-contracts.js';
 import type {
   Activity,
@@ -22,6 +22,7 @@ import { checkManualKeepBack } from './marketplace-keep-back.js';
 import { pickupChoices, verifyOrderMapping } from './marketplace-catalog.js';
 import { checkCalculationStock, proposalInputs, saveCalculation } from './inventory-calculation.js';
 import { inventoryTarget, type CalculatedReview } from './inventory-publication.js';
+import { blocksListing } from './marketplace-publication.js';
 import { AutomationReviews, indexAutomationCatalog } from './automation-preview.js';
 import { recordActivity } from './activity.js';
 import { createBackup } from './backups.js';
@@ -59,6 +60,52 @@ interface StockPass {
   ordersChecked: number;
   orderFailures: number;
   updates: Map<string, InventoryPublishRow>;
+}
+
+function draftReviewProblem(
+  state: Snapshot,
+  listing: Listing,
+  draft: Proposal | undefined,
+  companyId: string,
+  catalog: ReturnType<typeof indexAutomationCatalog> | null,
+  positiveEdits: 'allowance' | 'once' = 'allowance',
+): string | null {
+  if (!draft) return 'Calculate or save a proposal first.';
+  const issue = draftStockLimitIssue(draft.quantity);
+  if (issue) return issue;
+  if (draft.stale) return 'Source, mapping or policy changed. Review a fresh proposal.';
+  try {
+    if (catalog) {
+      const destinations = catalog.listingsFor(listing);
+      const [destination] = destinations;
+      if (destinations.length !== 1 || !destination.observedAt)
+        return 'Refresh listings to verify this listing and pickup location.';
+      if (
+        catalog
+          .changesFor(destination)
+          .some((change) => blocksListing(change, listing.accountId, destination.id))
+      )
+        return 'Check the previous update result in Marketplaces before publishing this listing.';
+      inventoryTarget(
+        state,
+        {
+          companyId,
+          listingId: listing.id,
+          itemVersion: draft.itemVersion,
+          listingVersion: draft.listingVersion,
+          draft,
+          positiveEdits,
+        },
+        destination,
+      );
+    } else {
+      requireStockSource(state, listing);
+    }
+    return null;
+  } catch (error) {
+    if (!(error instanceof InputError)) throw error;
+    return error.message;
+  }
 }
 
 function describeStockPass(pass: StockPass) {
@@ -193,8 +240,21 @@ export class InventoryService {
       for (const listing of state.listings) visibleAccounts.add(listing.accountId);
       state.accounts = state.accounts.filter((account) => visibleAccounts.has(account.id));
     }
+    const listings = new Map(state.listings.map((listing) => [listing.id, listing]));
+    const items = new Map(state.items.map((item) => [item.id, item]));
     state.proposals.forEach((draft) => {
-      draft.stale = isStaleProposal(state, draft);
+      const listing = listings.get(draft.listingId);
+      const item = listing?.itemId ? items.get(listing.itemId) : undefined;
+      draft.stale = isStaleProposal(state, draft, listing, item);
+      if (!item || !listing || draft.edited || draft.stale) return;
+      const problem = draftReviewProblem(
+        state,
+        listing,
+        draft,
+        item.companyId,
+        this.marketplaces ? catalog : null,
+      );
+      if (problem) draft.reviewProblem = problem;
     });
     return state;
   }
@@ -526,53 +586,24 @@ export class InventoryService {
 
   review(companyId: unknown, ids: unknown): Review {
     const state = this.snapshot();
-    const market = this.marketplaces ? this.store.readMarketplace() : null;
+    const catalog = this.marketplaces ? indexAutomationCatalog(this.store.readMarketplace()) : null;
     const calculated = new Map<string, CalculatedReview>();
-    const rows = requireListings(state, companyId, ids).map((listing) => {
+    const selected = requireListings(state, companyId, ids);
+    const rows = selected.flatMap((listing) => {
       const draft = state.proposals.find((row) => row.listingId === listing.id);
-      let problem: string | null = null;
-      let oneTimeProblem: string | null | undefined;
-      try {
-        requireStockSource(state, listing);
-      } catch (error) {
-        if (!(error instanceof InputError)) throw error;
-        problem = error.message;
-      }
-      const limitIssue = draft && draftStockLimitIssue(draft.quantity);
-      if (!draft) problem = 'Calculate or save a proposal first.';
-      else if (limitIssue) problem = limitIssue;
-      else if (draft.stale) problem = 'Source, mapping or policy changed. Review a fresh proposal.';
-      else if (market && !problem) {
-        const destination = market.listings.find(
-          (row) => row.accountId === listing.accountId && row.sku === listing.sku,
+      if (calculatedStockMatchesObservation(listing, draft)) return [];
+      const problem =
+        draft?.reviewProblem ??
+        draftReviewProblem(state, listing, draft, String(companyId), catalog);
+      if (!problem && draft && !draft.edited && this.marketplaces && catalog)
+        calculated.set(
+          listing.id,
+          this.marketplaces.captureCalculatedReview(
+            state,
+            listing,
+            catalog.listingsFor(listing)[0],
+          ),
         );
-        if (!destination) problem = 'Refresh listings to verify this listing and pickup location.';
-        else {
-          const intent = {
-            companyId: String(companyId),
-            listingId: listing.id,
-            itemVersion: draft.itemVersion,
-            listingVersion: draft.listingVersion,
-            draft,
-          };
-          const check = (positiveEdits: 'allowance' | 'once') => {
-            try {
-              inventoryTarget(state, { ...intent, positiveEdits }, destination);
-              return null;
-            } catch (error) {
-              if (!(error instanceof InputError)) throw error;
-              return error.message;
-            }
-          };
-          problem = check('allowance');
-          if (!problem && !draft.edited && this.marketplaces)
-            calculated.set(
-              listing.id,
-              this.marketplaces.captureCalculatedReview(state, listing, destination),
-            );
-          if (draft.edited && draft.quantity > 0) oneTimeProblem = check('once');
-        }
-      }
       const seller = state.accounts.find((row) => row.id === listing.accountId);
       return {
         listingId: listing.id,
@@ -581,14 +612,21 @@ export class InventoryService {
         marketplace: seller?.marketplace,
         location: listing.location,
         quantity: draft?.quantity ?? null,
-        observed: listing.observed,
+        observed: listing.observedAt ? listing.observed : null,
         policy: describeReviewPolicy(listing, draft),
         paused: listing.paused,
         stale: draft?.stale ?? false,
         problem,
         ...(draft?.edited &&
           draft.quantity > 0 && {
-            oneTimeProblem: oneTimeProblem === undefined ? problem : oneTimeProblem,
+            oneTimeProblem: draftReviewProblem(
+              state,
+              listing,
+              draft,
+              String(companyId),
+              catalog,
+              'once',
+            ),
           }),
       };
     });
@@ -598,6 +636,7 @@ export class InventoryService {
       companyId: String(companyId),
       createdAt: new Date().toISOString(),
       rows,
+      ...(selected.length > rows.length && { matchedCount: selected.length - rows.length }),
       publishingEnabled: !!this.marketplaces,
     };
     if (this.marketplaces) {

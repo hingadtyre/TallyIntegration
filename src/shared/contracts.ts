@@ -95,6 +95,8 @@ export interface Listing {
   version: number;
 }
 export interface Proposal {
+  /** Read-only reason a calculated proposal needs attention in the current Inventory snapshot. */
+  reviewProblem?: string;
   listingId: string;
   quantity: number;
   calculated: number;
@@ -105,6 +107,21 @@ export interface Proposal {
   createdAt: string;
   stale: boolean;
 }
+
+/** A saved comparison for Inventory review. Manual instructions can change sync policy at the same quantity. */
+export function calculatedStockMatchesObservation(listing: Listing, draft?: Proposal): boolean {
+  return (
+    !!draft &&
+    !draft.edited &&
+    !draft.stale &&
+    !draft.reviewProblem &&
+    !listing.proposalIssue &&
+    !listing.orderProposalPending &&
+    !!listing.observedAt &&
+    listing.observed === draft.quantity
+  );
+}
+
 export interface DraftEditBaseline {
   listingVersion: number;
   previousManualQuantity: number | null;
@@ -178,6 +195,8 @@ export interface Review {
   companyId: string;
   createdAt: string;
   rows: ReviewRow[];
+  /** Calculated destinations omitted because they already matched when the review was prepared. */
+  matchedCount?: number;
   publishingEnabled: boolean;
 }
 export interface InventoryPublishRow {

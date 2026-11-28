@@ -1,5 +1,6 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import type { DraftEditBaseline, Listing, Proposal, Snapshot } from '../../shared/contracts.js';
+import { calculatedStockMatchesObservation } from '../../shared/contracts.js';
 import { draftStockLimitIssue, marketplaceEditLimits } from '../../shared/marketplace-contracts.js';
 import type { ActionResult } from '../api.js';
 import { Icon } from '../components.js';
@@ -108,6 +109,13 @@ export function QuantityEditor({
     description =
       proposal.quantity === 0 ? 'Publishing pauses Tally sync' : 'Choose how to publish at review';
     descriptionClass = 'text-teal';
+  } else if (proposal?.reviewProblem) {
+    description = proposal.reviewProblem;
+    descriptionClass = 'text-amber';
+  } else if (calculatedStockMatchesObservation(listing, proposal)) {
+    description = 'Matches the last Flipkart check';
+  } else if (proposal && (listing.observed === null || !listing.observedAt)) {
+    description = 'Needs a Flipkart stock check';
   } else if (proposal) {
     description = 'Calculated draft';
   } else if (listing.orderProposalPending) {

@@ -252,7 +252,7 @@ test('aged stock blocks proposals and review even while the Tally connection rem
   });
   const fresh = f.service.calculate('tally:company-a', ['live-listing']);
   assert.equal(fresh.proposals[0].quantity, 5);
-  assert.equal(f.service.review('tally:company-a', ['live-listing']).rows[0].problem, null);
+  assert.equal(f.service.review('tally:company-a', ['live-listing']).matchedCount, 1);
 
   f.store.update((state) => {
     state.items[0].observedAt = '2000-01-01T00:00:00.000Z';
@@ -260,6 +260,7 @@ test('aged stock blocks proposals and review even while the Tally connection rem
   const before = f.service.snapshot();
   assert.equal(before.connection.tally, 'online');
   assert.equal(before.proposals[0].stale, false, 'the captured source version has not changed');
+  assert.match(before.proposals[0].reviewProblem!, /Tally stock is stale/);
   assert.throws(
     () => f.service.calculate('tally:company-a', ['live-listing']),
     /Tally stock is stale/,
@@ -475,6 +476,9 @@ test('a changed source preserves the seller edit but makes its review stale', (t
 
 test('review captures destinations and does not expand when later proposals are added', (t) => {
   const f = fixture(t);
+  f.store.update((state) => {
+    state.listings.find((row) => row.id === 'listing-1')!.observed = 0;
+  });
   const missing = f.service.review('demo-a', ['listing-1']);
   assert.equal(missing.rows[0].quantity, null, 'an absent proposal is not zero');
   f.service.calculate('demo-a', ['listing-1']);
@@ -492,6 +496,11 @@ test('review captures destinations and does not expand when later proposals are 
 
 test('paused listings calculate the current target and retain sales allowances after resume', async (t) => {
   const f = fixture(t);
+  f.store.update((state) => {
+    for (const row of state.listings) {
+      if (row.id === 'listing-5' || row.id === 'listing-6') row.observed = 0;
+    }
+  });
   const original = f.service.snapshot();
   await f.service.pause('demo-a', ['listing-5', 'listing-6'], true);
   f.service.calculate('demo-a', ['listing-5', 'listing-6']);

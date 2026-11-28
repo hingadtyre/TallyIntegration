@@ -23,6 +23,10 @@ export function formatDateTime(value: string | null | undefined): string {
   });
 }
 
+export function formatStockMatches(count: number): string {
+  return `${count} ${count === 1 ? 'matches' : 'match'} the last Flipkart check`;
+}
+
 export function formatQuantity(value: number | null): string {
   return value === null
     ? '-'
