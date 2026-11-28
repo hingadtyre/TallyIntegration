@@ -8,6 +8,7 @@ import type {
 import type { Snapshot } from '../../shared/contracts.js';
 import { errorMessage, requestJson } from '../api.js';
 import { marketplaceName } from '../../shared/marketplaces.js';
+import { SellerAccountPicker } from '../MarketplaceSeller.js';
 import { BillingResults } from './BillingResults.js';
 import { StockCoverageSetup } from './StockCoverageSetup.js';
 import { BillingSetup, fieldLabels, referenceLabels } from './BillingSetup.js';
@@ -16,7 +17,11 @@ import type { SaveMapping } from './MappingDialog.js';
 import { FindTallyBill, type BillTarget } from './FindTallyBill.js';
 
 type Scope = { companyId: string; accountId: string };
-type MappingAccess = { inventory: Snapshot; onSaveMapping: SaveMapping };
+type MappingAccess = {
+  inventory: Snapshot;
+  onSaveMapping: SaveMapping;
+  onUnsavedChange?: (dirty: boolean) => void;
+};
 
 export function BillingScreen({
   companyId,
@@ -25,15 +30,15 @@ export function BillingScreen({
   onSaveMapping,
   onAccountChange,
   onConnect,
+  onUnsavedChange,
 }: Scope &
   MappingAccess & {
     onAccountChange: (id: string) => void;
     onConnect: () => void;
   }) {
   const accounts = inventory.accounts;
-  const provider = marketplaceName(
-    accounts.find((account) => account.id === accountId)?.marketplace,
-  );
+  const selectedAccount = accounts.find((account) => account.id === accountId);
+  const provider = marketplaceName(selectedAccount?.marketplace);
   return (
     <>
       <div className="page-heading">
@@ -45,16 +50,11 @@ export function BillingScreen({
           </p>
         </div>
         {accounts.length > 0 && (
-          <label className="account-select">
-            <span>Seller account</span>
-            <select value={accountId} onChange={(event) => onAccountChange(event.target.value)}>
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SellerAccountPicker
+            accounts={accounts}
+            selected={selectedAccount}
+            onSelect={onAccountChange}
+          />
         )}
       </div>
       {companyId && accountId ? (
@@ -64,6 +64,7 @@ export function BillingScreen({
           accountId={accountId}
           inventory={inventory}
           onSaveMapping={onSaveMapping}
+          onUnsavedChange={onUnsavedChange}
         />
       ) : (
         <section className="panel empty-state">
@@ -133,6 +134,7 @@ function BillingReview({
   initial,
   inventory,
   onSaveMapping,
+  onUnsavedChange,
 }: Scope & MappingAccess & { initial: BillingWorkspace }) {
   const [workspace, setWorkspace] = useState(initial);
   const [editing, setEditing] = useState(!initial.rule && !initial.report);
@@ -151,6 +153,8 @@ function BillingReview({
   const [coverageRevision, setCoverageRevision] = useState(0);
   const [coverageSaving, setCoverageSaving] = useState(false);
   const [mappingBusy, setMappingBusy] = useState(false);
+  const [setupDirty, setSetupDirty] = useState(false);
+  const [coverageDirty, setCoverageDirty] = useState(false);
   const [findOrder, setFindOrder] = useState<BillTarget | null>(null);
   const findTrigger = useRef<HTMLButtonElement | null>(null);
   const trackedHeading = useRef<HTMLHeadingElement>(null);
@@ -175,6 +179,11 @@ function BillingReview({
     rule.field === report.rule.field &&
     rule.reference === report.rule.reference
   );
+  const dirty = setupDirty || coverageDirty || (!tracked && !!report && !confirmed);
+  useEffect(() => {
+    onUnsavedChange?.(dirty);
+    return () => onUnsavedChange?.(false);
+  }, [dirty, onUnsavedChange]);
   function openBillFinder(order: BillTarget, trigger: HTMLButtonElement) {
     findTrigger.current = trigger;
     setFindOrder(order);
@@ -411,6 +420,7 @@ function BillingReview({
             companyId={companyId}
             accountId={accountId}
             initialRule={shownRule}
+            onDirtyChange={setSetupDirty}
             busy={locked}
             onPreview={(draft) => preview(draft, days)}
             onCancel={
@@ -472,6 +482,11 @@ function BillingReview({
                   className="text-button"
                   disabled={locked}
                   onClick={() => {
+                    if (
+                      coverageDirty &&
+                      !window.confirm('Discard unsaved tracking changes and edit billing setup?')
+                    )
+                      return;
                     if (tracked) {
                       setWorkspace((previous) => ({ ...previous, report: null }));
                       setSetupOpen(true);
@@ -518,6 +533,7 @@ function BillingReview({
           accountId={accountId}
           disabled={!!busy || mappingBusy || !!findOrder || (!tracked && !!report && !confirmed)}
           onSavingChange={setCoverageSaving}
+          onDirtyChange={setCoverageDirty}
           onStart={startTracking}
         />
       )}

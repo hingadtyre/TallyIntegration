@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type {
+  DraftEditBaseline,
   ItemReservations,
   Listing,
   Proposal,
@@ -71,7 +72,11 @@ export function ItemRows({
   onSelect: (id: string) => void;
   onMap: () => void;
   onEditPack: (listing: Listing) => void;
-  onSave: (listing: Listing, quantity: number) => Promise<ActionResult<Snapshot>>;
+  onSave: (
+    listing: Listing,
+    quantity: number,
+    baseline: DraftEditBaseline,
+  ) => Promise<ActionResult<Snapshot>>;
   onPause: (listing: Listing) => Promise<boolean>;
   onReview: (listing: Listing) => void;
   onHistory: (listing: Listing) => void;
@@ -243,7 +248,7 @@ export function ItemRows({
                 listing={listing}
                 proposal={proposals.get(listing.id)}
                 disabled={busy}
-                onSave={(amount) => onSave(listing, amount)}
+                onSave={(amount, baseline) => onSave(listing, amount, baseline)}
                 onDirty={onDirty}
               />
             </td>
@@ -299,7 +304,7 @@ export function ItemRows({
                   </button>
                   <button
                     className="text-danger"
-                    disabled={busy}
+                    disabled={busy || dirtyListings.includes(listing.id)}
                     onClick={(event) => {
                       event.currentTarget.closest('details')?.removeAttribute('open');
                       onRemove(listing);

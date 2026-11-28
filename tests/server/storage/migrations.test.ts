@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Snapshot } from '../../../src/shared/contracts.js';
 import { initialState } from '../../../src/server/seed.js';
+import { inspectPilotBackup } from '../../../src/server/restore.js';
 import { InvalidStoredState } from '../../../src/server/storage/validation.js';
 import { createSchema, CURRENT_SCHEMA_VERSION } from '../../../src/server/storage/schema.js';
 import { readSnapshot, writeSnapshot } from '../../../src/server/storage/records.js';
@@ -105,6 +106,21 @@ test('legacy migration preserves policies, drafts, identities and history with a
   assert.equal(readdirSync(join(f.directory, 'migration-backups')).length, 1);
 });
 
+test('an imported JSON keep-back retains its amount and needs the current unit confirmed', (t) => {
+  const f = fixture(t);
+  const state = legacyState(f.directory);
+  state.items[0].keepBackUnits = 1.5;
+  state.items[0].keepBackPreviousUnit = 'unsupported field in an old file';
+  createLegacy(f.file, state);
+  const migrated = f.open().read();
+  assert.deepEqual(migrated.items[0], {
+    ...state.items[0],
+    keepBackPreviousUnit: '',
+    version: state.items[0].version + 1,
+  });
+  assert.deepEqual(migrated.items.slice(1), state.items.slice(1));
+});
+
 function createVersionTwo(file: string, state: Snapshot): void {
   const database = new DatabaseSync(file);
   try {
@@ -135,6 +151,48 @@ test('schema eleven items start with zero keep-back without changing drafts or q
   });
 });
 
+for (const version of [12, 13, 14, 15] as const) {
+  test(`schema ${version} flags positive legacy keep-backs once across backup and upgrade`, (t) => {
+    const f = fixture(t);
+    const original = legacyState(f.directory);
+    original.items[0].keepBackUnits = 3;
+    original.items[1].keepBackUnits = 0.5;
+    if (version === 15) original.items[1].keepBackPreviousUnit = 'cartons';
+    queryFile(f.file, (db) => {
+      createSchema(db, version);
+      db.exec(`PRAGMA user_version = ${version}`);
+      writeSnapshot(db, original);
+    });
+    const upgraded = f.open();
+    assert.ok(upgraded.migrationBackupPath);
+    const items = upgraded.read().items;
+    assert.deepEqual(items[0], {
+      ...original.items[0],
+      keepBackPreviousUnit: '',
+      version: original.items[0].version + 1,
+    });
+    assert.deepEqual(items[1], {
+      ...original.items[1],
+      keepBackPreviousUnit: version === 15 ? 'cartons' : '',
+      version: original.items[1].version + (version === 15 ? 0 : 1),
+    });
+    assert.deepEqual(items.slice(2), original.items.slice(2));
+    assert.deepEqual(queryFile(upgraded.migrationBackupPath, readSnapshot).items, items);
+    assert.deepEqual(f.open().read().items, items);
+
+    upgraded.update((state) => {
+      delete state.items[0].keepBackPreviousUnit;
+    });
+    const confirmed = upgraded.read().items;
+    assert.equal(confirmed[0].keepBackUnits, 3);
+    assert.equal(confirmed[0].keepBackPreviousUnit, undefined);
+    assert.deepEqual(f.open().read().items, confirmed);
+    const backup = join(f.directory, 'after-confirmation.sqlite');
+    upgraded.backup(backup);
+    assert.deepEqual(queryFile(backup, readSnapshot).items, confirmed);
+  });
+}
+
 test('schema twelve preserves existing stock policy and saves a pending order calculation independently', (t) => {
   const f = fixture(t);
   const original = legacyState(f.directory);
@@ -146,6 +204,8 @@ test('schema twelve preserves existing stock policy and saves a pending order ca
     writeSnapshot(db, original);
   });
   const store = f.open();
+  original.items[0].keepBackPreviousUnit = '';
+  original.items[0].version++;
   assert.deepEqual(store.read(), original);
   assert.ok(store.migrationBackupPath);
   queryFile(store.migrationBackupPath, (db) => {
@@ -222,7 +282,8 @@ test('version two upgrades preserve all records and a verified version-two safet
     );
   });
   assert.equal(f.open().migrationBackupPath, null);
-  assert.equal(readdirSync(join(f.directory, 'migration-backups')).length, 1);
+  assert.equal(inspectPilotBackup(store.migrationBackupPath, 'demo').schemaVersion, 2);
+  assert.equal(readdirSync(join(f.directory, 'migration-backups')).length, 2);
 });
 
 test('schema five preserves saved billing setup and leaves the stock baseline unconfirmed', (t) => {
@@ -380,7 +441,7 @@ test('a version-two migration failure rolls back new tables and preserves its pr
       undefined,
     );
   });
-  assert.equal(readdirSync(join(f.directory, 'migration-backups')).length, 1);
+  assert.equal(readdirSync(join(f.directory, 'migration-backups')).length, 2);
 });
 
 test('schema six keeps observed orders and treats every older uncertain request as lacking proof', (t) => {

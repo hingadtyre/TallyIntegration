@@ -126,7 +126,9 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           To set stock aside, edit Keep back from marketplaces beside the item's Tally stock. Enter
           the quantity in its Tally unit and choose Save. Stockbridge deducts it once across the
           item's listings, then applies each listing's Set of and tyre minimum. Enter zero to
-          release the stock. Eligible listings update on the next sync.
+          release the stock. If Inventory asks you to confirm a saved amount, enter the quantity you
+          want to keep back in the unit beside the field and choose Save. Eligible listings update
+          on the next sync.
         </p>
         <p>
           Before enabling company sync, review the seller accounts, locations and expected

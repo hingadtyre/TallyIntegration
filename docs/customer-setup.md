@@ -1,12 +1,12 @@
 # Stockbridge: customer setup and daily use
 
-**Version 0.1.0 pilot. Guide updated on 2026-11-20.**
+**Version 0.1.0 pilot. Guide updated on 2026-11-28.**
 
 Stockbridge reads a Tally company's stock and shows it in **Inventory**. Map a marketplace listing to a Tally item and confirm how many physical units make one sale. You can then publish a reviewed quantity or enable automatic updates for that company. In the live workspace, both actions can change stock at the selected destinations. Sample mode uses local sample data.
 
 Sign in to the intended Flipkart account and use its own application credentials in Stockbridge. On a fresh workspace, choose **Marketplaces > Add account**. **Verify and save** checks access and attempts a listing import. A successful nonempty import verifies listing ownership. Flipkart can return listings without a separate seller ID.
 
-On a fresh live setup, the selectors show **No company connected** and, once Inventory is available, **No seller account** until you connect your own data. Tally discovery supplies company names. Adding a marketplace account supplies its seller label. Older unused placeholder labels are hidden; genuine saved company/account names and existing listings are retained. The packaged **Start Stockbridge.cmd** opens the live workspace. A separately supplied **Sample workspace** uses generic examples and simulates publication.
+On a fresh live workspace, **Inventory** shows **View connections** directly below its heading. Use it to discover your Tally company. For marketplace listing management, you can open **Marketplaces** immediately. Company names come from Tally discovery and seller names come from the accounts you add. The packaged **Start Stockbridge.cmd** opens the live workspace. A separately supplied **Sample workspace** uses generic examples and simulates publication.
 
 ## Before you start
 
@@ -139,9 +139,11 @@ To view the product on Flipkart, select the square-and-arrow icon beside its SKU
 
 With **Set of 2** and the tyre minimum switched off, 13 physical units give six complete sets, two units give one set, and one unit gives zero.
 
+When Stockbridge detects a change to a stock item's base unit, Inventory shows the previous positive **Keep back from marketplaces** amount and the unit information it has. Enter and save the amount you intend to keep in the new unit. After an upgrade or restore, an older positive amount can appear with its original unit unknown. On that item’s row, enter the quantity you want to keep back in the unit beside the field and choose **Save**, even if the number is the same. You can enter **0** to release it. Stockbridge remembers the confirmation across restarts. Items with zero kept back carry on as usual.
+
 ### Publish stock from Inventory
 
-1. Check the company, seller account and listing destinations. Select the rows to review and choose **Calculate**. If some listings need attention, the result lists each SKU and location. **Fix Set of** opens that listing’s pack setting. **Review ready drafts** opens the successful rows. An existing manual draft keeps its quantity. Saving a corrected Set of recalculates that row and updates the result. To propose a different quantity, edit **Proposed stock** and save it. An edited positive quantity can use stock you kept back if you confirm the override during review. The usual Inventory limit for that listing before keep-back still applies.
+1. Check the company, seller account and listing destinations. Select the rows to review and choose **Calculate**. If some listings need attention, the result lists each SKU and location. **Fix Set of** opens that listing’s pack setting. **Review ready drafts** opens the successful rows. An existing manual draft keeps its quantity. If an older draft exceeds Flipkart's limit of 5,000 per location, enter a smaller quantity in **Proposed stock** and save it before review. Saving a corrected Set of recalculates that row and updates the result. To propose a different quantity, edit **Proposed stock** and save it. An edited positive quantity can use stock you kept back if you confirm the override during review. The usual Inventory limit for that listing before keep-back still applies.
 2. Choose **Review changes**. Check the marketplace logo, seller account name and pickup location on each row. For an edited positive quantity on an **Auto** listing, choose **Update once**. This publishes the reviewed quantity and keeps the Auto policy. The next change to the item's Tally stock can replace it once automatic updates are enabled. The separate **Allow this many more sales** option needs order tracking and is unavailable for live listings. If you enter `0` yourself and choose **Publish**, Stockbridge pauses Tally sync for that listing at that location, even if the listing already shows zero. If **Calculate** produces zero because there are too few units for a set, sync stays on and a later restock can bring the listing back.
 3. Check the observed and proposed quantities for each destination. The quantities in **Review changes** stay as shown when you opened it. Choose **Publish** for the indicated number of eligible listings. Stockbridge checks each row again, even if the review has only been open a few seconds.
 4. Read each result. For example, if you reviewed 5 and another unbilled order brings the calculation down to 4, Stockbridge skips that row. Review the new quantity from the results if you want to send it now. Other eligible rows can still publish. **Confirmed** means the marketplace confirmed the reviewed quantity. **Unchanged** means it already matched. A blocked, failed or uncertain result explains what happened. For an uncertain result, check the listing in **Marketplaces** before attempting another update.
@@ -189,7 +191,7 @@ Before first live publication, arrange a controlled, seller-authorized stock upd
 
 A verified match means Stockbridge found the corresponding stock deduction in the selected Tally ledger. **No matched bill** means it could not verify a bill for that item. Use the order item ID to compare the sale with Seller Hub.
 
-1. Open **Order matching**, select your **Tally company** and choose the **Seller account**. Load the company in Tally and verify the account and its listings before the first live check.
+1. Open **Order matching**, select your **Tally company** and choose the **Seller account**. You can search by seller name. The marketplace logo appears beside each seller and beside the selected account. Load the company in Tally and verify the account and its listings before the first live check.
 2. In **Sales bill ledger**, search for the Tally ledger where you record this seller’s sales. This can be the party ledger on the bill or the sales ledger on its stock lines. Choose the ledger, the bill field where you enter the order reference, and the type of reference you enter. Choose **I match bills manually** if you keep the reference elsewhere or omit it.
 3. Choose **Today in India**, **Last 7 days** or **Last 30 days**, then **Preview matches**. This setup preview checks Standard and Self-ship orders. Compare a known sale with its bill, stock item and units, then choose **Confirm billing setup**. You can save an empty preview. Repeat setup for each participating seller.
 4. Under **Order tracking**, choose **Set billing start date**, select an Indian calendar day within the last 30 days and choose **Save billing start date**. The date applies across the company’s participating sellers. If you already confirmed starting stock, Stockbridge uses that date. The **Tracked orders** list opens on saving and every time you return. It checks the selected seller’s Standard, Self-ship, Express, Smart and Fulfilment by Flipkart order items from the saved date through the time shown, even as that date gets older.
@@ -198,6 +200,8 @@ A verified match means Stockbridge found the corresponding stock deduction in th
 7. For a mapped sale with a known Tally bill, use **Find Tally bill** and verify the item and units. If several orders could claim the same deduction, review the competing sales and vouchers in Tally. **Release manual match** undoes a seller-confirmed link. To review or change the ledger and reference rule, open **Change setup**. Use **Back to tracked orders** to leave the setup review.
 8. Check the counts by fulfilment type. **0** means the selected seller's order check completed and found no tracked items of that type for the period. **Unknown** means Stockbridge could not complete that seller's shipment check. Choose **Retry Express orders**, for example, to check the same dates again. Compare a known warehouse sale with Seller Hub when verifying warehouse coverage.
 9. A number beside a warning means Stockbridge has the selected seller's order count and still needs information to verify some bills. If Flipkart denies access to invoice details, an order can still match by its order ID or order item ID. A match that needs the missing invoice number stays under review. If another seller account is unavailable, its name appears beside the count and a bill that both sellers could claim stays under review. Use the retry beside the warning to check the affected accounts and fulfilment type again. **Refresh tracked orders** starts a new check.
+
+If the company’s tracking date, stock setup or recorded orders change while you are editing, review the reloaded setup before saving. Check the orders that precede your proposed starting date before confirming. If you switch companies, sellers or pages with unsaved Order matching edits, choose whether to keep editing or discard them.
 
 ### Find a bill for one marketplace order
 
@@ -249,11 +253,11 @@ Tally must be open with the relevant company loaded for fresh stock. Turning off
 Stockbridge already uses **SQLite**, a database stored in a file on your computer. You do not install a separate database server or create database tables yourself. It saves the application's observations, settings, drafts, mappings and history across restarts. It does not replace Tally or back up the customer's Tally company.
 
 1. Ask your provider to help choose a backup destination, preferably on a separate customer-controlled drive.
-2. In File Explorer, open that folder. Click its address bar and copy the complete folder path.
+2. In File Explorer, open that folder. Click its address bar and copy the complete folder path, including the drive letter or the full network server and share name.
 3. In Stockbridge, open **Settings > Backup folder**. Paste the complete path, for example **D:\Stockbridge Backups** if that drive and folder belong to your computer. Do not blindly copy an example drive letter that does not exist.
 4. Select **Save settings**. Stockbridge checks that it can write there. If it fails, the previous folder remains saved; correct the folder or its access permissions and try again.
 5. Select **Back up now**. Wait for **Verified backup saved** and note the displayed location.
-6. Open that location in File Explorer. Keep both the **.sqlite** backup file and the matching **.json** information file together.
+6. Open that location in File Explorer. Keep both the **.sqlite** backup file and the matching **.json** information file together. New backups include a checksum that support verifies before restoring.
 7. Create a backup after setup, before each application update, and regularly during the pilot. Automatic backup scheduling/retention is not implemented yet.
 
 Use **Back up now**, not a manual copy of the database while the app is running. Some committed changes can be in a companion working file; the app's verified backup includes them correctly.
@@ -267,6 +271,8 @@ If you need to recover a backup, stop normal work and contact the provider. The 
 Restore also keeps seller identities and unresolved marketplace updates recorded after the chosen backup. It refuses a backup that conflicts with a known seller, weakens a current sales allowance, or loses a paused destination. Support must reconcile that conflict before replacement; the existing workspace stays intact.
 
 ## 8. Daily start, status and stop
+
+Leave the Start window open while Stockbridge checks saved access. Reading protected credentials on Windows can take over a minute on the first launch.
 
 **At the beginning of the day:**
 
@@ -324,6 +330,8 @@ If Upgrade cannot find your workspace, use **Stockbridge Status.cmd** in the old
 There is no automatic updater or uninstall wizard. To remove application files, stop the app first and remove only its extracted application folder. The separate data folder remains. Deleting the data folder or backups is a separate decision and can permanently remove saved work; do it only after arranging a verified retained backup with the data owner.
 
 An application backup is not a rollback of Tally bills or marketplace orders. Production restore must reconcile those sources before publication resumes. That full recovery workflow is still a release blocker.
+
+For a supported database version, a newly created upgrade safety copy has a matching **.json** file alongside it. Keep the pair together for support to inspect and restore.
 
 ## 11. If something goes wrong
 

@@ -655,11 +655,6 @@ small {
   gap: 9px;
 }
 
-.account-select > span {
-  font-size: var(--font-caption);
-  color: var(--text-muted);
-}
-
 .account-select .searchable-picker {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -685,14 +680,6 @@ small {
 
 .field.searchable-picker .searchable-picker-prefix + input {
   padding-inline-start: 32px;
-}
-
-.account-select select {
-  color: #49655f;
-  font-size: var(--font-control);
-  min-width: 0;
-  border-color: #dce6e0;
-  background: #f8fbf9;
 }
 
 .filters {
@@ -2483,9 +2470,6 @@ small {
   .account-select {
     gap: 6px;
   }
-  .account-select select {
-    max-width: 200px;
-  }
   .connection-grid {
     gap: 16px;
   }
@@ -2545,10 +2529,6 @@ small {
   }
   .account-select {
     width: 100%;
-  }
-  .account-select select {
-    flex: 1;
-    max-width: none;
   }
   .filters {
     gap: 8px;

@@ -527,6 +527,31 @@ test('optional classification fields leave an identified line visible for review
   assert.equal(count, 4);
 });
 
+test('the setup preview and tracked history both require the shipment type and fulfilment profile to verify a sale', async () => {
+  for (const missing of ['shipmentType', 'serviceProfile']) {
+    const partial = {
+      ...shipment,
+      ...(missing === 'shipmentType' && { shipmentType: undefined }),
+      orderItems: [
+        { ...baseItem, ...(missing === 'serviceProfile' && { serviceProfile: undefined }) },
+      ],
+    };
+    const client = new FlipkartBillingClient({
+      request: async (_url, options) => {
+        const { filter } = JSON.parse(String(options?.body));
+        return filter.type === 'preDispatch' && filter.shipmentTypes[0] === 'NORMAL' && !filter.hold
+          ? Response.json({ hasMore: false, shipments: [partial] })
+          : empty();
+      },
+    });
+    const [preview] = await client.readOrders(token, from, to);
+    const [tracked] = await client.readFulfilmentOrders(token, from, to, 'standard');
+    assert.equal(preview.orderItemId, tracked.orderItemId);
+    assert.equal(preview.eligibilityUnverified, true);
+    assert.equal(tracked.eligibilityUnverified, true);
+  }
+});
+
 test('order errors expose the actionable request limit without exposing provider text', async () => {
   const client = new FlipkartBillingClient({
     request: async () => new Response('private order data', { status: 429 }),

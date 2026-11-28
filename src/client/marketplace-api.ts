@@ -6,6 +6,7 @@ import type {
   MarketplaceKeepBackReview,
   MarketplaceListingView,
   MarketplacePage,
+  MarketplaceSavedResult,
 } from '../shared/marketplace-contracts.js';
 import type { MarketplaceStockRecoveryReview } from '../shared/marketplace-recovery.js';
 import { requestJson } from './api.js';
@@ -40,6 +41,12 @@ export const marketplaceApi = {
     requestJson<{ account: MarketplaceAccount }>('/marketplaces/refresh', { accountId }),
   apply: (input: MarketplaceApplyInput) =>
     requestJson<MarketplaceApplyResult>('/marketplaces/apply', input),
+  savedResult: (accountId: string, listingId: string, changeId: string) =>
+    requestJson<MarketplaceSavedResult | null>('/marketplaces/saved-result', {
+      accountId,
+      listingId,
+      changeId,
+    }),
   reviewKeepBack: (
     accountId: string,
     listingId: string,

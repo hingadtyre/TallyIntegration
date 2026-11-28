@@ -38,6 +38,13 @@ export function useWorkspace() {
   const mounted = useRef(false);
   const actionInFlight = useRef(false);
   const snapshotGeneration = useRef(0);
+  const feedbackGeneration = useRef(0);
+
+  const clearActionFeedback = useCallback(() => {
+    feedbackGeneration.current++;
+    setError('');
+    setNotice('');
+  }, []);
 
   useEffect(() => {
     mounted.current = true;
@@ -75,25 +82,28 @@ export function useWorkspace() {
   const runAction = useCallback(
     async <T>(
       label: string,
-      operation: () => Promise<T>,
+      operation: (reportWarning: (message: string) => void) => Promise<T>,
       success: string | ((value: T) => string) | null,
     ): Promise<ActionResult<T>> => {
       if (actionInFlight.current)
         return { ok: false, error: 'Wait for the current action to finish.' };
       actionInFlight.current = true;
+      const generation = feedbackGeneration.current;
+      const feedbackCurrent = () => mounted.current && generation === feedbackGeneration.current;
       snapshotGeneration.current++;
       setBusy(label);
       setError('');
-      setPollError('');
       setNotice('');
       try {
-        const value = await operation();
-        if (mounted.current && success !== null)
+        const value = await operation((message) => {
+          if (feedbackCurrent()) setError(message);
+        });
+        if (feedbackCurrent() && success !== null)
           setNotice(typeof success === 'function' ? success(value) : success);
         return { ok: true, value };
       } catch (cause) {
         const message = errorMessage(cause);
-        if (mounted.current && success !== null) setError(message);
+        if (feedbackCurrent() && success !== null) setError(message);
         return { ok: false, error: message };
       } finally {
         actionInFlight.current = false;
@@ -164,44 +174,42 @@ export function useWorkspace() {
       '',
     );
 
+  const reloadSnapshot = useCallback(async () => {
+    const next = await requestJson<Snapshot>('/state');
+    if (mounted.current) {
+      setState(next);
+      setPollError('');
+    }
+    return next;
+  }, []);
+
   const publishReview = useCallback(
     (reviewId: string, positiveEdits?: 'once' | 'allowance', keepBackOverrides?: string[]) =>
       runAction(
         'Publishing reviewed stock',
-        async () => {
+        async (reportWarning) => {
           const result = await requestJson<InventoryPublishResult>('/publish', {
             reviewId,
             positiveEdits,
             keepBackOverrides,
           });
           try {
-            const next = await requestJson<Snapshot>('/state');
-            if (mounted.current) setState(next);
+            await reloadSnapshot();
           } catch {
-            if (mounted.current)
-              setError(
-                'Publication results are available. Inventory will refresh on the next check.',
-              );
+            reportWarning(
+              'Publication results are available. Inventory will refresh on the next check.',
+            );
           }
           return result;
         },
         '',
       ),
-    [runAction],
+    [runAction, reloadSnapshot],
   );
 
   const refreshSnapshot = useCallback(
-    () =>
-      runAction(
-        'Loading saved inventory',
-        async () => {
-          const next = await requestJson<Snapshot>('/state');
-          if (mounted.current) setState(next);
-          return next;
-        },
-        '',
-      ),
-    [runAction],
+    () => runAction('Loading saved inventory', reloadSnapshot, ''),
+    [runAction, reloadSnapshot],
   );
 
   const refreshInventory = useCallback(
@@ -279,21 +287,20 @@ export function useWorkspace() {
     () =>
       runAction(
         'Creating backup',
-        async () => {
+        async (reportWarning) => {
           const backup = await requestJson<BackupResult>('/backup', {});
           try {
-            const next = await requestJson<Snapshot>('/state');
-            if (mounted.current) setState(next);
+            await reloadSnapshot();
           } catch {
             // The backup already succeeded. A failed history refresh must not turn
             // that confirmed result into an apparent backup failure.
-            if (mounted.current) setError('Backup verified. Activity could not be refreshed yet.');
+            reportWarning('Backup verified. Activity could not be refreshed yet.');
           }
           return backup;
         },
         (backup) => `Verified backup saved: ${backup.path}`,
       ),
-    [runAction],
+    [runAction, reloadSnapshot],
   );
 
   return {
@@ -320,9 +327,10 @@ export function useWorkspace() {
     tryAutomation,
     publishReview,
     backUpNow,
+    clearActionFeedback,
     dismissError: () => {
-      setError('');
-      setPollError('');
+      if (error) setError('');
+      else setPollError('');
     },
     dismissNotice: () => setNotice(''),
   };

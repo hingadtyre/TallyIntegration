@@ -17,6 +17,25 @@ const proposal: Proposal = {
   stale: false,
 };
 
+test('an oversized saved draft shows the editable quantity and its publication limit', () => {
+  const state = initialState('demo', 'unused');
+  render(
+    <QuantityEditor
+      listing={state.listings[0]}
+      proposal={{ ...proposal, quantity: 5100, edited: true, stale: true }}
+      disabled={false}
+      onDirty={() => {}}
+      onSave={async () => ({ ok: true as const, value: state })}
+    />,
+  );
+  const field = screen.getByRole<HTMLInputElement>('spinbutton');
+  assert.equal(field.value, '5100');
+  assert.ok(screen.getByText(/accepts up to 5000/i));
+  fireEvent.change(field, { target: { value: '5000' } });
+  assert.equal(field.value, '5000');
+  assert.ok(screen.getByText('Unsaved draft'));
+});
+
 test('a pending order calculation shows its automatic retry and then the verified proposal', () => {
   const state = initialState('demo', 'unused');
   const props = {
@@ -76,6 +95,37 @@ test('a seller draft shows its publication or stale status alongside the pending
   assert.equal(screen.queryByText(retry), null);
 });
 
+test('a changed mapping preserves the typed quantity but requires a new edit before saving', () => {
+  const state = initialState('demo', 'unused');
+  const listing = state.listings[0];
+  const editor = (version: number) => (
+    <QuantityEditor
+      listing={{ ...listing, version }}
+      disabled={false}
+      onDirty={() => {}}
+      onSave={async () => {
+        throw new Error('A stale edit must not save');
+      }}
+    />
+  );
+  const { rerender } = render(editor(listing.version));
+  const input = screen.getByRole<HTMLInputElement>('spinbutton');
+  fireEvent.change(input, { target: { value: '2' } });
+  rerender(editor(listing.version + 1));
+  assert.equal(input.value, '2');
+  assert.ok(screen.getByText(/check the current mapping/i));
+  assert.equal(
+    screen.getByRole<HTMLButtonElement>('button', { name: /Save draft/ }).disabled,
+    true,
+  );
+  fireEvent.click(screen.getByRole('button', { name: /Discard edit/ }));
+  fireEvent.change(input, { target: { value: '1' } });
+  assert.equal(
+    screen.getByRole<HTMLButtonElement>('button', { name: /Save draft/ }).disabled,
+    false,
+  );
+});
+
 test('invalid quantities stay editable and never reach the save command', async () => {
   const state = initialState('demo', 'unused');
   let saves = 0;
@@ -100,6 +150,10 @@ test('invalid quantities stay editable and never reach the save command', async 
     assert.equal(input.value, value);
     assert.equal(saves, 0);
   }
+  fireEvent.change(input, { target: { value: '5001' } });
+  fireEvent.submit(container.querySelector('form')!);
+  assert.match((await screen.findByRole('alert')).textContent ?? '', /5000/);
+  assert.equal(saves, 0);
 });
 
 test('a failed zero-draft save preserves the input and allows a successful retry', async () => {

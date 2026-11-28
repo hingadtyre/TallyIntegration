@@ -194,20 +194,20 @@ Receiving JSON does not automatically create table rows. These explicit componen
 
 **7. One complete write request: save a draft of 1**
 
-Assume a valid sample listing already has a calculated proposal of 5. The user changes its proposed quantity to 1. Typing changes the editor's local string value only. Submitting the form in [QuantityEditor](../src/client/screens/QuantityEditor.tsx#L32) validates the text and calls `onSave(Number(value))`.
+Assume a valid sample listing already has a calculated proposal of 5. The user changes its proposed quantity to 1. Typing changes the editor's local string value only. Submitting the form in [QuantityEditor](../src/client/screens/QuantityEditor.tsx#L61) validates the text and calls `onSave(Number(value), baseline)`.
 
-[InventoryTable](../src/client/screens/InventoryTable.tsx#L146) supplies the listing identity. [InventoryScreen](../src/client/screens/InventoryScreen.tsx#L360) supplies the company and sends:
+[InventoryTable](../src/client/screens/InventoryTable.tsx#L246) supplies the listing identity. [InventoryScreen](../src/client/screens/InventoryScreen.tsx#L681) supplies the company and sends:
 
 ```ts
 mutate(
   '/proposals',
-  { companyId, listingId: listing.id, quantity: amount },
+  { companyId, listingId: listing.id, ...baseline, quantity: amount },
   'Saving draft',
   'Draft saved. Review it before publication; the active policy has not changed.',
 );
 ```
 
-`mutate` delegates the operation and feedback to `runAction` in [useWorkspace.ts](../src/client/useWorkspace.ts#L50). Because the request has a body, [api.ts](../src/client/api.ts#L18) chooses POST and converts that body to JSON.
+`mutate` delegates the operation and feedback to `runAction` in [useWorkspace.ts](../src/client/useWorkspace.ts#L82). Because the request has a body, [api.ts](../src/client/api.ts#L18) chooses POST and converts that body to JSON.
 
 An illustrative request using the fresh demo IDs is:
 
@@ -217,14 +217,14 @@ Host: 127.0.0.1:4311
 Content-Type: application/json
 X-Stockbridge-Request: 1
 
-{"companyId":"demo-a","listingId":"listing-2","quantity":1}
+{"companyId":"demo-a","listingId":"listing-2","listingVersion":1,"previousManualQuantity":null,"quantity":1}
 ```
 
-The browser adds its normal headers. The custom `X-Stockbridge-Request` header is a local request check, not a Flipkart access token or user password. [The server](../src/server/http.ts#L59) checks dashboard headers/origin, parses the JSON body and routes the request to `service.edit(...)` through [the command dispatcher](../src/server/http.ts#L86).
+An older tab that omits the listing version or previous manual quantity receives HTTP 428 and must reload Inventory before saving. Removing a mapping also requires the version shown when the seller opened it. The custom `X-Stockbridge-Request` header is a local request check, not a Flipkart access token or user password. [The server](../src/server/http.ts#L99) checks dashboard headers/origin, parses the JSON body and routes the request to `service.edit(...)` through [the command dispatcher](../src/server/http.ts#L114).
 
-[The edit service](../src/server/service.ts#L104) validates the quantity, listing ownership and source stock. It checks the requested quantity against the permitted calculation and prepares a versioned proposal. An invalid request returns an error rather than saving an arbitrary amount.
+[The edit service](../src/server/service.ts#L311) checks the listing version and previous manual quantity captured when editing began, listing ownership and source stock. Manual and calculated proposal quantities must fit the 5,000-unit limit per Flipkart location. It checks the requested quantity against the permitted calculation and prepares a versioned proposal. An invalid request returns an error rather than saving an arbitrary amount.
 
-The mutation runs inside [Store.update](../src/server/store.ts#L51):
+The mutation runs inside [Store.update](../src/server/store.ts#L75):
 
 ```text
 BEGIN IMMEDIATE
@@ -234,9 +234,9 @@ BEGIN IMMEDIATE
 COMMIT
 ```
 
-If any step throws an error, the store rolls back the transaction. [writeSnapshot](../src/server/storage/records.ts#L252) converts proposal properties to SQL column values. Its [syncTable helper](../src/server/storage/records.ts#L111) inserts or updates changed rows using bound parameters (`?`), rather than inserting the user's text into SQL. It also persists the activity entry. Unchanged rows are not rewritten.
+If any step throws an error, the store rolls back the transaction. [writeSnapshot](../src/server/storage/records.ts#L226) converts proposal properties to SQL column values. Its [syncTable helper](../src/server/storage/records.ts#L173) inserts or updates changed rows using bound parameters (`?`), rather than inserting the user's text into SQL. It also persists the activity entry. Unchanged rows are not rewritten.
 
-After the commit, the service returns a new snapshot. The server serializes it; the browser parses it; [mutate](../src/client/useWorkspace.ts#L79) calls `setState(next)`; and the proposal editor displays the saved quantity. Its [key](../src/client/screens/InventoryTable.tsx#L142) incorporates the new proposal timestamp so its local input initializes from the saved version.
+After the commit, the service returns a new snapshot. The server serializes it; the browser parses it; [mutate](../src/client/useWorkspace.ts#L116) calls `setState(next)`; and the proposal editor displays the saved quantity. The [quantity editor](../src/client/screens/QuantityEditor.tsx#L75) clears the submitted edit after the save succeeds. Text entered while that save was in progress stays in the field.
 
 Typing changes a local input. Saving writes the proposal to SQLite. **Review changes** captures the selected destinations and row versions. Choosing **Publish** sends the captured, eligible quantities to the marketplace writer. Sample mode simulates that final step locally.
 
@@ -250,7 +250,7 @@ Bodies below use JavaScript shorthand. For example, `{companyId}` means an objec
 | [Discover companies](../src/client/screens/ConnectionsScreen.tsx)               | POST `/api/refresh`                        | `{}`                                                                                                                        | Snapshot after discovery attempt                                       |
 | [Calculate](../src/client/screens/InventoryScreen.tsx)                          | POST `/api/calculate`                      | `{companyId, listingIds}`                                                                                                   | Snapshot and per-listing ready, preserved or blocked results           |
 | [Set to zero](../src/client/screens/InventoryScreen.tsx)                        | POST `/api/zero`                           | `{companyId, listingIds}`                                                                                                   | Snapshot with zero proposals                                           |
-| [Save draft](../src/client/screens/InventoryScreen.tsx)                         | POST `/api/proposals`                      | `{companyId, listingId, quantity}`                                                                                          | Snapshot with saved proposal                                           |
+| [Save draft](../src/client/screens/InventoryScreen.tsx)                         | POST `/api/proposals`                      | `{companyId, listingId, listingVersion, previousManualQuantity, quantity}`                                                  | Snapshot with saved proposal                                           |
 | [Pause/resume one listing](../src/client/screens/InventoryScreen.tsx)           | POST `/api/pause`                          | `{companyId, listingIds, paused}`                                                                                           | Snapshot with saved listing pause state                                |
 | [Preview company sync](../src/client/screens/AutomationDialog.tsx)              | POST `/api/automation/preview`             | `{companyId}`                                                                                                               | Single-use review of all mapped accounts and locations                 |
 | [Enable or turn off company updates](../src/client/screens/InventoryScreen.tsx) | POST `/api/automation`                     | `{companyId, enabled, previewId}` to enable, `{companyId, enabled: false}` to turn off                                      | Snapshot with the company setting                                      |
@@ -258,7 +258,7 @@ Bodies below use JavaScript shorthand. For example, `{companyId}` means an objec
 | [Review](../src/client/useWorkspace.ts)                                         | POST `/api/review`                         | `{companyId, listingIds}`                                                                                                   | Captured review with ID and per-row checks                             |
 | [Publish](../src/client/useWorkspace.ts)                                        | POST `/api/publish`, then GET `/api/state` | `{reviewId, positiveEdits?}`                                                                                                | Outcomes by listing destination, then an updated snapshot              |
 | [Save mapping or Set of](../src/client/screens/MappingDialog.tsx)               | POST `/api/mappings`                       | `{listingId, itemId, listingVersion, expectedUnit, packSource, packSize, sourceScope, tyreFloor, confirmPackEvidence:true}` | Snapshot with the confirmed stock conversion for this listing location |
-| [Unlink](../src/client/screens/InventoryScreen.tsx)                             | POST `/api/mappings/remove`                | `{companyId, listingId, leaveRemoteStock:true}`                                                                             | Snapshot with mapping removed                                          |
+| [Unlink](../src/client/screens/InventoryScreen.tsx)                             | POST `/api/mappings/remove`                | `{companyId, listingId, listingVersion, leaveRemoteStock:true}`                                                             | Snapshot with mapping removed                                          |
 | [Save settings](../src/client/screens/SettingsScreen.tsx)                       | POST `/api/settings`                       | `{settings}`                                                                                                                | Snapshot with saved configuration                                      |
 | [Back up now](../src/client/useWorkspace.ts)                                    | POST `/api/backup`, then GET `/api/state`  | `{}` for POST                                                                                                               | `{path, verified:true}`, then the updated snapshot                     |
 | [Read/follow/export diagnostics](../src/client/screens/ActivityScreen.tsx)      | GET `/api/logs`                            | None                                                                                                                        | Plain text from the diagnostic file                                    |

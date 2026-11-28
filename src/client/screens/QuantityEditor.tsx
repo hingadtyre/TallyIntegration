@@ -1,5 +1,6 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
-import type { Listing, Proposal, Snapshot } from '../../shared/contracts.js';
+import type { DraftEditBaseline, Listing, Proposal, Snapshot } from '../../shared/contracts.js';
+import { draftStockLimitIssue, marketplaceEditLimits } from '../../shared/marketplace-contracts.js';
 import type { ActionResult } from '../api.js';
 import { Icon } from '../components.js';
 
@@ -7,7 +8,7 @@ interface QuantityEditorProps {
   proposal?: Proposal;
   listing: Listing;
   disabled: boolean;
-  onSave: (quantity: number) => Promise<ActionResult<Snapshot>>;
+  onSave: (quantity: number, baseline: DraftEditBaseline) => Promise<ActionResult<Snapshot>>;
   onDirty: (listingId: string, dirty: boolean) => void;
 }
 
@@ -20,10 +21,21 @@ export function QuantityEditor({
 }: QuantityEditorProps) {
   const savedValue = proposal ? String(proposal.quantity) : '';
   const descriptionId = useId();
-  const [typedValue, setTypedValue] = useState<string | null>(null);
+  const [editInProgress, setEditInProgress] = useState<{
+    value: string;
+    baseline: DraftEditBaseline;
+  } | null>(null);
   const [error, setError] = useState('');
-  const value = typedValue ?? savedValue;
-  const dirty = typedValue !== null;
+  const value = editInProgress?.value ?? savedValue;
+  const dirty = editInProgress !== null;
+  const currentBaseline = {
+    listingVersion: listing.version,
+    previousManualQuantity: proposal?.edited ? proposal.quantity : null,
+  };
+  const sourceChanged =
+    dirty &&
+    (editInProgress.baseline.listingVersion !== listing.version ||
+      editInProgress.baseline.previousManualQuantity !== currentBaseline.previousManualQuantity);
   const canSave = dirty || (proposal?.stale && proposal.edited);
 
   useEffect(() => {
@@ -35,28 +47,36 @@ export function QuantityEditor({
     // Saving an explicitly typed quantity is a seller decision, even if it
     // happens to equal the calculated proposal currently on screen.
     const alreadySaved = text === savedValue && (!proposal || proposal.edited);
-    setTypedValue(alreadySaved ? null : text);
+    setEditInProgress(
+      alreadySaved ? null : { value: text, baseline: editInProgress?.baseline ?? currentBaseline },
+    );
     setError('');
   }
 
   function discard() {
-    setTypedValue(null);
+    setEditInProgress(null);
     setError('');
   }
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (disabled || !canSave) return;
+    if (disabled || sourceChanged || !canSave) return;
     if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
       setError('Enter a whole number of 0 or more.');
       return;
     }
+    const limitIssue = draftStockLimitIssue(Number(value));
+    if (limitIssue) {
+      setError(limitIssue);
+      return;
+    }
     setError('');
-    const result = await onSave(Number(value));
-    if (result.ok) setTypedValue((current) => (current === typedValue ? null : current));
+    const result = await onSave(Number(value), editInProgress?.baseline ?? currentBaseline);
+    if (result.ok) setEditInProgress((current) => (current === editInProgress ? null : current));
     else setError(result.error);
   }
 
+  const savedLimitIssue = proposal && draftStockLimitIssue(proposal.quantity);
   const orderCheck = listing.proposalIssue
     ? `${listing.proposalIssue} Stockbridge will check again automatically.`
     : 'Checking orders and Tally stock…';
@@ -66,9 +86,16 @@ export function QuantityEditor({
   if (error) {
     description = error;
     descriptionClass = 'text-danger';
+  } else if (sourceChanged) {
+    description =
+      'The listing or saved draft changed. Discard the edit and check the current mapping and draft before entering a quantity.';
+    descriptionClass = 'text-danger';
   } else if (dirty) {
     description = 'Unsaved draft';
     descriptionClass = 'text-amber';
+  } else if (savedLimitIssue) {
+    description = savedLimitIssue;
+    descriptionClass = 'text-danger';
   } else if (proposal?.stale && proposal.edited) {
     description = 'Save again to review';
     descriptionClass = 'text-danger';
@@ -95,6 +122,7 @@ export function QuantityEditor({
         <input
           type="number"
           min="0"
+          max={marketplaceEditLimits.stock.max}
           step="1"
           inputMode="numeric"
           aria-label={`Proposed stock for ${listing.sku}`}
@@ -119,7 +147,7 @@ export function QuantityEditor({
           <button
             className="save-quantity"
             type="submit"
-            disabled={disabled}
+            disabled={disabled || sourceChanged}
             aria-label={`Save draft quantity for ${listing.sku}`}
             title="Save draft"
           >

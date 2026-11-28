@@ -64,6 +64,7 @@ export interface MarketplaceListingView extends MarketplaceListing {
 
 export interface MarketplacePage {
   listings: MarketplaceListingView[];
+  catalogOwnershipVerified?: boolean;
   total: number;
   page: number;
   pageSize: number;
@@ -82,6 +83,7 @@ export interface MarketplaceApplyInput {
   accountId: string;
   listingId: string;
   version: number;
+  requestId?: string;
   keepBackConfirmation?: { reviewKey: string; quantity: number };
   /** Older clients included an automation preference on direct stock edits. */
   edit: (StockEdit & { automation?: StockEditAutomation }) | PriceEdit;
@@ -112,4 +114,20 @@ export interface MarketplaceChange {
 export interface MarketplaceApplyResult {
   change: MarketplaceChange;
   listing: MarketplaceListingView;
+}
+
+export const marketplaceEditLimits = {
+  stock: { min: 0, max: 5000 },
+  price: { min: 1, max: 100_000_000 },
+} as const;
+
+export function draftStockLimitIssue(quantity: number): string | null {
+  return quantity > marketplaceEditLimits.stock.max
+    ? `Flipkart accepts up to ${marketplaceEditLimits.stock.max} units per location. Enter a draft within this limit.`
+    : null;
+}
+
+export interface MarketplaceSavedResult {
+  change: MarketplaceChange;
+  listing: MarketplaceListingView | null;
 }

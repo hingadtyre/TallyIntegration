@@ -1,8 +1,10 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, statSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { liveDashboardPort } from '../shared/dashboard-port.js';
+import { isFullyQualifiedPath } from '../server/filesystem-path.js';
+import { WorkspaceInUseError } from '../server/workspace-in-use.js';
 import { createRuntimeControl, type RuntimeRecord as WorkspaceRecord } from './runtime-control.js';
 import { installDesktopShortcut } from './shortcut.js';
 
@@ -18,6 +20,31 @@ function openWindow(program: string, args: string[]): void {
   child.unref();
 }
 
+export async function waitForDashboard(
+  dataDirectory: string,
+  child: Pick<ChildProcess, 'pid' | 'exitCode' | 'signalCode'>,
+  requireChild: boolean,
+): Promise<boolean> {
+  const startedAt = Date.now();
+  // Windows credential protection can spend 60s starting and 10s reading a saved account.
+  // A concurrent Start may still finish after our child exits with workspace-in-use.
+  while (true) {
+    const childRunning = child.exitCode === null && child.signalCode === null;
+    const anotherStartOwnsWorkspace =
+      !requireChild && child.exitCode === WorkspaceInUseError.exitCode;
+    const timeout = childRunning || anotherStartOwnsWorkspace ? 90_000 : 20_000;
+    if (Date.now() - startedAt >= timeout) return false;
+    await delay(250);
+    const current = readRecord(dataDirectory);
+    if (
+      current &&
+      (!requireChild || current.pid === child.pid) &&
+      (await instanceResponds(current))
+    )
+      return true;
+  }
+}
+
 export async function runLauncher(
   action: string,
   options: { packageRoot: string; openBrowser?: boolean },
@@ -25,7 +52,7 @@ export async function runLauncher(
   const configured =
     process.env.STOCKBRIDGE_DATA_DIR ??
     (process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Stockbridge', 'Pilot', 'data'));
-  if (!configured || !isAbsolute(configured) || /^\\\\|^\/\//.test(configured)) {
+  if (!configured || !isFullyQualifiedPath(configured)) {
     throw new Error('Use a local Windows data folder. Contact support to check the installation.');
   }
   const dataDirectory = resolve(configured);
@@ -112,9 +139,9 @@ export async function runLauncher(
       mkdirSync(dataDirectory, { recursive: true });
       const logFile = join(dataDirectory, 'startup.log');
       const log = openSync(logFile, 'a');
-      let startedPid: number | undefined;
+      let child: ChildProcess;
       try {
-        const child = spawn(executable, [entry], {
+        child = spawn(executable, [entry], {
           cwd: options.packageRoot,
           env: { ...process.env, STOCKBRIDGE_DATA_DIR: dataDirectory },
           detached: true,
@@ -125,26 +152,11 @@ export async function runLauncher(
           child.once('spawn', accept);
           child.once('error', reject);
         });
-        startedPid = child.pid;
         child.unref();
       } finally {
         closeSync(log);
       }
-      let ready = false;
-      const deadline = Date.now() + 20_000;
-      while (Date.now() < deadline) {
-        await delay(250);
-        const current = readRecord(dataDirectory);
-        if (
-          current &&
-          (action !== 'upgrade' || current.pid === startedPid) &&
-          (await instanceResponds(current))
-        ) {
-          ready = true;
-          break;
-        }
-      }
-      if (!ready) {
+      if (!(await waitForDashboard(dataDirectory, child, action === 'upgrade'))) {
         throw new Error(`Stockbridge could not start. Share the error in ${logFile} with support.`);
       }
     } catch (failure) {

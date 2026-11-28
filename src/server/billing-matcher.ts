@@ -14,7 +14,7 @@ import type { Listing, Snapshot, StockItem } from '../shared/contracts.js';
 import type { MarketplaceListing } from '../shared/marketplace-contracts.js';
 import type { BillingData, BillingLink } from './storage/billing-records.js';
 import { hasConfirmedPickup } from './marketplace-catalog.js';
-import { isRecentObservation } from './validation.js';
+import { hasCurrentTallyObservation } from './validation.js';
 
 export interface BillingScope {
   companyId: string;
@@ -695,16 +695,7 @@ export function matchBills(
       0,
     );
     const unmatchedUnits = Number.isSafeInteger(total) ? total : null;
-    const fresh =
-      state.mode === 'demo' ||
-      (state.connection.tally === 'online' &&
-        company?.lastSuccess &&
-        !company.stockIssue &&
-        item.observedAt &&
-        isRecentObservation(
-          item.observedAt,
-          Math.max(120_000, state.settings.tallySeconds * 3000),
-        ));
+    const fresh = hasCurrentTallyObservation(state, company, item.observedAt);
     const physical = evidence.balances
       ? (evidence.balances.find((i) => i.externalId === item.externalId && i.unit === item.unit)
           ?.physical ?? null)
@@ -716,9 +707,9 @@ export function matchBills(
       unit: item.unit,
       physical,
       unmatchedUnits,
-      keepBackUnits: item.keepBackUnits,
+      keepBackUnits: item.keepBackPreviousUnit === undefined ? item.keepBackUnits : null,
       previewAvailable:
-        physical === null || unmatchedUnits === null
+        physical === null || unmatchedUnits === null || item.keepBackPreviousUnit !== undefined
           ? null
           : availableForMarketplaces(physical, unmatchedUnits, item.keepBackUnits),
     };

@@ -256,9 +256,12 @@ test('dashboard commands return saved drafts, exact reviews, mappings and settin
     const scope = { companyId: 'demo-a', listingIds: ['listing-1'] };
     const calculated = await post<Snapshot>('calculate', scope);
     assert.equal(calculated.proposals[0].quantity, 5);
+    const listingVersion = calculated.listings.find((row) => row.id === 'listing-1')!.version;
     const edited = await post<Snapshot>('proposals', {
       companyId: 'demo-a',
       listingId: 'listing-1',
+      listingVersion,
+      previousManualQuantity: null,
       quantity: 1,
     });
     assert.equal(edited.proposals[0].quantity, 1);
@@ -274,6 +277,7 @@ test('dashboard commands return saved drafts, exact reviews, mappings and settin
     const removed = await post<Snapshot>('mappings/remove', {
       companyId: 'demo-a',
       listingId: 'listing-1',
+      listingVersion: zero.listings.find((row) => row.id === 'listing-1')!.version,
       leaveRemoteStock: true,
     });
     assert.equal(removed.listings.find((row) => row.id === 'listing-1')!.itemId, null);
@@ -319,10 +323,27 @@ test('malformed bodies and invalid command fields return actionable errors witho
     for (const [path, input] of [
       ['calculate', { companyId: 'demo-a', listingIds: [] }],
       ['calculate', { companyId: 'demo-a', listingIds: ['listing-1', 'listing-8'] }],
-      ['proposals', { companyId: 'demo-a', listingId: 'listing-1', quantity: -1 }],
+      [
+        'proposals',
+        {
+          companyId: 'demo-a',
+          listingId: 'listing-1',
+          listingVersion: before.listings[0].version,
+          previousManualQuantity: null,
+          quantity: -1,
+        },
+      ],
       ['pause', { companyId: 'demo-a', listingIds: ['listing-1'], paused: 'true' }],
       ['settings', {}],
-      ['mappings/remove', { companyId: 'demo-a', listingId: 'listing-1', leaveRemoteStock: false }],
+      [
+        'mappings/remove',
+        {
+          companyId: 'demo-a',
+          listingId: 'listing-1',
+          listingVersion: before.listings[0].version,
+          leaveRemoteStock: false,
+        },
+      ],
     ] as const) {
       const response = await fetch(`${address}/api/${path}`, {
         method: 'POST',
@@ -337,6 +358,30 @@ test('malformed bodies and invalid command fields return actionable errors witho
   } finally {
     await close(app);
   }
+});
+
+test('an older dashboard cannot edit a draft or unlink a mapping without its reviewed values', async (t) => {
+  const f = fixture(t);
+  const app = createApp(f.service, f.folder);
+  const address = await listen(app);
+  t.after(() => close(app));
+  const before = f.service.snapshot();
+  const listing = before.listings.find((row) => row.id === 'listing-1')!;
+  const scope = { companyId: 'demo-a', listingId: listing.id };
+  for (const [path, fields] of [
+    ['proposals', { quantity: 1, previousManualQuantity: null }],
+    ['proposals', { quantity: 1, listingVersion: listing.version }],
+    ['mappings/remove', { leaveRemoteStock: true }],
+  ] as const) {
+    const response = await fetch(`${address}/api/${path}`, {
+      method: 'POST',
+      headers: dashboardHeaders,
+      body: JSON.stringify({ ...scope, ...fields }),
+    });
+    assert.equal(response.status, 428);
+    assert.match((await response.json()).error, /reload inventory/i);
+  }
+  assert.deepEqual(f.service.snapshot(), before);
 });
 
 test('oversized bodies, unexpected routes and unsafe request headers are rejected', async (t) => {

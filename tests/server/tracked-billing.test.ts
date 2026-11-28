@@ -113,7 +113,12 @@ function fixture(t: TestContext, initiallyMapped = true) {
     return { token: id, verify: () => {} };
   };
   const availability = new StockAvailabilityService(store, sources, access);
+  const { setupVersion } = availability.coverageCommand('/api/billing/coverage', {
+    companyId,
+    accountId,
+  });
   availability.coverageCommand('/api/billing/coverage/start', {
+    setupVersion,
     companyId,
     accountId,
     fromDate: saleDay(now),
@@ -663,6 +668,24 @@ test('returns one sale across fulfilment groups and retains a changed identity f
   f.reopenLookup();
   f.orders.clear();
   assert.equal((await f.history()).orders[0].status, 'review');
+});
+
+test('a verified cancellation reported under one programme stays cancelled across the saved memberships after restart', async (t) => {
+  const f = fixture(t);
+  const sale = f.sale('cancelled-line');
+  f.orders.set('standard', [sale]);
+  f.orders.set('express', [sale]);
+  await f.history();
+  f.orders.clear();
+  f.orders.set('standard', [{ ...sale, stockDisposition: 'cancelled' }]);
+  assert.equal((await f.history()).orders[0].status, 'cancelled');
+
+  f.orders.clear();
+  f.reopenLookup();
+  const retained = await f.history();
+  assert.equal(retained.orders[0].status, 'cancelled');
+  assert.equal(retained.orders.length, 1);
+  assert.equal(retained.check?.groups.find((group) => group.group === 'express')?.count, 1);
 });
 
 test('conflicting invoice results across fulfilment types require a retry in either search order', async (t) => {

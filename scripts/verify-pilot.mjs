@@ -466,11 +466,20 @@ async function verifyPilot(zip) {
     options.env.STOCKBRIDGE_DESKTOP_DIR = desktop;
     const managedShortcut = existsSync(join(packageRoot, 'dist/src/desktop/shortcut.js'));
     runtimeFile = join(dataDirectory, 'live.runtime.json');
-    const launch = (action) => command(node, [launcher, action, '--no-browser'], options);
+    const launch = (action, allowFailure = false) =>
+      command(
+        node,
+        [launcher, action, '--no-browser'],
+        {
+          ...options,
+          timeout: action === 'upgrade' ? 180_000 : action === 'start' ? 105_000 : 45_000,
+        },
+        allowFailure,
+      );
     const hasUpgrade = existsSync(join(packageRoot, 'Upgrade Stockbridge.cmd'));
     if (hasUpgrade)
       await check('upgrade_requires_existing_workspace', async () => {
-        const result = await command(node, [launcher, 'upgrade', '--no-browser'], options, true);
+        const result = await launch('upgrade', true);
         assert.notEqual(result.code, 0);
         assert.match(result.stderr, /No existing Stockbridge workspace/);
         assert.ok(!existsSync(join(dataDirectory, 'live.sqlite')));
@@ -807,14 +816,58 @@ async function verifyPilot(zip) {
         assert.equal(item.id, fixture.itemId);
         if (hasKeepBack) assert.equal(item.keepBackUnits, 1.25);
       });
+      const databaseFile = join(dataDirectory, 'live.sqlite');
+      const readVersion = async (file) => {
+        const script =
+          "const db = new (require('node:sqlite').DatabaseSync)(process.argv[1], {readOnly:true}); console.log(db.prepare('PRAGMA user_version').get().user_version); db.close();";
+        return Number((await command(node, ['-e', script, file], options)).stdout.trim());
+      };
+      const latestVersion = await readVersion(databaseFile);
+      if (latestVersion >= 16) {
+        await check('schema_fifteen_keep_back_needs_one_confirmation', async () => {
+          await launch('stop');
+          // Schemas 15 and 16 use the same table layout. The older record did
+          // not distinguish a confirmed quantity from one inherited on upgrade.
+          const preparePrevious = `
+            const db = new (require('node:sqlite').DatabaseSync)(process.argv[1]);
+            const row = db.prepare('SELECT keep_back_units, keep_back_previous_unit FROM stock_items WHERE id = ?').get(process.argv[2]);
+            require('node:assert/strict').equal(row.keep_back_units, 1.25);
+            require('node:assert/strict').equal(row.keep_back_previous_unit, null);
+            db.exec('PRAGMA user_version = 15');
+            db.close();
+          `;
+          await command(node, ['-e', preparePrevious, databaseFile, fixture.itemId], options);
+          await launch('upgrade');
+          assert.equal(await readVersion(databaseFile), latestVersion);
+          const upgraded = (await api('/api/state')).items.find(
+            (item) => item.id === fixture.itemId,
+          );
+          assert.equal(upgraded.keepBackUnits, 1.25);
+          assert.equal(upgraded.keepBackPreviousUnit, '');
+
+          fixture.setQuantity(7);
+          const fresh = (await api('/api/refresh', {})).items.find(
+            (item) => item.id === fixture.itemId,
+          );
+          assert.equal(fresh.physical, 7);
+          assert.equal(fresh.unit, 'nos');
+          assert.equal(fresh.keepBackPreviousUnit, '');
+          await api('/api/items/keep-back', {
+            companyId: fresh.companyId,
+            itemId: fresh.id,
+            itemVersion: fresh.version,
+            keepBackUnits: 1.25,
+          });
+          await launch('stop');
+          await launch('start');
+          const saved = (await api('/api/state')).items.find((item) => item.id === fixture.itemId);
+          assert.equal(saved.keepBackUnits, 1.25);
+          assert.equal(saved.keepBackPreviousUnit, undefined);
+          return { previousSchema: 15, confirmedQuantity: saved.keepBackUnits, unit: saved.unit };
+        });
+      }
       await check('upgrade_migrates_existing_schema_ten_and_keeps_credentials', async () => {
         await launch('stop');
-        const readVersion =
-          "const db = new (require('node:sqlite').DatabaseSync)(process.argv[1], {readOnly:true}); console.log(db.prepare('PRAGMA user_version').get().user_version); db.close();";
-        const databaseFile = join(dataDirectory, 'live.sqlite');
-        const latestVersion = (
-          await command(node, ['-e', readVersion, databaseFile], options)
-        ).stdout.trim();
         // Recreate the previous format on the isolated, populated test database.
         const preparePrevious = `
           import { DatabaseSync } from 'node:sqlite';
@@ -823,6 +876,7 @@ async function verifyPilot(zip) {
           db.exec('UPDATE companies SET automation = 1');
           db.prepare("INSERT INTO listings (id,account_id,sku,title,location,item_id,pack_size,pack_evidence,verified,policy,remaining,paused,version,sort_order) SELECT 'paused-pilot',?,'pilot-sku','Pilot tyre','test location',id,1,'test fixture',1,'limited',2,1,1,0 FROM stock_items LIMIT 1").run(process.argv[1]);
           if (db.prepare('PRAGMA table_info(stock_items)').all().some(row => row.name === 'keep_back_units')) db.exec('ALTER TABLE stock_items DROP COLUMN keep_back_units');
+          if (db.prepare('PRAGMA table_info(stock_items)').all().some(row => row.name === 'keep_back_previous_unit')) db.exec('ALTER TABLE stock_items DROP COLUMN keep_back_previous_unit');
           if (db.prepare('PRAGMA table_info(listings)').all().some(row => row.name === 'order_proposal_pending')) db.exec('ALTER TABLE listings DROP COLUMN order_proposal_pending');
           db.exec('DROP TABLE IF EXISTS billing_orders; DROP TABLE IF EXISTS billing_tracking_dates');
           db.exec('DROP TABLE sku_mappings; PRAGMA user_version = 10');
@@ -836,11 +890,8 @@ async function verifyPilot(zip) {
         const result = await launch('upgrade');
         const path = result.stdout.match(/Verified safety copy: ([^\r\n]+)/)?.[1];
         assert.ok(path && existsSync(path));
-        assert.equal((await command(node, ['-e', readVersion, path], options)).stdout.trim(), '10');
-        assert.equal(
-          (await command(node, ['-e', readVersion, databaseFile], options)).stdout.trim(),
-          latestVersion,
-        );
+        assert.equal(await readVersion(path), 10);
+        assert.equal(await readVersion(databaseFile), latestVersion);
         const state = await api('/api/state');
         assert.equal(state.items[0].id, fixture.itemId);
         if (hasKeepBack) assert.equal(state.items[0].keepBackUnits, 0);
@@ -914,7 +965,7 @@ async function verifyPilot(zip) {
         let copy;
         let digest;
         try {
-          const result = await command(node, [launcher, 'upgrade', '--no-browser'], options, true);
+          const result = await launch('upgrade', true);
           assert.notEqual(result.code, 0);
           assert.match(result.stderr, /Run Upgrade Stockbridge.cmd again from the new folder/);
           copy = result.stderr.match(/Verified safety copy: ([^\r\n]+)/)?.[1];

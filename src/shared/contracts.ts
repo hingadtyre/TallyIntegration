@@ -23,7 +23,11 @@ export interface StockItem {
   lowStockThreshold: number;
   /** Tally base units the seller keeps out of calculated marketplace stock. */
   keepBackUnits: number;
+  /** A positive amount awaiting unit confirmation. An empty string means the original unit is unknown. */
+  keepBackPreviousUnit?: string;
 }
+export const keepBackUnitIssue =
+  "In Inventory, confirm the quantity to keep back in the item's current Tally unit.";
 export interface SellerAccount {
   id: string;
   marketplace: 'flipkart';
@@ -100,6 +104,10 @@ export interface Proposal {
   ruleVersion: string;
   createdAt: string;
   stale: boolean;
+}
+export interface DraftEditBaseline {
+  listingVersion: number;
+  previousManualQuantity: number | null;
 }
 export interface CalculationRow {
   listingId: string;

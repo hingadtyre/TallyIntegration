@@ -4,8 +4,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Snapshot } from '../../shared/contracts.js';
 import { initialState } from '../seed.js';
 import { updateInventoryObservations } from '../marketplace-catalog.js';
-import { backupDatabase } from './backup.js';
-import { readSnapshot, writeSnapshot } from './records.js';
+import { backupDatabase, writeBackupManifest } from './backup.js';
+import { markLegacyKeepBackForReview, readSnapshot, writeSnapshot } from './records.js';
 import { readMarketplace } from './marketplace-records.js';
 import { readBilling } from './billing-records.js';
 import { verifyStockCoverage } from './stock-coverage.js';
@@ -20,6 +20,7 @@ import {
   addCompanyStockIssue,
   addProposalIssue,
   addItemKeepBack,
+  addKeepBackPreviousUnit,
   addPendingOrderProposal,
   createSkuMappings,
   upgradeOrderSyncSchema,
@@ -67,7 +68,7 @@ export function prepareDatabase(
     readBilling(database);
     verifyStockCoverage(database);
     verifyBillingOrders(database);
-    return upgradingExisting ? migrationBackup(database, file) : null;
+    return upgradingExisting ? migrationBackup(database, file, mode, version) : null;
   }
   if (version === 0) {
     if (upgradingExisting) throw new Error('Choose an existing, versioned Stockbridge workspace.');
@@ -88,12 +89,13 @@ export function prepareDatabase(
 
   const revision = database.prepare('PRAGMA data_version').get()?.data_version;
   if (version >= 6) verifyStockCoverage(database);
+  if (version >= 14) verifyBillingOrders(database);
   const original = version === 1 ? legacyJson(database) : JSON.stringify(readSnapshot(database));
   const state = version === 1 ? parseLegacySnapshot(original) : readSnapshot(database);
   requireMode(state, mode);
   const originalMarket = version >= 3 ? JSON.stringify(readMarketplace(database)) : null;
   const originalBilling = version >= 5 ? JSON.stringify(readBilling(database)) : null;
-  const backupPath = migrationBackup(database, file);
+  const backupPath = migrationBackup(database, file, mode, version);
   inTransaction(database, () => {
     if (
       schemaVersion(database) !== version ||
@@ -105,6 +107,7 @@ export function prepareDatabase(
       throw new Error('The database changed during upgrade. Stop other app processes and retry.');
     }
     if (version === 1) {
+      markLegacyKeepBackForReview(state, version);
       createSchema(database);
       database.exec('DROP TABLE app_state;');
     } else {
@@ -119,6 +122,7 @@ export function prepareDatabase(
       if (version < 12) addItemKeepBack(database);
       if (version < 13) addPendingOrderProposal(database);
       if (version < 14) createBillingOrdersSchema(database);
+      if (version < 15) addKeepBackPreviousUnit(database);
     }
     database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION};`);
     // The old-schema reader converted holds to pauses with their drafts and queued work.
@@ -131,13 +135,20 @@ export function prepareDatabase(
   return backupPath;
 }
 
-function migrationBackup(database: DatabaseSync, file: string): string {
-  const stamp = new Date().toISOString().replaceAll(':', '-');
+function migrationBackup(
+  database: DatabaseSync,
+  file: string,
+  mode: Snapshot['mode'],
+  version: number,
+): string {
+  const createdAt = new Date().toISOString();
+  const stamp = createdAt.replaceAll(':', '-');
   const path = join(
     dirname(file),
     'migration-backups',
     `before-schema-v${CURRENT_SCHEMA_VERSION}-${stamp}-${randomUUID().slice(0, 8)}.sqlite`,
   );
   backupDatabase(database, path);
+  if (version >= 2) writeBackupManifest(path, version, mode, createdAt, 'before-upgrade');
   return path;
 }

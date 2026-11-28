@@ -43,7 +43,8 @@ export function KeepBackEditor({
   const [error, setError] = useState('');
   const editing = draft !== null;
   const saved = item.keepBackUnits ?? 0;
-  const value = draft?.text ?? String(saved);
+  const needsUnitReview = item.keepBackPreviousUnit !== undefined;
+  const value = draft?.text ?? (needsUnitReview ? '' : String(saved));
   const amount = Number(value);
   const valid =
     value.trim() !== '' &&
@@ -120,12 +121,12 @@ export function KeepBackEditor({
             value={value}
             aria-label={`Keep back from marketplaces for ${item.name}`}
             aria-describedby={`${id}-balance`}
-            aria-invalid={!valid}
+            aria-invalid={editing && !valid}
             data-unsaved={editing || undefined}
             disabled={busy}
             onChange={(event) => {
               const text = event.currentTarget.value;
-              if (text === String(saved)) reset();
+              if (text === (needsUnitReview ? '' : String(saved))) reset();
               else {
                 setDraft({ text, version: draft?.version ?? item.version });
                 setError('');
@@ -143,7 +144,15 @@ export function KeepBackEditor({
         id={`${id}-balance`}
         aria-live={editing ? 'polite' : 'off'}
       >
-        {!editing && reservations && item.physical !== null ? (
+        {needsUnitReview && (
+          <p className="text-amber">
+            {item.keepBackPreviousUnit
+              ? `You previously kept back ${formatQuantity(saved)} ${item.keepBackPreviousUnit}.`
+              : `Your saved quantity is ${formatQuantity(saved)}. Its original unit is unknown.`}{' '}
+            Enter the quantity to keep back in {unit}.
+          </p>
+        )}
+        {!editing && needsUnitReview ? null : !editing && reservations && item.physical !== null ? (
           <>
             <span>Available for marketplaces</span>
             <div>

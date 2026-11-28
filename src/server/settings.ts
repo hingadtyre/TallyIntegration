@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import { validateTallyUrl } from '../adapters/tally.js';
 import type { Settings } from '../shared/contracts.js';
 import { recordActivity } from './activity.js';
 import type { Store } from './store.js';
 import { InputError, requireText, requireWholeNumber } from './validation.js';
+import { isFullyQualifiedPath } from './filesystem-path.js';
 
 function validateSettings(value: unknown): Settings {
   if (!value || typeof value !== 'object') throw new InputError('Settings are required.');
@@ -30,8 +31,10 @@ function validateSettings(value: unknown): Settings {
     catalogSeconds: requireWholeNumber(input.catalogSeconds, 'Listings interval', 60, 86400),
     backupFolder: requireText(input.backupFolder, 'Backup folder'),
   };
-  if (!isAbsolute(settings.backupFolder))
-    throw new InputError('Use an absolute backup folder path.');
+  if (!isFullyQualifiedPath(settings.backupFolder, true))
+    throw new InputError(
+      'Use a fully qualified backup folder path with a drive letter or network share on Windows.',
+    );
   const probe = join(settings.backupFolder, `.stockbridge-write-check-${randomUUID()}`);
   try {
     mkdirSync(settings.backupFolder, { recursive: true });

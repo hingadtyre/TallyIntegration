@@ -18,6 +18,7 @@ import {
 import type {
   MarketplaceAccount,
   MarketplaceAccountRecord,
+  MarketplaceApplyResult,
   MarketplaceListing,
   MarketplaceListingView,
   MarketplacePage,
@@ -84,6 +85,7 @@ export class MarketplaceService {
   readonly blockedSyncReasons = new Map<string, string>();
   private readonly connections = new Map<string, AccountConnection>();
   private readonly pending = new Map<string, Promise<unknown>>();
+  private readonly pendingDirectEdits = new Map<string, Promise<MarketplaceApplyResult>>();
   private readonly inventoryReads = new Map<string, Promise<Record<string, ItemReservations>>>();
   private readonly catalogueImports = new Map<string, SharedCatalogueImport>();
   private readonly verifiedAccounts = new Set<string>();
@@ -695,6 +697,7 @@ export class MarketplaceService {
     );
     return {
       listings: visible.map((row) => listingView(row, state)),
+      catalogOwnershipVerified: this.catalogVerified(account.id),
       total: listings.length,
       page,
       pageSize: 20,
@@ -800,17 +803,52 @@ export class MarketplaceService {
     return checked?.review ?? null;
   }
 
+  async savedResult(input: Record<string, unknown>) {
+    const accountId = this.account(input.accountId).id;
+    const listingId = requireText(input.listingId, 'Listing');
+    const changeId = requireText(input.changeId, 'Update');
+    const key = JSON.stringify([accountId, listingId, changeId]);
+    // A positive stock edit can be checking keep-back before it enters the seller queue.
+    // A failed request can still have a saved attempt, which is authoritative here.
+    await this.pendingDirectEdits.get(key)?.catch(() => undefined);
+    await this.pending.get(accountId);
+    const data = this.store.readMarketplace();
+    const change = data.changes.find(
+      (row) => row.accountId === accountId && row.listingId === listingId && row.id === changeId,
+    );
+    if (!change) return null;
+    const listing = data.listings.find(
+      (row) => row.accountId === accountId && row.id === listingId,
+    );
+    return { change, listing: listing ? this.currentListingView(listing) : null };
+  }
+
   async apply(input: Record<string, unknown>) {
-    const account = this.account(input.accountId);
-    const check = this.publisher.checkDirectEdit(account.id, input);
+    const accountId = this.account(input.accountId).id;
+    if (typeof input.requestId !== 'string') return this.applyDirect(accountId, input);
+    const listingId = requireText(input.listingId, 'Listing');
+    const key = JSON.stringify([accountId, listingId, input.requestId]);
+    if (this.pendingDirectEdits.has(key))
+      throw new InputError('This update is already in progress. Reload its saved result.', 409);
+    const edit = this.applyDirect(accountId, input);
+    this.pendingDirectEdits.set(key, edit);
+    try {
+      return await edit;
+    } finally {
+      this.pendingDirectEdits.delete(key);
+    }
+  }
+
+  private async applyDirect(accountId: string, input: Record<string, unknown>) {
+    const check = this.publisher.checkDirectEdit(accountId, input);
     const keepBack = check ? await check : null;
-    return this.serial(account.id, async () => {
+    return this.serial(accountId, async () => {
       const result = await this.publisher.apply(
-        account.id,
+        accountId,
         input,
-        await this.verifiedToken(account.id),
+        await this.verifiedToken(accountId),
         undefined,
-        { keepBack, verify: this.sellerGuard(account.id) },
+        { keepBack, verify: this.sellerGuard(accountId) },
       );
       if (result) result.listing = this.currentListingView(result.listing);
       return result;
@@ -1207,7 +1245,7 @@ export class MarketplaceService {
     this.stopped = true;
   }
   async idle(): Promise<void> {
-    await Promise.all([...this.pending.values()]);
+    await Promise.allSettled([...this.pending.values(), ...this.pendingDirectEdits.values()]);
     if (this.stopped) for (const connection of this.connections.values()) connection.stop();
     await Promise.all([...this.connections.values()].map((connection) => connection.idle()));
   }

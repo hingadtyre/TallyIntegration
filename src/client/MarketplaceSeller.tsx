@@ -1,6 +1,7 @@
 import type { SellerAccount } from '../shared/contracts.js';
 
 import { marketplaceBrand } from '../shared/marketplaces.js';
+import { SearchablePicker } from './SearchablePicker.js';
 
 type Marketplace = SellerAccount['marketplace'];
 
@@ -25,5 +26,39 @@ export function MarketplaceSeller({
     <span className="inventory-seller" title={account.name}>
       <MarketplaceLogo marketplace={account.marketplace} /> {account.name}
     </span>
+  );
+}
+
+export function SellerAccountPicker({
+  accounts,
+  selected,
+  onSelect,
+  inputId,
+}: {
+  accounts: SellerAccount[];
+  selected?: SellerAccount;
+  onSelect: (id: string) => void;
+  inputId?: string;
+}) {
+  return (
+    <div className="account-select">
+      <SearchablePicker
+        inputId={inputId}
+        openOnFocus={false}
+        label="Seller account"
+        placeholder={accounts.length ? 'Choose seller account' : 'No seller account'}
+        options={accounts}
+        selected={selected}
+        getId={(seller) => seller.id}
+        getLabel={(seller) => seller.name}
+        selectedIcon={
+          selected?.marketplace && <MarketplaceLogo marketplace={selected.marketplace} />
+        }
+        renderOption={(seller) => <MarketplaceSeller account={seller} />}
+        emptyMessage="No matching seller accounts."
+        disabled={!accounts.length}
+        onSelect={onSelect}
+      />
+    </div>
   );
 }

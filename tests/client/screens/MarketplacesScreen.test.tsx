@@ -76,7 +76,7 @@ function result(
   return {
     listing: { ...item, version: 4 },
     change: {
-      id: 'change-1',
+      id: input.requestId ?? 'change-1',
       accountId: input.accountId,
       listingId: input.listingId,
       sku: item.sku,
@@ -406,11 +406,13 @@ test('price Apply sends only that field, keeps stock untouched and shows verifie
   fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
   await within(dialog).findByText('Updated');
   assert.deepEqual(submitted, {
+    requestId: submitted?.requestId,
     accountId: 'seller-a',
     listingId: 'listing-seller-a',
     version: 3,
     edit: { kind: 'price', field: 'sellingPrice', value: 950 },
   });
+  assert.match(submitted?.requestId ?? '', /^[a-f0-9-]{36}$/u);
   assert.ok(screen.getByRole('link', { name: /Open in Flipkart/ }));
   assert.equal(screen.queryByRole('button', { name: /Edit settlement/ }), null);
 });
@@ -573,8 +575,10 @@ for (const lostResponse of [false, true])
           if (lostResponse) throw new TypeError('Network response lost.');
           return response(saved);
         }
-        if (saved && String(path).startsWith('/api/marketplaces/listings?'))
-          return response({ ...page(saved.listing), changes: [saved.change] });
+        if (saved && String(path) === '/api/marketplaces/saved-result') {
+          assert.equal(JSON.parse(String(options?.body)).changeId, saved.change.id);
+          return response(saved);
+        }
         return baseResponse(path, item);
       },
     );
@@ -690,7 +694,7 @@ test('uncertain writes require readback instead of a second Apply and preserve t
         reconciliations++;
         assert.deepEqual(JSON.parse(String(options?.body)), {
           accountId: 'seller-a',
-          changeId: 'change-1',
+          changeId: submitted.requestId,
         });
         return response(result(submitted));
       }
@@ -1180,7 +1184,7 @@ test('a validation failure preserves the draft so the seller can correct and ret
       if (String(path) === '/api/marketplaces/apply') {
         writes++;
         return writes === 1
-          ? response({ error: 'The selling price must not exceed MRP.' }, 400)
+          ? response({ error: 'The current marketplace value changed. Review this price.' }, 409)
           : response(result(JSON.parse(String(options?.body))));
       }
       return baseResponse(path);
@@ -1191,9 +1195,20 @@ test('a validation failure preserves the draft so the seller can correct and ret
   fireEvent.click(screen.getByRole('button', { name: 'Edit selling price for SKU-seller-a' }));
   const dialog = screen.getByRole('dialog');
   fireEvent.change(screen.getByLabelText('Selling price'), { target: { value: '1400' } });
+  assert.ok(within(dialog).getByText('The selling price must not exceed MRP.'));
+  assert.ok((within(dialog).getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled);
+  for (const invalid of ['0', '1000.50', '100000001']) {
+    fireEvent.change(screen.getByLabelText('Selling price'), { target: { value: invalid } });
+    assert.ok(within(dialog).getByText(/Enter a whole rupee price/));
+    assert.ok(
+      (within(dialog).getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled,
+    );
+  }
+  assert.equal(writes, 0);
+  fireEvent.change(screen.getByLabelText('Selling price'), { target: { value: '1150' } });
   fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
-  await within(dialog).findByText('The selling price must not exceed MRP.');
-  assert.equal((screen.getByLabelText('Selling price') as HTMLInputElement).value, '1400');
+  await within(dialog).findByText('The current marketplace value changed. Review this price.');
+  assert.equal((screen.getByLabelText('Selling price') as HTMLInputElement).value, '1150');
   fireEvent.change(screen.getByLabelText('Selling price'), { target: { value: '1100' } });
   fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
   await within(dialog).findByText('Updated');
@@ -1212,8 +1227,14 @@ test('a lost Apply response reloads the saved uncertain change before reconcilia
         submitted = JSON.parse(String(options?.body));
         throw new TypeError('Network response lost.');
       }
-      if (String(path).startsWith('/api/marketplaces/listings?') && writes)
-        return response({ ...page(), changes: [result(submitted, 'uncertain').change] });
+      if (String(path) === '/api/marketplaces/saved-result') {
+        assert.deepEqual(JSON.parse(String(options?.body)), {
+          accountId: submitted.accountId,
+          listingId: submitted.listingId,
+          changeId: submitted.requestId,
+        });
+        return response(result(submitted, 'uncertain'));
+      }
       if (String(path) === '/api/marketplaces/reconcile') return response(result(submitted));
       return baseResponse(path);
     },
@@ -1373,6 +1394,27 @@ test('stock editors require a known pickup status, leaving other locations and p
     false,
   );
   assert.ok(row.getByText(/verify this pickup location before editing stock/));
+});
+
+test('saved listings only become editable after the seller catalogue is verified again', async (t) => {
+  let verified = false;
+  t.mock.method(globalThis, 'fetch', async (input: string) => {
+    if (input === '/api/marketplaces') return response({ accounts: [account()] });
+    if (input === '/api/marketplaces/refresh') {
+      verified = true;
+      return response({ account: { ...account(), catalogOwnershipVerified: true } });
+    }
+    return response({ ...page(), catalogOwnershipVerified: verified });
+  });
+  render(<MarketplacesScreen mode="live" onOpenInventory={() => {}} />);
+  await openListings();
+  assert.ok(screen.getByText(/Showing saved listings/));
+  const edit = screen.getByRole('button', {
+    name: 'Edit MRP for SKU-seller-a',
+  }) as HTMLButtonElement;
+  assert.equal(edit.disabled, true);
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh listings' }));
+  await waitFor(() => assert.equal(edit.disabled, false));
 });
 
 test('a catalogue refresh that removes the last page returns to the last available page', async (t) => {

@@ -30,6 +30,7 @@ test('marketplace HTTP flow scopes accounts and requires dashboard authorization
     const edit = {
       accountId,
       listingId: listing.id,
+      requestId: '12e22e2e-9591-4593-bcb2-c1d74b7c9714',
       version: listing.version,
       edit: { kind: 'price', field: 'sellingPrice', value: 4500 },
     };
@@ -55,6 +56,20 @@ test('marketplace HTTP flow scopes accounts and requires dashboard authorization
       'confirmed',
     );
     assert.equal((await post('apply', edit)).status, 409);
+    const lookup = { accountId, listingId: listing.id, changeId: edit.requestId };
+    const saved = await (await post('saved-result', lookup)).json();
+    assert.equal(saved.change.id, edit.requestId);
+    assert.equal(saved.change.state, 'confirmed');
+    assert.equal(saved.listing.id, listing.id);
+    assert.equal(
+      await (await post('saved-result', { ...lookup, listingId: 'other' })).json(),
+      null,
+    );
+    assert.equal(
+      await (await post('saved-result', { ...lookup, changeId: 'unknown' })).json(),
+      null,
+    );
+    assert.equal((await post('apply', { ...edit, version: saved.listing.version })).status, 409);
     assert.equal((await fetch(`${address}/api/marketplaces/listings?accountId=wrong`)).status, 404);
     assert.equal(
       (await fetch(`${address}/api/marketplaces/listings?accountId=${accountId}&page=-1`)).status,

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { completePacks } from '../domain/stock-policy.js';
 import type { Snapshot } from '../shared/contracts.js';
+import { keepBackUnitIssue } from '../shared/contracts.js';
 import type {
   MarketplaceKeepBackReview,
   MarketplaceListing,
@@ -21,6 +22,7 @@ export function keepBackSource(state: Snapshot, listing: MarketplaceListing, loc
   for (const row of mappings) {
     const item = state.items.find((entry) => entry.id === row.itemId);
     if (!item?.keepBackUnits) continue;
+    if (item.keepBackPreviousUnit !== undefined) throw new InputError(keepBackUnitIssue, 409);
     if (mappings.length !== 1)
       throw new InputError(
         'Check the conflicting stock mappings for this pickup in Inventory.',

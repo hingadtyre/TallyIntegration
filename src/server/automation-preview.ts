@@ -1,3 +1,4 @@
+import { marketplaceEditLimits } from '../shared/marketplace-contracts.js';
 import { randomUUID } from 'node:crypto';
 import { hasConfirmedPickup } from './marketplace-catalog.js';
 import type { AutomationPreview, AutomationPreviewRow } from '../shared/automation.js';
@@ -249,7 +250,11 @@ export class AutomationReviews {
           guards.add(evidence.verify);
           quantity = desiredStock(input.state, listing, 'current', evidence.available, item);
         }
-        if (quantity > 5000 || !Number.isSafeInteger(quantity) || quantity < 0)
+        if (
+          quantity > marketplaceEditLimits.stock.max ||
+          !Number.isSafeInteger(quantity) ||
+          quantity < 0
+        )
           waiting('The calculated stock is outside the allowed range.');
         if (input.state.mode === 'live' && listing.policy === 'limited' && quantity > 0)
           waiting('Positive stock under Limited sales requires verified allowance accounting.');

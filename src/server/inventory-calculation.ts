@@ -1,4 +1,5 @@
 import type { CalculationRow, Listing, Snapshot } from '../shared/contracts.js';
+import { draftStockLimitIssue } from '../shared/marketplace-contracts.js';
 import { startTrackingMessage } from '../shared/stock-coverage.js';
 import { recordActivity } from './activity.js';
 import type { MarketplaceService } from './marketplace-service.js';
@@ -137,6 +138,8 @@ export function saveCalculation(
           !options.zero && state.proposals.find((p) => p.listingId === listing.id && p.edited);
         if (edited) {
           requireStockSource(state, listing);
+          const limitIssue = draftStockLimitIssue(edited.quantity);
+          if (limitIssue) throw new InputError(limitIssue);
           if (listing.orderProposalPending) {
             calculationAvailability(state, listing, options.sources);
             delete listing.orderProposalPending;

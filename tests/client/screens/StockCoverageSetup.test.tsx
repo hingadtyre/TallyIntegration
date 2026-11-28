@@ -20,7 +20,13 @@ test('a company can set and change its billing start date independently, then re
       if (++attempt === 1) return response({ error: 'Choose a more recent date.' }, 400);
       billingFrom = new Date(body.fromDate + 'T00:00:00+05:30').toISOString();
     }
-    return response({ from: null, billingFrom, current: false, checkedThrough: null });
+    return response({
+      setupVersion: billingFrom ?? 'initial',
+      from: null,
+      billingFrom,
+      current: false,
+      checkedThrough: null,
+    });
   });
   render(<StockCoverageSetup {...scope} onStart={(from) => starts.push(from)} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Set billing start date' }));
@@ -55,7 +61,52 @@ test('a company can set and change its billing start date independently, then re
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   assert.deepEqual(
     saves,
-    ['2026-11-22', '2026-11-22', '2026-11-25'].map((fromDate) => ({ ...scope, fromDate })),
+    ['2026-11-22', '2026-11-22', '2026-11-25'].map((fromDate, index) => ({
+      ...scope,
+      fromDate,
+      setupVersion: index < 2 ? 'initial' : starts[0],
+    })),
   );
   assert.deepEqual(starts, ['2026-11-21T18:30:00.000Z', '2026-11-24T18:30:00.000Z']);
+});
+
+test('a stale starting-stock form reloads the newer company setup and requires a fresh confirmation', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-25T20:00:00Z') });
+  let reads = 0;
+  let saves = 0;
+  const dates: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+    if (url === '/api/billing/coverage') {
+      reads++;
+      return response({
+        from: reads === 1 ? '2026-11-20T18:30:00Z' : '2026-11-22T18:30:00Z',
+        setupVersion: reads === 1 ? 'previous' : 'current',
+        current: true,
+        checkedThrough: null,
+      });
+    }
+    assert.equal(url, '/api/billing/coverage/start');
+    assert.equal(JSON.parse(String(init?.body)).setupVersion, 'previous');
+    saves++;
+    return response({ error: 'The company tracking setup changed.' }, 412);
+  });
+  render(
+    <StockCoverageSetup
+      companyId="company"
+      accountId="seller"
+      onStart={(date) => dates.push(date)}
+    />,
+  );
+  fireEvent.click(await screen.findByRole('button', { name: 'Review starting stock' }));
+  fireEvent.click(screen.getByRole('checkbox'));
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm starting stock' }));
+  await screen.findByText('Stockbridge checks orders for this company from 23 Nov 2026 (India).');
+  assert.equal(saves, 1);
+  assert.deepEqual(dates, ['2026-11-22T18:30:00Z']);
+  fireEvent.click(screen.getByRole('button', { name: 'Review starting stock' }));
+  assert.equal(
+    screen.getByLabelText<HTMLInputElement>('Track orders from (India)').value,
+    '2026-11-23',
+  );
+  assert.equal(screen.getByRole<HTMLInputElement>('checkbox').checked, false);
 });

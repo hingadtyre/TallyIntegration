@@ -37,6 +37,20 @@ test('a destination that becomes unavailable does not report a backup or change 
   assert.deepEqual(f.service.snapshot(), before);
   assert.equal(readFileSync(blocked, 'utf8'), 'retained fixture file');
 });
+
+test(
+  'a legacy drive-relative backup folder requires a settings correction before writing',
+  { skip: process.platform !== 'win32' },
+  (t) => {
+    const f = fixture(t);
+    const folder = join(f.folder, 'legacy-backups');
+    f.store.update((state) => {
+      state.settings.backupFolder = folder.slice(2);
+    });
+    assert.throws(() => f.service.backup(), /Choose a fully qualified backup folder/);
+    assert.equal(existsSync(folder), false);
+  },
+);
 test('saved drafts survive restart, callers cannot mutate stored state, and backup is readable', async (t) => {
   const f = fixture(t);
   f.service.edit('demo-a', 'listing-1', 1);

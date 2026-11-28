@@ -2,7 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { instanceResponds, parseRuntimeRecord, runLauncher } from '../../src/desktop/launcher.js';
+import {
+  instanceResponds,
+  parseRuntimeRecord,
+  runLauncher,
+  waitForDashboard,
+} from '../../src/desktop/launcher.js';
+import { spawnSync } from 'node:child_process';
+import { acquireWorkspaceOwnership } from '../../src/server/runtime.js';
+import { WorkspaceInUseError } from '../../src/server/workspace-in-use.js';
 import { liveDashboardPort } from '../../src/shared/dashboard-port.js';
 import { storageFixture } from '../support/server-fixture.js';
 
@@ -20,6 +28,60 @@ test('the dashboard port override accepts only a port number', () => {
   assert.equal(liveDashboardPort('51932'), 51932);
   for (const value of ['', '0', '-1', '65536', '123.5', '127.0.0.1:51932', 'https://example.com'])
     assert.throws(() => liveDashboardPort(value), /must be a port number/);
+});
+
+test('a slow Windows credential read can still open the dashboard after 20 seconds', async (t) => {
+  const fixture = storageFixture(t);
+  writeFileSync(join(fixture.directory, 'live.runtime.json'), JSON.stringify(record));
+  let reads = 0;
+  t.mock.method(Date, 'now', () => (reads++ === 0 ? 0 : 72_000));
+  t.mock.method(globalThis, 'fetch', async () => Response.json(record));
+  assert.ok(
+    await waitForDashboard(
+      fixture.directory,
+      { pid: record.pid, exitCode: null, signalCode: null },
+      true,
+    ),
+  );
+});
+
+test('a second Start waits for the original workspace owner while Upgrade requires its own child', async (t) => {
+  const fixture = storageFixture(t);
+  const owner = await acquireWorkspaceOwnership(fixture.directory, 'live');
+  t.after(() => owner.release());
+  const second = spawnSync(process.execPath, ['dist/src/server/main.js'], {
+    env: { ...process.env, STOCKBRIDGE_DATA_DIR: fixture.directory },
+    encoding: 'utf8',
+    timeout: 15_000,
+    windowsHide: true,
+  });
+  assert.equal(second.status, WorkspaceInUseError.exitCode, second.stderr);
+  writeFileSync(join(fixture.directory, 'live.runtime.json'), JSON.stringify(record));
+  const times: number[] = [];
+  t.mock.method(Date, 'now', () => times.shift() ?? 95_000);
+  t.mock.method(globalThis, 'fetch', async () => Response.json(record));
+  const child = { pid: record.pid + 1, exitCode: second.status, signalCode: null };
+  times.push(0, 72_000);
+  assert.equal(await waitForDashboard(fixture.directory, child, false), true);
+  times.push(0, 72_000);
+  assert.equal(await waitForDashboard(fixture.directory, child, true), false);
+  times.push(0, 72_000);
+  assert.equal(await waitForDashboard(fixture.directory, { ...child, exitCode: 1 }, false), false);
+});
+
+test('an incomplete shortcut selection cannot open a different workspace', (t) => {
+  const fixture = storageFixture(t);
+  const result = spawnSync(
+    process.execPath,
+    ['scripts/windows-launcher.mjs', 'start', '--no-browser', '--workspace', 'file:///C:/example'],
+    {
+      env: { ...process.env, STOCKBRIDGE_DATA_DIR: fixture.directory },
+      windowsHide: true,
+      encoding: 'utf8',
+    },
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Invalid launcher arguments/);
 });
 
 test('status does not declare shutdown complete while its runtime record still exists', async (t) => {

@@ -1041,6 +1041,50 @@ test('editing a saved ledger restores dismissed searches and accepts a keyboard 
   ]);
 });
 
+test('editing billing setup preserves a changed tracking date until the seller chooses to discard it', async (t) => {
+  const inventory = initialState('demo', 'unused');
+  const dirty: boolean[] = [];
+  let discard = false;
+  t.mock.method(window, 'confirm', () => discard);
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    if (url.endsWith('/workspace')) return response({ rule, report: null });
+    if (url.endsWith('/coverage')) return response({ from: null, current: false });
+    if (url.endsWith('/pending')) return response({ trackingStarted: false, listings: [] });
+    if (url.endsWith('/ledgers'))
+      return response({ ledgers: [{ externalId: rule.ledgerId, name: rule.ledgerName }] });
+    throw new Error('Unexpected route');
+  });
+  render(
+    <BillingScreen
+      companyId={inventory.companies[0].id}
+      accountId={inventory.accounts[0].id}
+      inventory={inventory}
+      onConnect={() => {}}
+      onAccountChange={() => {}}
+      onSaveMapping={async () => assert.fail()}
+      onUnsavedChange={(value) => {
+        dirty.push(value);
+      }}
+    />,
+  );
+  fireEvent.click(await screen.findByRole('button', { name: 'Set billing start date' }));
+  const date = screen.getByLabelText<HTMLInputElement>('Match orders from (India)');
+  fireEvent.change(date, { target: { value: date.max } });
+  assert.equal(dirty.at(-1), true);
+  fireEvent.click(screen.getByRole('button', { name: 'Change setup' }));
+  assert.equal(date.isConnected, true);
+  assert.equal(date.value, date.max);
+  discard = true;
+  fireEvent.click(screen.getByRole('button', { name: 'Change setup' }));
+  await screen.findByRole('combobox', { name: 'Sales bill ledger' });
+  assert.equal(date.isConnected, false);
+  assert.equal(dirty.at(-1), false);
+  fireEvent.change(screen.getByLabelText(/Where do you enter/), { target: { value: 'number' } });
+  assert.equal(dirty.at(-1), true);
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  assert.equal(dirty.at(-1), false);
+});
+
 test('an empty ledger list can be reloaded and a sole ledger still requires selection', async (t) => {
   const ledgers: { externalId: string; name: string }[] = [];
   t.mock.method(globalThis, 'fetch', async () => response({ ledgers }));
@@ -1121,12 +1165,23 @@ test('saving a billing-only date immediately checks all fulfilment types without
       case '/api/billing/workspace':
         return response({ rule, report: null });
       case '/api/billing/coverage':
-        return response({ from: null, current: false, checkedThrough: null });
+        return response({
+          setupVersion: 'reviewed',
+          from: null,
+          current: false,
+          checkedThrough: null,
+        });
       case '/api/billing/pending':
         return response({ trackingStarted: false, listings: [] });
       case '/api/billing/tracking/start':
-        assert.deepEqual(body, { ...scope, fromDate: '2026-11-25' });
-        return response({ billingFrom: from, from: null, current: false, checkedThrough: null });
+        assert.deepEqual(body, { ...scope, fromDate: '2026-11-25', setupVersion: 'reviewed' });
+        return response({
+          setupVersion: 'saved',
+          billingFrom: from,
+          from: null,
+          current: false,
+          checkedThrough: null,
+        });
       case '/api/billing/preview':
         previewReads++;
         return response({ error: 'Recent seller-fulfilled preview unavailable.' }, 503);
@@ -1310,10 +1365,16 @@ test('company stock tracking starts only after the seller confirms the chosen In
       case '/api/billing/workspace':
         return response({ rule, report: null });
       case '/api/billing/coverage':
-        return response({ from: null, current: false, checkedThrough: null });
+        return response({
+          setupVersion: 'reviewed',
+          from: null,
+          current: false,
+          checkedThrough: null,
+        });
       case '/api/billing/coverage/start':
         saved.push(JSON.parse(String(init?.body)));
         return response({
+          setupVersion: 'saved',
           from: new Date(today + 'T00:00:00+05:30').toISOString(),
           current: true,
           checkedThrough: null,
@@ -1355,7 +1416,9 @@ test('company stock tracking starts only after the seller confirms the chosen In
   fireEvent.click(confirmation);
   fireEvent.click(button);
   await screen.findByRole('button', { name: 'Review starting stock' });
-  assert.deepEqual(saved, [{ ...scope, fromDate: today, confirmed: true }]);
+  assert.deepEqual(saved, [
+    { ...scope, fromDate: today, confirmed: true, setupVersion: 'reviewed' },
+  ]);
 });
 
 test('review displays an older saved Indian day and cancel restores it without saving', async (t) => {
@@ -1473,13 +1536,23 @@ test('changing the company date refreshes tracked orders; the short preview runs
       case '/api/billing/workspace':
         return response({ rule, trackingFrom, report });
       case '/api/billing/coverage':
-        return response({ from: trackingFrom, current: true, checkedThrough: null });
+        return response({
+          setupVersion: 'reviewed',
+          from: trackingFrom,
+          current: true,
+          checkedThrough: null,
+        });
       case '/api/billing/coverage/start':
         saves.push(body);
         if (saves.length === 1) return response({ error: 'Reconcile earlier sales first.' }, 409);
         trackingFrom = changedFrom;
         failNextHistory = true;
-        return response({ from: changedFrom, current: true, checkedThrough: null });
+        return response({
+          setupVersion: 'saved',
+          from: changedFrom,
+          current: true,
+          checkedThrough: null,
+        });
       case '/api/billing/tracked-bills':
         if (failNextHistory) {
           failNextHistory = false;
@@ -1548,7 +1621,10 @@ test('changing the company date refreshes tracked orders; the short preview runs
   await screen.findByText('CURRENT-ORDER');
   assert.equal(screen.queryByText('PREVIEW-ORDER'), null);
   assert.deepEqual(periods, [7]);
-  assert.deepEqual(saves, Array(2).fill({ ...scope, fromDate: '2026-11-26', confirmed: true }));
+  assert.deepEqual(
+    saves,
+    Array(2).fill({ ...scope, fromDate: '2026-11-26', confirmed: true, setupVersion: 'reviewed' }),
+  );
 });
 
 test('maps a listing once and checks tracked orders outside the current billing preview', async (t) => {

@@ -1,3 +1,4 @@
+import { marketplaceEditLimits } from '../shared/marketplace-contracts.js';
 import type { Listing, Proposal, Snapshot } from '../shared/contracts.js';
 import type { MarketplaceApplyInput, MarketplaceListing } from '../shared/marketplace-contracts.js';
 import { desiredStock, isStaleProposal, requireStockSource } from './proposals.js';
@@ -140,8 +141,11 @@ export function inventoryTarget(
         409,
       );
   }
-  if (!Number.isSafeInteger(quantity) || quantity < 0 || quantity > 5000)
-    throw new InputError('Calculated stock must be a whole number between 0 and 5000.', 409);
+  if (!Number.isSafeInteger(quantity) || quantity < 0 || quantity > marketplaceEditLimits.stock.max)
+    throw new InputError(
+      `Calculated stock must be a whole number between 0 and ${marketplaceEditLimits.stock.max}.`,
+      409,
+    );
   if (draft?.edited && quantity > desiredStock(state, listing, 'manual-ceiling'))
     throw new InputError('The edited quantity exceeds the current calculated stock.', 409);
   const updateOnce = draft?.edited && quantity > 0 && intent.positiveEdits === 'once';

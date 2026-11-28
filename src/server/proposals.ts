@@ -1,12 +1,14 @@
 import { availableForMarketplaces, calculateStock } from '../domain/stock-policy.js';
+import { draftStockLimitIssue } from '../shared/marketplace-contracts.js';
 import {
   billingOnlyMapping,
+  keepBackUnitIssue,
   type Listing,
   type Proposal,
   type Snapshot,
   type StockItem,
 } from '../shared/contracts.js';
-import { InputError, isRecentObservation } from './validation.js';
+import { hasCurrentTallyObservation, InputError } from './validation.js';
 
 function ruleVersion(state: Snapshot, listing: Listing): string {
   const useTyreFloor = listing.tyreFloor ?? state.mode === 'demo';
@@ -24,6 +26,7 @@ export function requireStockSource(
     );
   if (!item || item.id !== listing.itemId || item.physical === null || !item.observedAt)
     throw new InputError('Refresh valid source stock before calculating.');
+  if (item.keepBackPreviousUnit !== undefined) throw new InputError(keepBackUnitIssue, 409);
   if (!listing.verified || !listing.packSize)
     throw new InputError('Verify the mapping and pack size first.');
   if (
@@ -33,13 +36,8 @@ export function requireStockSource(
     throw new InputError(
       'Refresh the reported package count and review Set of before calculating.',
     );
-  const maximumAge = Math.max(120_000, state.settings.tallySeconds * 3000);
-  const stale = !isRecentObservation(item.observedAt, maximumAge);
   const company = state.companies.find((row) => row.id === item.companyId);
-  if (
-    state.mode === 'live' &&
-    (state.connection.tally !== 'online' || stale || !company?.lastSuccess || company.stockIssue)
-  ) {
+  if (!hasCurrentTallyObservation(state, company, item.observedAt)) {
     throw new InputError('Tally stock is stale. Refresh before reviewing changes.');
   }
   return { item, physical: item.physical, packSize: listing.packSize };
@@ -77,9 +75,12 @@ export function prepareProposal(
 ): Proposal {
   const { item } = requireStockSource(state, listing);
   const calculated = desiredStock(state, listing, 'current', availableUnits);
+  const quantity = editedQuantity ?? calculated;
+  const issue = draftStockLimitIssue(quantity);
+  if (issue) throw new InputError(issue);
   return {
     listingId: listing.id,
-    quantity: editedQuantity ?? calculated,
+    quantity,
     calculated,
     edited: editedQuantity !== undefined,
     itemVersion: item.version,
@@ -95,6 +96,7 @@ export function isStaleProposal(state: Snapshot, draft: Proposal): boolean {
   const item = state.items.find((row) => row.id === listing?.itemId);
   return (
     draft.stale ||
+    draftStockLimitIssue(draft.quantity) !== null ||
     !listing ||
     !item ||
     draft.itemVersion !== item.version ||

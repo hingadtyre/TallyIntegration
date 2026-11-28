@@ -1,4 +1,5 @@
 import { startRuntime } from './runtime.js';
+import { WorkspaceInUseError } from './workspace-in-use.js';
 
 const mode = process.argv.includes('--demo') ? 'demo' : 'live';
 try {
@@ -25,5 +26,5 @@ try {
     'Stockbridge could not start:',
     error instanceof Error ? error.message : 'Unknown error',
   );
-  process.exitCode = 1;
+  process.exitCode = error instanceof WorkspaceInUseError ? WorkspaceInUseError.exitCode : 1;
 }

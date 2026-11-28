@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { TallyClient } from '../adapters/tally.js';
 import { availableForMarketplaces } from '../domain/stock-policy.js';
 import { billingOnlyMapping } from '../shared/contracts.js';
+import { draftStockLimitIssue } from '../shared/marketplace-contracts.js';
 import type {
   Activity,
   CalculationResult,
@@ -37,7 +38,13 @@ import { saveSettings } from './settings.js';
 import { StockRefresh, type TallyReaderFactory } from './stock-refresh.js';
 import { stockConfiguration } from './stock-configuration.js';
 import type { Store } from './store.js';
-import { InputError, requireCompany, requireListings, requireWholeNumber } from './validation.js';
+import {
+  hasCurrentTallyObservation,
+  InputError,
+  requireCompany,
+  requireListings,
+  requireWholeNumber,
+} from './validation.js';
 
 export { InputError } from './validation.js';
 
@@ -301,10 +308,31 @@ export class InventoryService {
     }
   }
 
-  edit(companyId: unknown, listingId: unknown, value: unknown): Snapshot {
+  edit(
+    companyId: unknown,
+    listingId: unknown,
+    value: unknown,
+    listingVersion?: unknown,
+    previousManualQuantity?: unknown,
+  ): Snapshot {
     this.store.update((state) => {
       const listing = requireListings(state, companyId, [listingId])[0];
+      if (listingVersion !== undefined && listing.version !== listingVersion)
+        throw new InputError(
+          'The listing changed. Review the current mapping and re-enter your draft.',
+          409,
+        );
       const quantity = requireWholeNumber(value, 'Proposed quantity');
+      if (previousManualQuantity !== undefined) {
+        const saved = state.proposals.find(
+          (proposal) => proposal.listingId === listing.id && proposal.edited,
+        );
+        if (previousManualQuantity !== (saved?.quantity ?? null))
+          throw new InputError(
+            'The saved draft changed. Check the latest draft before entering a quantity.',
+            409,
+          );
+      }
       if (quantity > desiredStock(state, listing, 'manual-ceiling')) {
         throw new InputError(
           'Proposed stock exceeds the normal calculation for the available complete packs.',
@@ -337,6 +365,19 @@ export class InventoryService {
     const item = state.items.find((row) => row.id === itemId && row.companyId === company.id);
     if (!item) throw new InputError('Select a stock item in this Tally company.');
     if (!this.marketplaces) throw new InputError('Order verification is unavailable.', 409);
+    if (item.keepBackPreviousUnit !== undefined) {
+      const reservations = (await this.inventoryReservations(company.id))[item.id];
+      if (!reservations || reservations.itemVersion !== item.version)
+        throw new InputError(
+          'Refresh this stock item and check its order reservations again.',
+          409,
+        );
+      return {
+        physical: reservations.physical,
+        reservedUnits: reservations.units,
+        itemVersion: item.version,
+      };
+    }
     const evidence = await this.marketplaces.availableStock(company.id, item.id, undefined, true);
     evidence.verify();
     return {
@@ -362,7 +403,18 @@ export class InventoryService {
       const company = requireCompany(state, companyId);
       const item = state.items.find((row) => row.id === itemId && row.companyId === company.id);
       if (!item) throw new InputError('Select a stock item in this Tally company.');
-      if (item.keepBackUnits === units) return;
+      if (item.keepBackUnits === units && item.keepBackPreviousUnit === undefined) return;
+      if (
+        item.keepBackPreviousUnit !== undefined &&
+        (!item.observedAt ||
+          !item.unit ||
+          company.stockIssue ||
+          !hasCurrentTallyObservation(state, company, item.observedAt))
+      )
+        throw new InputError(
+          'Refresh the Tally item and its current unit before confirming the quantity to keep back.',
+          409,
+        );
       if (item.version !== itemVersion) {
         throw new InputError(
           'The stock item changed. Refresh it before saving the keep-back quantity.',
@@ -370,6 +422,7 @@ export class InventoryService {
         );
       }
       item.keepBackUnits = units;
+      delete item.keepBackPreviousUnit;
       item.version++;
       for (const row of state.listings)
         if (row.itemId === item.id) this.marketplaces?.supersedeInventoryReview(row.id);
@@ -485,7 +538,9 @@ export class InventoryService {
         if (!(error instanceof InputError)) throw error;
         problem = error.message;
       }
+      const limitIssue = draft && draftStockLimitIssue(draft.quantity);
       if (!draft) problem = 'Calculate or save a proposal first.';
+      else if (limitIssue) problem = limitIssue;
       else if (draft.stale) problem = 'Source, mapping or policy changed. Review a fresh proposal.';
       else if (market && !problem) {
         const destination = market.listings.find(
@@ -882,13 +937,23 @@ export class InventoryService {
     return this.snapshot();
   }
 
-  remove(companyId: unknown, listingId: unknown, leaveRemoteStock: unknown): Snapshot {
+  remove(
+    companyId: unknown,
+    listingId: unknown,
+    leaveRemoteStock: unknown,
+    listingVersion?: unknown,
+  ): Snapshot {
     if (leaveRemoteStock !== true)
       throw new InputError(
         'Zero-and-verify removal needs a connected publishing integration. Choose explicitly to leave remote stock unchanged.',
       );
     this.store.update((state) => {
       const listing = requireListings(state, companyId, [listingId])[0];
+      if (listingVersion !== undefined && listing.version !== listingVersion)
+        throw new InputError(
+          'The listing changed. Reopen the current mapping before removing it.',
+          409,
+        );
       listing.itemId = null;
       delete listing.proposalIssue;
       delete listing.orderProposalPending;

@@ -79,7 +79,7 @@ The seller's confirmation that an individual returned package has arrived and ha
 _Avoid_: Delivered when only a tracking status is known
 
 **Keep back from marketplaces**:
-A standing quantity of a Tally stock item that its seller sets aside for other uses. The seller enters it in the item's Tally unit. Stockbridge deducts it once from the shared balance used by all marketplace listings mapped to that item in that Tally company.
+A standing quantity of a Tally stock item that its seller sets aside for other uses. It belongs to the Tally unit in which the seller confirmed it. When the base unit changes or the original unit of a positive amount is unknown, the seller confirms how much to keep in the current unit. Stockbridge deducts the confirmed amount once from the balance shared by the item's marketplace listings in that company.
 
 **Fulfillable pack quantity**:
 The number of complete packs that can be supplied from the available Tally units before applying a marketplace advertising policy. Available units are the verified Tally balance less the quantity kept back and covered Flipkart sales awaiting a matching Tally deduction, with a lower bound of zero.

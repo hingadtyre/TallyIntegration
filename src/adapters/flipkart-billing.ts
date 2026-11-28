@@ -315,7 +315,13 @@ function collectShipment(
       continue;
     }
     const preDispatchWithoutCourierReturn = allowsMissingCourierReturn(shipment, item, filter);
+    const knownScope =
+      typeof item.serviceProfile === 'string' &&
+      !!item.serviceProfile &&
+      typeof shipment.shipmentType === 'string' &&
+      !!shipment.shipmentType;
     let eligibilityUnverified =
+      !knownScope ||
       !locationId ||
       shipment.hold !== false ||
       replacement !== false ||
@@ -334,11 +340,6 @@ function collectShipment(
       incomplete();
     let disposition: FlipkartBillingOrder['stockDisposition'];
     if (includeExceptions) {
-      const knownScope =
-        typeof item.serviceProfile === 'string' &&
-        !!item.serviceProfile &&
-        typeof shipment.shipmentType === 'string' &&
-        !!shipment.shipmentType;
       // Cancellation in the forward fulfilment flow precedes shipping. In-transit
       // cancellations use the returns flow. Seller cancellations can indicate a shortage.
       if (
@@ -358,7 +359,7 @@ function collectShipment(
         !returnEvidence
       )
         disposition = 'cancelled';
-      else if (exceptional || eligibilityUnverified || !knownScope) disposition = 'uncertain';
+      else if (exceptional || eligibilityUnverified) disposition = 'uncertain';
       eligibilityUnverified = disposition === 'uncertain';
     }
     const dispatchObserved = Boolean(postDispatch.includes(status) || returnEvidence);

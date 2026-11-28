@@ -474,6 +474,10 @@ function MarketplaceListings({
   const loading = !data && !readError;
   const refreshing = catalogueImport?.pending || (loadedRevision !== importRevision && !readError);
   const firstImport = refreshing && !data?.total && !data?.lastRefreshedAt;
+  const verifyBeforeEditing =
+    !demo &&
+    (Boolean(refreshError) ||
+      (data?.catalogOwnershipVerified ?? account.catalogOwnershipVerified) === false);
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   return (
     <>
@@ -516,6 +520,12 @@ function MarketplaceListings({
         </span>
         <span>Last successful refresh: {time(lastSuccess)}</span>
       </div>
+      {verifyBeforeEditing && !!data?.listings.length && (
+        <p className="marketplace-help">
+          Showing saved listings. Refresh this seller’s listings to verify access before editing or
+          checking an update.
+        </p>
+      )}
       {refreshError && (
         <div className="message error" role="alert">
           <span>{refreshError}</span>
@@ -613,6 +623,7 @@ function MarketplaceListings({
                 {data.listings.map((listing) => (
                   <MarketplaceListingRow
                     marketplace={account.marketplace}
+                    verifyBeforeEditing={verifyBeforeEditing}
                     key={listing.id}
                     listing={listing}
                     changes={data.changes.filter((change) => change.listingId === listing.id)}
@@ -676,7 +687,6 @@ function MarketplaceListings({
           onClose={() => setEditor(null)}
           onOpenInventory={onOpenInventory}
           onPolicyUpdated={updateListing}
-          knownChangeIds={data?.changes.map((change) => change.id) ?? []}
           onFailure={(message, uncertain) => {
             if (alive.current)
               setRowErrors((current) => ({
@@ -706,6 +716,7 @@ function MarketplaceListings({
 
 function MarketplaceListingRow({
   marketplace,
+  verifyBeforeEditing,
   listing,
   changes,
   pending,
@@ -718,6 +729,7 @@ function MarketplaceListingRow({
   onReviewRecovery,
 }: {
   marketplace: MarketplaceAccount['marketplace'];
+  verifyBeforeEditing: boolean;
   listing: MarketplaceListingView;
   changes: MarketplaceChange[];
   pending: boolean;
@@ -812,7 +824,7 @@ function MarketplaceListingRow({
               <>
                 <button
                   className="text-button"
-                  disabled={checking}
+                  disabled={checking || verifyBeforeEditing}
                   onClick={() => void reconcile()}
                 >
                   {checking ? 'Checking result…' : 'Check result'}
@@ -820,7 +832,7 @@ function MarketplaceListingRow({
                 <StockRecoveryAction
                   provider={provider}
                   change={unresolved}
-                  disabled={checking}
+                  disabled={checking || verifyBeforeEditing}
                   onReview={onReviewRecovery}
                 />
               </>
@@ -862,7 +874,12 @@ function MarketplaceListingRow({
           <button
             className="marketplace-value"
             disabled={
-              !!unresolved || pending || resuming || !!failure?.uncertain || !listing.observedAt
+              verifyBeforeEditing ||
+              !!unresolved ||
+              pending ||
+              resuming ||
+              !!failure?.uncertain ||
+              !listing.observedAt
             }
             aria-label={`Edit ${field === 'mrp' ? 'MRP' : 'selling price'} for ${listing.sku}`}
             onClick={() => onEdit({ listing, kind: 'price', field })}
@@ -894,6 +911,7 @@ function MarketplaceListingRow({
                 <button
                   className="marketplace-value"
                   disabled={
+                    verifyBeforeEditing ||
                     !!unresolved ||
                     pending ||
                     resuming ||

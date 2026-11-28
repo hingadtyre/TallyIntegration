@@ -148,10 +148,12 @@ function setup(t: TestContext, sellerPacks = [1], flipkart?: FlipkartBillingClie
     );
   let service = makeService();
   const lookup = new BillLookupService(f.store, service, new BillingService(f.store));
-  const confirm = (date = yesterday) =>
+  const scope = { companyId, accountId: 'seller-0' };
+  const coverage = () => service.coverageCommand('/api/billing/coverage', scope);
+  const confirm = (date = yesterday, setupVersion = coverage().setupVersion) =>
     service.coverageCommand('/api/billing/coverage/start', {
-      companyId,
-      accountId: 'seller-0',
+      ...scope,
+      setupVersion,
       fromDate: date,
       confirmed: true,
     });
@@ -164,6 +166,7 @@ function setup(t: TestContext, sellerPacks = [1], flipkart?: FlipkartBillingClie
     companyId,
     itemId,
     confirm,
+    coverage,
     billCommand: (action: string, input: Record<string, unknown> = {}, seller = 'seller-0') =>
       lookup.command('/api/billing/' + action, { companyId, ...input }, seller),
     available: (batch?: object, target = itemId) => service.forItem(companyId, target, batch),
@@ -210,6 +213,26 @@ function setup(t: TestContext, sellerPacks = [1], flipkart?: FlipkartBillingClie
     },
   };
 }
+
+test('a forward starting date cannot discard a newly observed sale using an old review', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-01T08:00:00Z') });
+  const s = setup(t);
+  s.confirm();
+  const before = s.coverage();
+  const order = s.orders.get('seller-0')![0];
+  order.orderDate = '2026-07-31T12:00:00Z';
+  await s.scan();
+  const updated = s.coverage();
+  assert.notEqual(updated.setupVersion, before.setupVersion);
+  assert.throws(() => s.confirm('2026-08-01', before.setupVersion), /recorded orders/);
+  assert.equal(s.f.store.readStockCoverage(s.companyId)?.orders.length, 1);
+
+  t.mock.timers.tick(60_000);
+  await s.scan();
+  assert.equal(s.coverage().setupVersion, updated.setupVersion);
+  s.confirm('2026-08-01', updated.setupVersion);
+  assert.equal(s.f.store.readStockCoverage(s.companyId)?.orders.length, 0);
+});
 
 test('an older mapped sale can be looked up, linked across previews, revalidated and released', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-01T08:00:00Z') });

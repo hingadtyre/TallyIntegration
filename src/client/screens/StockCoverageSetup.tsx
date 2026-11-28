@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { StockCoverageStatus } from '../../shared/stock-coverage.js';
-import { errorMessage, requestJson } from '../api.js';
+import { errorMessage, RequestError, requestJson } from '../api.js';
 import { formatIndiaDay } from '../format.js';
 
 const indiaDay = new Intl.DateTimeFormat('en-CA', {
@@ -16,12 +16,14 @@ export function StockCoverageSetup({
   disabled = false,
   onStart,
   onSavingChange,
+  onDirtyChange,
 }: {
   companyId: string;
   accountId: string;
   disabled?: boolean;
   onStart: (from: string) => void;
   onSavingChange?: (saving: boolean) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [status, setStatus] = useState<StockCoverageStatus | null>(null);
   const [editing, setEditing] = useState<'billing' | 'stock' | null>(null);
@@ -51,6 +53,11 @@ export function StockCoverageSetup({
   const earliest = indiaDay.format(new Date(today.getTime() - 29 * 86_400_000));
   const savedFrom = status?.from ?? status?.billingFrom;
   const savedDate = savedFrom ? indiaDay.format(new Date(savedFrom)) : '';
+  const dirty = !!editing && (fromDate !== savedDate || confirmed);
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+  }, [dirty, onDirtyChange]);
   const validDate = fromDate >= earliest && fromDate <= latest;
   function edit(mode: 'billing' | 'stock') {
     setFromDate(savedDate);
@@ -59,14 +66,28 @@ export function StockCoverageSetup({
     setEditing(mode);
   }
   async function save() {
-    if (!editing || (editing === 'stock' && !confirmed) || saving || disabled || !validDate) return;
+    if (
+      !status ||
+      !editing ||
+      (editing === 'stock' && !confirmed) ||
+      saving ||
+      disabled ||
+      !validDate
+    )
+      return;
     setSaving(true);
     onSavingChange?.(true);
     setError('');
     try {
       const result = await requestJson<StockCoverageStatus>(
         editing === 'stock' ? '/billing/coverage/start' : '/billing/tracking/start',
-        { companyId, accountId, fromDate, ...(editing === 'stock' && { confirmed: true }) },
+        {
+          companyId,
+          accountId,
+          fromDate,
+          setupVersion: status.setupVersion,
+          ...(editing === 'stock' && { confirmed: true }),
+        },
       );
       const from = result.billingFrom ?? result.from;
       if (!from) throw new Error('The server did not return the saved tracking date.');
@@ -75,6 +96,22 @@ export function StockCoverageSetup({
       onStart(from);
     } catch (cause) {
       setError(errorMessage(cause));
+      if (cause instanceof RequestError && cause.status === 412) {
+        setEditing(null);
+        setConfirmed(false);
+        try {
+          const latestSetup = await requestJson<StockCoverageStatus>('/billing/coverage', {
+            companyId,
+            accountId,
+          });
+          setStatus(latestSetup);
+          const latestFrom = latestSetup.from ?? latestSetup.billingFrom;
+          if (latestFrom && latestFrom !== savedFrom) onStart(latestFrom);
+        } catch (failure) {
+          setStatus(null);
+          setError(errorMessage(failure));
+        }
+      }
     } finally {
       setSaving(false);
       onSavingChange?.(false);

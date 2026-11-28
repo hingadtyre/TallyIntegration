@@ -16,6 +16,7 @@ import { initialState } from '../../src/server/seed.js';
 import { InventoryService } from '../../src/server/service.js';
 import { Store } from '../../src/server/store.js';
 import { readSnapshot } from '../../src/server/storage/records.js';
+import { backupDigest } from '../../src/server/storage/backup.js';
 import { CURRENT_SCHEMA_VERSION } from '../../src/server/storage/schema.js';
 import { readStockCoverage, writeStockCoverage } from '../../src/server/storage/stock-coverage.js';
 import {
@@ -96,6 +97,13 @@ function restoreOptions(f: ReturnType<typeof fixture>) {
   };
 }
 
+// Prepare a matching database and manifest when a scenario needs custom backup records.
+function customizeBackup(file: string, edit: (database: DatabaseSync) => void) {
+  queryFile(file, edit);
+  const manifest = JSON.parse(readFileSync(file + '.json', 'utf8'));
+  writeFileSync(file + '.json', JSON.stringify({ ...manifest, sha256: backupDigest(file) }));
+}
+
 test('restore keeps current matching decisions in configured scopes and restores the other billing rules and links', async (t) => {
   const f = fixture(t);
   const [first, second] = f.saved.companies;
@@ -127,7 +135,7 @@ test('restore keeps current matching decisions in configured scopes and restores
     checkedThrough: null,
     orders: [],
   };
-  queryFile(f.backupFile, (db) => {
+  customizeBackup(f.backupFile, (db) => {
     writeBilling(db, saved);
     writeStockCoverage(db, coverage);
   });
@@ -159,7 +167,7 @@ test('restore keeps current matching decisions in configured scopes and restores
 
 test('schema-four pilot backups restore their mappings with no billing setup', async (t) => {
   const f = fixture(t);
-  queryFile(f.backupFile, (db) =>
+  customizeBackup(f.backupFile, (db) =>
     db.exec(
       'DROP TABLE stock_coverage_orders; DROP TABLE stock_coverage; DROP TABLE billing_links; DROP TABLE billing_rules; PRAGMA user_version = 4;',
     ),
@@ -256,7 +264,8 @@ test('confirmation and the inspected digest are required before any replacement'
     /differs from the inspected preview/,
   );
   queryFile(f.backupFile, (database) => database.exec('UPDATE stock_items SET physical = 99;'));
-  await assert.rejects(restorePilotBackup(options), /differs from the inspected preview/);
+  assert.throws(() => inspectPilotBackup(f.backupFile, f.mode), /SHA-256 in its manifest/);
+  await assert.rejects(restorePilotBackup(options), /SHA-256 in its manifest/);
   assert.deepEqual(readFileSync(f.destination), original);
 });
 
@@ -329,7 +338,7 @@ test('another SQLite reader prevents replacement without losing the current work
 
 test('a staging failure retains the original database and its verified safety copy', async (t) => {
   const f = fixture(t);
-  queryFile(f.backupFile, (database) =>
+  customizeBackup(f.backupFile, (database) =>
     database.prepare('UPDATE stock_items SET version = ?').run(Number.MAX_SAFE_INTEGER),
   );
   await assert.rejects(
@@ -356,6 +365,7 @@ test('older schema-two backup manifests remain eligible and restore into the cur
   );
   const manifest = JSON.parse(readFileSync(`${f.backupFile}.json`, 'utf8'));
   manifest.schemaVersion = 2;
+  delete manifest.sha256;
   delete manifest.restoreScope;
   manifest.restoreSupported = false;
   writeFileSync(`${f.backupFile}.json`, JSON.stringify(manifest));
@@ -380,7 +390,7 @@ test('restoring marketplace data retains seller binding, invalidates observation
       state: state as (typeof saved.changes)[number]['state'],
     }),
   );
-  queryFile(f.backupFile, (database) => {
+  customizeBackup(f.backupFile, (database) => {
     database.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE');
     writeMarketplace(database, saved);
     database.exec('COMMIT');
@@ -412,7 +422,7 @@ test('an older backup cannot erase newer seller binding or unfinished update bar
     }),
   );
   queryFile(f.destination, (database) => writeMarketplace(database, current));
-  queryFile(f.backupFile, (database) =>
+  customizeBackup(f.backupFile, (database) =>
     writeMarketplace(database, {
       accounts: [{ ...current.accounts[0], sellerId: null, lastRefreshedAt: null }],
       listings: [],
@@ -477,7 +487,7 @@ test('restore keeps a later recovery and never promotes a backup-only prepared r
     { ...prepared, id: 'later-recovered' },
     { ...prepared, id: 'only-in-backup' },
   ];
-  queryFile(f.backupFile, (db) => writeMarketplace(db, saved));
+  customizeBackup(f.backupFile, (db) => writeMarketplace(db, saved));
   const current = {
     ...saved,
     changes: [
@@ -500,7 +510,7 @@ test('restore keeps a later recovery and never promotes a backup-only prepared r
 
 test('schema-two restore keeps later account identities needed for unfinished updates', async (t) => {
   const f = fixture(t);
-  queryFile(f.backupFile, (database) =>
+  customizeBackup(f.backupFile, (database) =>
     database.exec(
       'DROP TABLE stock_coverage_orders; DROP TABLE stock_coverage; DROP TABLE billing_links; DROP TABLE billing_rules; DROP TABLE listing_pack_settings; DROP TABLE marketplace_changes; DROP TABLE marketplace_listings; DROP TABLE marketplace_accounts; PRAGMA user_version = 2;',
     ),
@@ -548,7 +558,7 @@ test('old editors remain stale after restore and fresh import for existing and n
         const backup = structuredClone(current);
         backup.listings[0].version = 1;
         if (!includedInBackup) backup.listings = [];
-        queryFile(f.backupFile, (database) => writeMarketplace(database, backup));
+        customizeBackup(f.backupFile, (database) => writeMarketplace(database, backup));
         await restorePilotBackup(restoreOptions(f));
         const recovered = queryFile(f.destination, readMarketplace).listings[0];
         assert.equal(recovered.version, 4);
@@ -621,7 +631,7 @@ test('conflicting seller bindings refuse restore and retain the current marketpl
   const f = fixture(t);
   const current = marketplaceData(f.local.accounts[0].id, 'current-seller');
   queryFile(f.destination, (database) => writeMarketplace(database, current));
-  queryFile(f.backupFile, (database) =>
+  customizeBackup(f.backupFile, (database) =>
     writeMarketplace(database, marketplaceData(f.saved.accounts[0].id, 'backup-seller')),
   );
   await assert.rejects(
@@ -641,7 +651,7 @@ test('a backup with disjoint catalogue ownership cannot attach its listings to a
   const other = structuredClone(current);
   other.listings[0].id = 'a-different-authenticated-listing';
   queryFile(f.destination, (database) => writeMarketplace(database, current));
-  queryFile(f.backupFile, (database) => writeMarketplace(database, other));
+  customizeBackup(f.backupFile, (database) => writeMarketplace(database, other));
   await assert.rejects(
     restorePilotBackup(restoreOptions(f)),
     /conflicts with the current authenticated listing identities/,
@@ -680,7 +690,7 @@ test('restore refuses to remove a destination allowance or reopen a consumed sal
 
 test('restoring an older backup converts a hold to a pause without changing its last observed quantity', async (t) => {
   const f = fixture(t, 'demo');
-  queryFile(f.backupFile, (db) => {
+  customizeBackup(f.backupFile, (db) => {
     db.exec('PRAGMA user_version = 8');
     db.prepare(
       "UPDATE listings SET policy = 'hold', remaining = 0, observed = 3, paused = 0 WHERE id = ?",
@@ -747,7 +757,7 @@ test('a backup manifest must match its database schema and marketplace payloads 
   writeFileSync(`${f.backupFile}.json`, JSON.stringify({ ...manifest, schemaVersion: 2 }));
   assert.throws(() => inspectPilotBackup(f.backupFile, 'live'), /does not match its manifest/);
   writeFileSync(`${f.backupFile}.json`, JSON.stringify(manifest));
-  queryFile(f.backupFile, (database) => {
+  customizeBackup(f.backupFile, (database) => {
     writeMarketplace(database, marketplaceData(f.saved.accounts[0].id));
     database
       .prepare('UPDATE marketplace_changes SET edit = ?')
@@ -761,12 +771,14 @@ test('restored sample data can be refreshed locally without changing quantities 
   const current = new Store(f.destination, 'demo');
   current.update((state) => {
     state.items[0].version = 12;
+    state.listings[0].version = 24;
     state.items[0].keepBackUnits = 4;
   });
   current.close();
   await restorePilotBackup(restoreOptions(f));
   const store = new Store(f.destination, 'demo');
   assert.equal(store.read().items[0].version, 13);
+  assert.equal(store.read().listings[0].version, 25);
   assert.equal(store.read().items[0].keepBackUnits, 0.5);
   const service = new InventoryService(store, {
     createTallyReader() {

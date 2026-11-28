@@ -24,6 +24,7 @@ export function BillingSetup({
   busy,
   onPreview,
   onCancel,
+  onDirtyChange,
 }: {
   companyId: string;
   accountId: string;
@@ -31,6 +32,7 @@ export function BillingSetup({
   busy: boolean;
   onPreview: (input: Pick<BillingRule, 'ledgerId' | 'field' | 'reference'>) => Promise<void>;
   onCancel?: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [ledgers, setLedgers] = useState<LedgerOption[] | null>(null);
   const [error, setError] = useState('');
@@ -38,6 +40,14 @@ export function BillingSetup({
   const [ledgerId, setLedgerId] = useState(initialRule?.ledgerId ?? '');
   const [field, setField] = useState<BillField | ''>(initialRule?.field ?? '');
   const [reference, setReference] = useState<OrderReference | ''>(initialRule?.reference ?? '');
+  const dirty =
+    ledgerId !== (initialRule?.ledgerId ?? '') ||
+    field !== (initialRule?.field ?? '') ||
+    (field !== 'manual' && reference !== (initialRule?.reference ?? ''));
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+  }, [dirty, onDirtyChange]);
   useEffect(() => {
     const controller = new AbortController();
     requestJson<{ ledgers: LedgerOption[] }>(

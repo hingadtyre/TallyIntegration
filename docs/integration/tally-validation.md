@@ -14,6 +14,8 @@ On 20 November 2026, discovery from a fresh live Windows workspace could not con
 
 On the customer installation, compare quantities with the same company and date in Tally and verify the effects of sales, purchases, receipt notes and stock adjustments. The current reader reports the whole company balance. Map it only to a Flipkart location supplied by that entire balance and confirm the Tally base unit when choosing Set of. Sellers who need an individual godown balance must wait for an explicitly scoped godown reader.
 
+A changed base unit invalidates the pack mappings. A positive quantity kept back also needs confirmation in the new unit. Each later Tally refresh retains the original amount and unit until the seller confirms the current-unit quantity in Inventory. An upgrade or restore also flags an older positive amount when the original unit was never recorded. Test an unchanged item with an older positive amount alongside an item with zero kept back. Only the positive amount requires confirmation. Save it in the current Tally unit and verify it survives restart.
+
 Blank, unsupported or mismatched units produce an unknown quantity (`null`), not zero. Missing or invalid envelopes reject the complete read so the application can preserve its last valid observation. Negative numeric stock is preserved as source data; the separate stock policy decides its advertised effect.
 
 ## Ledger and sales bill evidence

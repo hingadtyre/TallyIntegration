@@ -15,17 +15,17 @@ export function ActivityScreen({
   const [activityQuery, setActivityQuery] = useState('');
   const [activityLevel, setActivityLevel] = useState('');
   const [diagnostics, setDiagnostics] = useState(false);
-  const [logText, setLogText] = useState('');
+  const [logText, setLogText] = useState<string | null>(null);
   const [followLogs, setFollowLogs] = useState(true);
   const [logsError, setLogsError] = useState('');
   const logsRef = useRef<HTMLPreElement>(null);
+  const query = activityQuery.trim().toLocaleLowerCase();
+  const filtered = Boolean(query || activityLevel);
   const activeActivity = state.activity.filter(
     (event) =>
       (!event.companyId || event.companyId === companyId) &&
       (!activityLevel || event.level === activityLevel) &&
-      `${event.message} ${event.operation}`
-        .toLocaleLowerCase()
-        .includes(activityQuery.toLocaleLowerCase()),
+      `${event.message} ${event.operation}`.toLocaleLowerCase().includes(query),
   );
 
   useEffect(() => {
@@ -113,7 +113,11 @@ export function ActivityScreen({
             tabIndex={0}
             aria-label="Application diagnostic log"
           >
-            {logText || 'No diagnostic entries yet.'}
+            {logText === null
+              ? logsError
+                ? ''
+                : 'Loading diagnostics…'
+              : logText || 'No diagnostic entries yet.'}
           </pre>
         </section>
       ) : (
@@ -139,7 +143,22 @@ export function ActivityScreen({
               <option value="error">Errors</option>
             </select>
           </div>
-          <ActivityList events={activeActivity} />
+          {filtered && !activeActivity.length ? (
+            <div className="empty-state compact-empty">
+              <h3>No matching activity</h3>
+              <button
+                className="text-button"
+                onClick={() => {
+                  setActivityQuery('');
+                  setActivityLevel('');
+                }}
+              >
+                Clear filters
+              </button>
+            </div>
+          ) : (
+            <ActivityList events={activeActivity} />
+          )}
         </section>
       )}
     </>

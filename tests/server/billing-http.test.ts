@@ -42,11 +42,33 @@ test('a billing start date opens the full bill history independently of starting
     reference: 'orderId',
     days: 7,
   };
-  assert.equal((await post('tracking/start', { fromDate })).status, 409);
+  const setup = async () => (await (await post('coverage')).json()).setupVersion as string;
+  assert.equal(
+    (await post('tracking/start', { fromDate, setupVersion: await setup() })).status,
+    409,
+  );
   const before = (await (await post('preview', settings)).json()) as BillingReport;
   assert.equal((await post('confirm', { previewId: before.previewId })).status, 200);
-  assert.equal((await post('tracking/start', { fromDate: 'invalid' })).status, 400);
-  const status = await (await post('tracking/start', { fromDate })).json();
+  assert.equal(
+    (await post('tracking/start', { fromDate: 'invalid', setupVersion: await setup() })).status,
+    400,
+  );
+  const initialSetup = await (await post('coverage')).json();
+  const status = await (
+    await post('tracking/start', { fromDate, setupVersion: initialSetup.setupVersion })
+  ).json();
+  assert.equal(typeof status.setupVersion, 'string');
+  assert.notEqual(status.setupVersion, initialSetup.setupVersion);
+  for (const action of ['tracking/start', 'coverage/start']) {
+    const missing = await post(action, { fromDate, confirmed: true });
+    assert.equal(missing.status, 412);
+    const stale = await post(action, {
+      fromDate,
+      confirmed: true,
+      setupVersion: initialSetup.setupVersion,
+    });
+    assert.equal(stale.status, 412);
+  }
   assert.partialDeepStrictEqual(status, { from: null, billingFrom: from, current: false });
   assert.equal(((await (await post('workspace')).json()) as BillingWorkspace).trackingFrom, from);
   const history = (await (await post('tracked-bills')).json()) as TrackedBillHistory;
@@ -80,10 +102,20 @@ test('a billing start date opens the full bill history independently of starting
   assert.equal(shortened.rows.find((row) => row.orderItemId === order.orderItemId)?.bill, null);
   assert.equal(f.store.readStockCoverage(scope.companyId), null);
   assert.deepEqual(f.store.readMarketplace().changes, []);
-  assert.equal((await post('coverage/start', { fromDate })).status, 400);
-  assert.equal((await post('coverage/start', { fromDate, confirmed: true })).status, 200);
+  assert.equal(
+    (await post('coverage/start', { fromDate, setupVersion: await setup() })).status,
+    400,
+  );
+  assert.equal(
+    (await post('coverage/start', { fromDate, confirmed: true, setupVersion: await setup() }))
+      .status,
+    200,
+  );
   assert.equal(f.store.readStockCoverage(scope.companyId)?.from, from);
-  assert.equal((await post('tracking/start', { fromDate })).status, 409);
+  assert.equal(
+    (await post('tracking/start', { fromDate, setupVersion: await setup() })).status,
+    409,
+  );
 });
 
 test('finds a posted voucher for one preview order and verifies a reference exception without changing the seller rule', async (t) => {
@@ -411,8 +443,13 @@ test('keep-back preview verifies sample orders and the next sync publishes both 
   const { previewId } = (await rule.json()) as BillingReport;
   assert.equal((await post('billing/confirm', { previewId })).status, 200);
   assert.equal(
-    (await post('billing/coverage/start', { fromDate: saleDay(base.observedAt!), confirmed: true }))
-      .status,
+    (
+      await post('billing/coverage/start', {
+        fromDate: saleDay(base.observedAt!),
+        confirmed: true,
+        setupVersion: (await (await post('billing/coverage', {})).json()).setupVersion,
+      })
+    ).status,
     200,
   );
   f.store.update((state) => {
@@ -613,7 +650,11 @@ test('Order matching finds tracked listings outside the preview and rechecks the
   assert.equal((await post('confirm', { previewId: preview.previewId })).status, 200);
   assert.deepEqual(await (await post('pending')).json(), { trackingStarted: false, listings: [] });
   const fromDate = saleDay(earlier);
-  assert.equal((await post('coverage/start', { fromDate, confirmed: true })).status, 200);
+  const { setupVersion } = await (await post('coverage')).json();
+  assert.equal(
+    (await post('coverage/start', { fromDate, confirmed: true, setupVersion })).status,
+    200,
+  );
   assert.deepEqual(await (await post('pending', { savedOnly: true })).json(), {
     trackingStarted: true,
     listings: [],

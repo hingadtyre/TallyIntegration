@@ -3,6 +3,62 @@ import test from 'node:test';
 import { InputError } from '../../src/server/service.js';
 import { serverFixture as fixture } from '../support/server-fixture.js';
 
+test('an edit or unlink opened before a mapping changed cannot alter its replacement', (t) => {
+  const f = fixture(t);
+  const listing = f.service.snapshot().listings[0];
+  f.store.update((state) => {
+    const current = state.listings.find((row) => row.id === listing.id)!;
+    current.packSize = 2;
+    current.version++;
+  });
+  const before = f.service.snapshot();
+  assert.throws(() => f.service.edit('demo-a', listing.id, 1, listing.version), /listing changed/i);
+  assert.throws(
+    () => f.service.remove('demo-a', listing.id, true, listing.version),
+    /listing changed/i,
+  );
+  assert.deepEqual(f.service.snapshot(), before);
+  const current = before.listings.find((row) => row.id === listing.id)!;
+  f.service.edit('demo-a', listing.id, 1, current.version, null);
+  assert.throws(
+    () => f.service.edit('demo-a', listing.id, 2, current.version, null),
+    /draft changed/i,
+  );
+  assert.equal(
+    f.service.edit('demo-a', listing.id, 2, current.version, 1).proposals[0].quantity,
+    2,
+  );
+});
+
+test('oversized calculations are blocked while valid manual drafts can still be saved', async (t) => {
+  const f = fixture(t);
+  const listing = f.service.snapshot().listings[0];
+  f.store.update((state) => {
+    state.items.find((row) => row.id === listing.itemId)!.physical = 5500;
+  });
+  const result = await f.service.calculateAvailable('demo-a', [listing.id]);
+  assert.equal(result.calculation[0].status, 'blocked');
+  assert.match(result.calculation[0].reason ?? '', /5000/);
+  assert.equal(result.proposals.length, 0);
+  assert.throws(() => f.service.edit('demo-a', listing.id, 5001), /5000/);
+  assert.equal(f.service.edit('demo-a', listing.id, 5000).proposals[0].quantity, 5000);
+  // This manual draft could be saved in a workspace before the cap was enforced.
+  f.store.update((state) => {
+    state.proposals[0].quantity = 5100;
+  });
+  assert.equal(f.service.snapshot().proposals[0].stale, true);
+  const legacy = await f.service.calculateAvailable('demo-a', [listing.id]);
+  assert.equal(legacy.calculation[0].status, 'blocked');
+  assert.match(legacy.calculation[0].reason ?? '', /5000/);
+  assert.equal(legacy.proposals[0].quantity, 5100);
+  assert.match(f.service.review('demo-a', [listing.id]).rows[0].problem ?? '', /5000/);
+  f.service.edit('demo-a', listing.id, 4999, listing.version, 5100);
+  assert.equal(
+    (await f.service.calculateAvailable('demo-a', [listing.id])).calculation[0].status,
+    'preserved',
+  );
+});
+
 test('live selectors hide an unused legacy seller without changing its saved name or real companies', (t) => {
   const f = fixture(t, 'live');
   f.store.update((state) => {

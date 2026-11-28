@@ -31,6 +31,7 @@ export function App() {
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [unsavedInventory, setUnsavedInventory] = useState(false);
+  const [unsavedBilling, setUnsavedBilling] = useState(false);
   const [inventoryReset, setInventoryReset] = useState(0);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const sidebarToggle = useRef<HTMLButtonElement>(null);
@@ -60,27 +61,34 @@ export function App() {
     ? selectedAccountId
     : (state.accounts[0]?.id ?? '');
   const companyItems = state.items.filter((item) => item.companyId === companyId);
-  function leaveInventoryContext() {
-    if (!unsavedInventory) return true;
-    if (!window.confirm('Discard unsaved Inventory edits and switch?')) return false;
-    setInventoryReset((count) => count + 1);
+  const workspaceScreen = screen === 'settings' || screen === 'connections';
+  function canSwitch(changingCompanyOrSeller: boolean) {
+    const discardInventory = changingCompanyOrSeller && unsavedInventory;
+    const discardBilling = screen === 'billing' && unsavedBilling;
+    if (!discardInventory && !discardBilling) return true;
+    const affected = [discardInventory && 'Inventory', discardBilling && 'Order matching']
+      .filter(Boolean)
+      .join(' and ');
+    if (!window.confirm(`Discard unsaved ${affected} edits and switch?`)) return false;
+    if (discardInventory) setInventoryReset((count) => count + 1);
     return true;
   }
   function changeCompany(id: string) {
-    if (id === companyId || !leaveInventoryContext()) return;
+    if (id === companyId || !canSwitch(true)) return;
     setSelectedCompanyId(id);
-    workspace.dismissNotice();
+    workspace.clearActionFeedback();
   }
   function changeAccount(id: string) {
-    if (id === accountId || !leaveInventoryContext()) return false;
+    if (id === accountId || !canSwitch(true)) return false;
     setSelectedAccountId(id);
-    workspace.dismissNotice();
+    workspace.clearActionFeedback();
     return true;
   }
   function selectScreen(value: Screen) {
+    if (value !== screen && !canSwitch(false)) return;
     setScreen(value);
     if (isNarrowViewport()) setSidebarExpanded(false);
-    workspace.dismissNotice();
+    if (value !== screen) workspace.clearActionFeedback();
     if (screen === 'marketplaces' && (value === 'inventory' || value === 'billing'))
       void workspace.refreshSnapshot();
   }
@@ -163,10 +171,10 @@ export function App() {
       <div className="main-shell">
         <header className="topbar">
           <span className="topbar-brand">Stockbridge</span>
-          {screen === 'marketplaces' ? (
+          {workspaceScreen || screen === 'marketplaces' ? (
             <div className="marketplace-context">
-              <Icon name="marketplaces" />
-              <span>Marketplace management</span>
+              <Icon name={screen} />
+              <span>{workspaceScreen ? 'All companies' : 'Marketplace management'}</span>
             </div>
           ) : (
             <div className="company-picker">
@@ -273,6 +281,7 @@ export function App() {
               }
               onAccountChange={changeAccount}
               onConnect={() => selectScreen(companyId ? 'marketplaces' : 'connections')}
+              onUnsavedChange={setUnsavedBilling}
             />
           )}
           <div hidden={screen !== 'connections'}>

@@ -1,3 +1,4 @@
+import { marketplaceEditLimits } from '../shared/marketplace-contracts.js';
 import { randomUUID } from 'node:crypto';
 import type { MarketplaceStockRecoveryReview } from '../shared/marketplace-recovery.js';
 import type { MarketplaceListing } from '../shared/marketplace-contracts.js';
@@ -115,7 +116,11 @@ export class MarketplaceStockRecovery {
       throw new InputError('The current reported package count needs review in Inventory.', 409);
     const observed = destination[0].quantity;
     const quantity = desiredStock(input.state, input.mapping, 'current', evidence.available);
-    if (!Number.isSafeInteger(quantity) || quantity < 0 || quantity > 5000)
+    if (
+      !Number.isSafeInteger(quantity) ||
+      quantity < 0 ||
+      quantity > marketplaceEditLimits.stock.max
+    )
       throw new InputError('The calculated quantity is outside the allowed stock range.', 409);
     if (input.state.mode === 'live' && input.mapping.policy === 'limited' && quantity > 0)
       throw new InputError(

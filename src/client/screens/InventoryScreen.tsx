@@ -11,8 +11,7 @@ import type {
 } from '../../shared/contracts.js';
 import { actionScope, inventoryGroups, isLowStock, type StockView } from '../selectors.js';
 import { Icon, Stat } from '../components.js';
-import { MarketplaceLogo, MarketplaceSeller } from '../MarketplaceSeller.js';
-import { SearchablePicker } from '../SearchablePicker.js';
+import { SellerAccountPicker } from '../MarketplaceSeller.js';
 import { formatCompanyStockIssue, formatDateTime as time } from '../format.js';
 import type { Workspace } from '../useWorkspace.js';
 import { ItemRows } from './InventoryTable.js';
@@ -111,7 +110,7 @@ export function InventoryScreen({
   }
   const filters = { companyId, accountId, query, brand, pack, view };
   const groups = inventoryGroups(state, filters);
-  const scope = actionScope(state, filters, selected);
+  const scope = actionScope(state, filters, selected, groups);
   const scopeKey = JSON.stringify([companyId, accountId, [...scope].sort()]);
   const proposals = new Map(state.proposals.map((proposal) => [proposal.listingId, proposal]));
   const calculation =
@@ -179,8 +178,8 @@ export function InventoryScreen({
   const hiddenSelected = selected.filter((id) => !visibleIds.includes(id)).length;
   const reviewIds = calculation
     ? calculation.filter((row) => row.status !== 'blocked').map((row) => row.listingId)
-    : scope;
-  const scopedProposalCount = reviewIds.filter((id) => proposals.has(id)).length;
+    : scope.filter((id) => proposals.has(id));
+  const scopedProposalCount = reviewIds.length;
   const draftCount = companyListings.filter((listing) => proposals.has(listing.id)).length;
   const brandOptions = [...new Set(companyItems.map((item) => item.brand).filter(Boolean))].sort();
   const packOptions = [
@@ -250,7 +249,7 @@ export function InventoryScreen({
         : [...new Set([...current, ...visibleIds])],
     );
   }
-  return (
+  const heading = (
     <>
       <div className="page-heading inventory-heading">
         <h1>Inventory</h1>
@@ -301,6 +300,54 @@ export function InventoryScreen({
           </button>
         </div>
       )}
+    </>
+  );
+  const sellerPicker = (
+    <SellerAccountPicker
+      inputId={sellerPickerId}
+      accounts={state.accounts}
+      selected={account}
+      onSelect={changeAccount}
+    />
+  );
+  if (companyItems.length === 0)
+    return (
+      <>
+        {heading}
+        <section className="inventory-panel" aria-label="Inventory setup">
+          {refreshFeedback?.pending ? (
+            <p className="marketplace-loading" role="status">
+              Loading inventory…
+            </p>
+          ) : (
+            <div className="empty-state compact-empty">
+              <div className="empty-icon">
+                <Icon name="box" />
+              </div>
+              <h3>{companyId ? 'No stock items imported yet' : 'Start with your Tally company'}</h3>
+              <p>
+                Open Tally with the company you want to use, enable its local connection, then
+                refresh. All stock items will appear here, including items without a marketplace
+                listing.
+              </p>
+              <button className="button primary" onClick={onOpenConnections}>
+                View connections
+                <Icon name="arrow" />
+              </button>
+            </div>
+          )}
+        </section>
+        {state.accounts.length > 0 && sellerPicker}
+        {company?.automation && (
+          <button className="button secondary" disabled={!!busy} onClick={disableAutomation}>
+            Turn off automatic updates
+          </button>
+        )}
+      </>
+    );
+  return (
+    <>
+      {heading}
       <div className="stat-grid inventory-summary" role="group" aria-label="Inventory views">
         <Stat
           icon="box"
@@ -374,25 +421,7 @@ export function InventoryScreen({
               {groups.length} {groups.length === 1 ? 'item' : 'items'}
             </span>
           </div>
-          <div className="account-select">
-            <SearchablePicker
-              inputId={sellerPickerId}
-              openOnFocus={false}
-              label="Seller account"
-              placeholder={state.accounts.length ? 'Choose seller account' : 'No seller account'}
-              options={state.accounts}
-              selected={account}
-              getId={(seller) => seller.id}
-              getLabel={(seller) => seller.name}
-              selectedIcon={
-                account?.marketplace && <MarketplaceLogo marketplace={account.marketplace} />
-              }
-              renderOption={(seller) => <MarketplaceSeller account={seller} />}
-              emptyMessage="No matching seller accounts."
-              disabled={!state.accounts.length}
-              onSelect={changeAccount}
-            />
-          </div>
+          {sellerPicker}
         </div>
         {company && (
           <div className="company-sync">
@@ -559,27 +588,7 @@ export function InventoryScreen({
             onFixPack={(item, listingId) => setMapping({ item, listingId })}
           />
         )}
-        {companyItems.length === 0 && refreshFeedback?.pending ? (
-          <p className="marketplace-loading" role="status">
-            Loading inventory…
-          </p>
-        ) : companyItems.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-icon">
-              <Icon name="box" />
-            </div>
-            <h3>{companyId ? 'No stock items imported yet' : 'Start with your Tally company'}</h3>
-            <p>
-              Open Tally with the company you want to use, enable its local connection, then
-              refresh. All stock items will appear here, including items without a marketplace
-              listing.
-            </p>
-            <button className="button secondary" onClick={() => onOpenConnections()}>
-              View connections
-              <Icon name="arrow" />
-            </button>
-          </div>
-        ) : groups.length === 0 ? (
+        {groups.length === 0 ? (
           <div className="empty-state">
             <Icon name="search" />
             <h3>No matching items</h3>
@@ -667,10 +676,10 @@ export function InventoryScreen({
                     onSelect={toggleSelection}
                     onMap={() => setMapping({ item })}
                     onEditPack={(listing) => setMapping({ item, listingId: listing.id })}
-                    onSave={async (listing, amount) => {
+                    onSave={async (listing, amount, baseline) => {
                       const result = await mutate(
                         '/proposals',
-                        { companyId, listingId: listing.id, quantity: amount },
+                        { companyId, listingId: listing.id, ...baseline, quantity: amount },
                         'Saving draft',
                         'Draft saved. Review and publish when ready.',
                       );
@@ -772,7 +781,12 @@ export function InventoryScreen({
           onRemove={() =>
             mutate(
               '/mappings/remove',
-              { companyId, listingId: removeListing.id, leaveRemoteStock: true },
+              {
+                companyId,
+                listingId: removeListing.id,
+                listingVersion: removeListing.version,
+                leaveRemoteStock: true,
+              },
               'Removing mapping',
               'Mapping removed. Marketplace stock was left unchanged.',
             )

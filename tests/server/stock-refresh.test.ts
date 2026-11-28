@@ -4,6 +4,12 @@ import { createServer } from 'node:http';
 import type { TallyCompany, TallyStockItem } from '../../src/adapters/tally.js';
 import type { Listing } from '../../src/shared/contracts.js';
 import { InputError } from '../../src/server/service.js';
+import { initialState } from '../../src/server/seed.js';
+import { readSnapshot } from '../../src/server/storage/records.js';
+import { requireStockSource } from '../../src/server/proposals.js';
+import { keepBackSource } from '../../src/server/marketplace-keep-back.js';
+import { marketplaceData } from '../support/marketplace-fixture.js';
+import { queryFile } from '../support/server-fixture.js';
 import { close, listen, serverFixture as fixture } from '../support/server-fixture.js';
 
 function sourceFixture(t: TestContext, mode: 'live' | 'demo' = 'live') {
@@ -76,6 +82,44 @@ test('refresh imports new stock and keeps identical company and item names isola
   assert.equal(repeated.items.length, 3);
   assert.equal(repeated.items.find((item) => item.id === changed.id)!.version, 2);
   assert.equal(repeated.publishingEnabled, false);
+});
+
+test('a base-unit change keeps the original held amount until the seller confirms it in the current unit', async (t) => {
+  const f = sourceFixture(t);
+  const initial = await f.service.refresh();
+  const item = initial.items[0];
+  f.service.setKeepBack(item.companyId, item.id, item.version, 2);
+  f.source.items.get('company-a')![0].unit = 'pairs';
+  const changed = await f.service.refresh();
+  assert.equal(changed.items[0].keepBackPreviousUnit, 'tyres');
+  f.source.items.get('company-a')![0].unit = 'sets';
+  await f.service.refresh();
+  const stored = queryFile(f.file, readSnapshot);
+  const current = stored.items[0];
+  assert.equal(current.keepBackPreviousUnit, 'tyres');
+  assert.equal(current.keepBackUnits, 2);
+  const listing = { ...initialState('demo', 'unused').listings[0], itemId: item.id };
+  const state = { ...stored, listings: [listing] };
+  assert.throws(() => requireStockSource(state, listing), /quantity to keep back/i);
+  const remote = { ...marketplaceData(listing.accountId).listings[0], sku: listing.sku };
+  assert.throws(() => keepBackSource(state, remote, listing.location), /quantity to keep back/i);
+  assert.throws(
+    () => f.service.setKeepBack(item.companyId, item.id, item.version, 2),
+    /item changed/i,
+  );
+  f.store.update((snapshot) => {
+    snapshot.items.find((entry) => entry.id === item.id)!.observedAt = '2000-01-01T00:00:00.000Z';
+  });
+  assert.throws(
+    () => f.service.setKeepBack(item.companyId, item.id, current.version, 2),
+    /refresh the tally item/i,
+  );
+  await f.service.refresh();
+  const confirmed = f.service.setKeepBack(item.companyId, item.id, current.version, 2);
+  assert.equal(confirmed.items[0].keepBackPreviousUnit, undefined);
+  assert.equal(confirmed.items[0].unit, 'sets');
+  assert.equal(confirmed.items[0].keepBackUnits, 2);
+  assert.equal(requireStockSource(confirmed, listing).packSize, listing.packSize);
 });
 
 test('a selected-company refresh updates only that company and retains other loaded observations', async (t) => {

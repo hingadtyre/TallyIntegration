@@ -40,6 +40,7 @@ export interface StockSyncCoverage {
 }
 
 export interface StockCoverageStatus {
+  setupVersion: string;
   from: string | null;
   billingFrom?: string;
   current: boolean;

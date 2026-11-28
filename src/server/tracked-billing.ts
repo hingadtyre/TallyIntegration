@@ -336,35 +336,23 @@ export class TrackedBillingService {
         const revision = revisions.get(id)! + 1;
         this.revisions.set(id, revision);
         revisions.set(id, revision);
-        // An order item can be recorded in more than one programme. Keep its invoice
-        // evidence consistent even when a retry only returns one of those memberships.
+        // Programme membership is independent of the order's lifecycle. Update every
+        // known membership when the item is observed again, including on a partial retry.
         const seen = new Set(freshOrders.map(({ order }) => order.orderItemId));
-        const updates = saved.flatMap(({ group, order }) => {
-          if (!seen.has(order.orderItemId)) return [];
-          const current = reconciled.get(order.orderItemId)!;
-          if (
-            current.stockIdentityConflict ||
-            (current.invoiceNumber === order.invoiceNumber &&
-              current.invoiceLookup === order.invoiceLookup)
-          )
-            return [];
-          return [
-            {
+        const memberships = new Map<
+          string,
+          { group: BillingFulfilment; order: FlipkartBillingOrder }
+        >();
+        for (const { group, order } of observations) {
+          if (seen.has(order.orderItemId)) {
+            memberships.set(JSON.stringify([group, order.orderItemId]), {
               group,
-              order: {
-                ...order,
-                invoiceNumber: current.invoiceNumber,
-                invoiceLookup: current.invoiceLookup,
-              },
-            },
-          ];
-        });
+              order: reconciled.get(order.orderItemId)!,
+            });
+          }
+        }
         this.store.saveBillingOrderObservations(companyId, rule.accountId, [
-          ...updates,
-          ...freshOrders.map(({ group, order }) => ({
-            group,
-            order: reconciled.get(order.orderItemId)!,
-          })),
+          ...memberships.values(),
         ]);
       }
     }

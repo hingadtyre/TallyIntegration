@@ -444,8 +444,11 @@ async function mappedInventory(
         reference: 'orderItemId',
       });
     });
+    const status = await f.service.billingCommand('/api/billing/coverage', scope);
+    assert.ok(status && typeof status === 'object' && 'setupVersion' in status);
     await f.service.billingCommand('/api/billing/coverage/start', {
       ...scope,
+      setupVersion: status.setupVersion,
       fromDate: new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10),
       confirmed: true,
     });
@@ -640,6 +643,67 @@ test('unverified order coverage warns on positive manual overrides and leaves ze
   assert.equal(review?.completePacks, null);
   await assert.rejects(s.f.stock(s.account.id, 2), /Keep back from marketplaces/);
   assert.equal((await s.f.stock(s.account.id, 0)).change.state, 'confirmed');
+});
+
+test('a keep-back with an unknown unit holds stock updates until the seller confirms its quantity once', async (t) => {
+  const s = await mappedInventory(t, 'manual', { physical: 14, packSize: 2, tyreFloor: false });
+  const { companyId, id: itemId } = s.item;
+  s.f.store.update((state) => {
+    const item = state.items.find((row) => row.id === itemId)!;
+    item.keepBackUnits = 2;
+    item.keepBackPreviousUnit = '';
+  });
+  s.service.automation(companyId, true);
+  const blocked = await s.service.calculateAvailable(companyId, [s.listing.id]);
+  assert.equal(blocked.calculation[0].status, 'blocked');
+  assert.match(blocked.calculation[0].reason ?? '', /keep back/i);
+  await s.service.refresh();
+  await assert.rejects(s.f.stock(s.account.id, 6), /keep back/i);
+  assert.equal(s.f.writes.length, 0);
+  assert.equal(s.remote.locations[0].quantity, 5);
+
+  const currentItem = s.service.snapshot().items.find((row) => row.id === itemId)!;
+  const confirmed = s.service.setKeepBack(companyId, itemId, currentItem.version, 2);
+  assert.equal(confirmed.items.find((row) => row.id === itemId)?.keepBackPreviousUnit, undefined);
+  assert.equal(
+    (await s.service.calculateAvailable(companyId, [s.listing.id])).calculation[0].status,
+    'ready',
+  );
+  await s.service.refresh();
+  await s.service.refresh();
+  assert.deepEqual(
+    s.f.writes.map((write) => write.quantity),
+    [6],
+  );
+});
+
+test('a lost stock edit response can be recovered while its keep-back check is still running', async (t) => {
+  const s = await mappedInventory(t);
+  s.service.setKeepBack(s.item.companyId, s.item.id, s.item.version, 2);
+  const accountId = s.account.id;
+  const listingId = s.remote.id;
+  const requestId = '94dab8aa-53ea-4b22-9d1d-540da6f2f51d';
+  const input = {
+    accountId,
+    listingId,
+    requestId,
+    version: s.f.listing(accountId).version,
+    edit: { kind: 'stock', locationId: s.listing.location, quantity: 1 },
+  };
+  let lookup: ReturnType<MarketplaceService['savedResult']> | undefined;
+  s.onNextOrders(async () => {
+    lookup = s.f.service.savedResult({ accountId, listingId, changeId: requestId });
+    assert.equal(await s.f.service.savedResult({ accountId, listingId, changeId: 'other' }), null);
+    await assert.rejects(s.f.service.apply(input), /already in progress/);
+    assert.equal(s.f.writes.length, 0);
+  });
+  const applied = await s.f.service.apply(input);
+  assert.ok(lookup);
+  const saved = await lookup;
+  assert.equal(saved?.change.id, requestId);
+  assert.equal(saved?.change.state, 'confirmed');
+  assert.deepEqual(saved?.change, applied.change);
+  assert.equal(s.f.writes.length, 1);
 });
 
 test('an urgent zero takes effect during a positive manual keep-back check', async (t) => {

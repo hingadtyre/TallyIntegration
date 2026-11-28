@@ -5,6 +5,21 @@ export function isRecentObservation(observedAt: string, maximumAge: number): boo
   return age >= 0 && age <= maximumAge;
 }
 
+export function hasCurrentTallyObservation(
+  state: Snapshot,
+  company: Company | undefined,
+  observedAt: string | null,
+): boolean {
+  return (
+    state.mode === 'demo' ||
+    (state.connection.tally === 'online' &&
+      !!company?.lastSuccess &&
+      !company.stockIssue &&
+      !!observedAt &&
+      isRecentObservation(observedAt, Math.max(120_000, state.settings.tallySeconds * 3000)))
+  );
+}
+
 export class InputError extends Error {
   constructor(
     message: string,

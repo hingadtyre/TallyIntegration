@@ -3,6 +3,7 @@ import test from 'node:test';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { InputError } from '../../src/server/service.js';
+import { isFullyQualifiedPath } from '../../src/server/filesystem-path.js';
 import { serverFixture as fixture } from '../support/server-fixture.js';
 
 test('changing Tally address requires each company to be refreshed before its stock can be reviewed', async (t) => {
@@ -106,12 +107,26 @@ test('malformed settings, unsafe source addresses and invalid intervals leave th
     { ...settings, marketplaceSeconds: 86_401 },
     { ...settings, catalogSeconds: Number.NaN },
     { ...settings, backupFolder: 'relative-backups' },
+    ...(process.platform === 'win32'
+      ? [{ ...settings, backupFolder: join(f.folder, 'backups').slice(2) }]
+      : []),
     { ...settings, backupFolder: '' },
   ]) {
     assert.throws(() => f.service.settings(input), InputError);
     assert.deepEqual(f.service.snapshot(), before);
   }
 });
+
+test(
+  'Windows backup locations retain full drive and network share paths',
+  { skip: process.platform !== 'win32' },
+  () => {
+    assert.ok(isFullyQualifiedPath('C:/Backups', true));
+    assert.ok(isFullyQualifiedPath('//server/share/Backups', true));
+    assert.equal(isFullyQualifiedPath('//server/share/Backups'), false);
+    assert.equal(isFullyQualifiedPath('/Backups', true), false);
+  },
+);
 
 test('equivalent local source addresses preserve drafts and folder validation leaves no probe files', (t) => {
   const f = fixture(t);

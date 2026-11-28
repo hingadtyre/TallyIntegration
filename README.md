@@ -10,6 +10,8 @@ A fresh live workspace has no company or seller account in its selectors. Tally 
 
 ## Current milestone
 
+If Tally changes a stock item's base unit, confirm its positive keep-back amount in the new unit before publishing from that item. Inventory shows the saved amount and its original unit when known. After upgrading or restoring an older workspace, confirm each positive keep-back amount whose original unit was never recorded. Zero kept back needs no confirmation.
+
 **Keep back from marketplaces** on each Tally stock item sets aside stock for other uses. Enter the quantity once in the item's Tally unit. All mapped marketplace listings draw on the same balance after this deduction and unbilled orders. For Flipkart, the listing's pack size, optional tyre minimum and sales allowance then determine the proposed stock. Saving queues eligible listings for their next sync. The field defaults to zero.
 
 **Order matching** lets each seller select a Tally company, seller account and sales ledger. Choose where the order ID, order-item ID or invoice number is recorded, or review bills manually. Select today, the last 7 days or the last 30 days, preview the results, then save the setup. An exact reference, matching stock item and quantity can identify a unique bill. A seller can confirm or release a manual match. Flipkart supplies the orders and Tally supplies posted sales evidence. A ledger entry alone cannot establish that a Flipkart order exists.

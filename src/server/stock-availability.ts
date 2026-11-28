@@ -4,7 +4,7 @@ import { TallyClient, type TallySalesBill, type TallyStockItem } from '../adapte
 import { availableForMarketplaces } from '../domain/stock-policy.js';
 import type { BilledOrderItem, PendingOrderResult } from '../shared/billing-contracts.js';
 import type { ItemReservations, StockItem } from '../shared/contracts.js';
-import { reservationCheckMaxAgeMs } from '../shared/contracts.js';
+import { keepBackUnitIssue, reservationCheckMaxAgeMs } from '../shared/contracts.js';
 import {
   isVerifiedCancellation,
   isVerifiedSale,
@@ -582,6 +582,20 @@ export class StockAvailabilityService {
     if (!ctx.market.accounts.some((a) => a.id === accountId))
       throw new InputError('Select a valid seller account.', 404);
     let saved = this.store.readStockCoverage(companyId);
+    const setupVersion = () =>
+      fingerprint([
+        ctx.signature,
+        journalVersion(saved),
+        this.store.readBillingTrackingStart(companyId),
+      ]);
+    if (
+      (path === '/api/billing/tracking/start' || path === '/api/billing/coverage/start') &&
+      input.setupVersion !== setupVersion()
+    )
+      throw new InputError(
+        'Review the current tracking setup and recorded orders before saving. Reload Stockbridge if this message persists.',
+        412,
+      );
     if (path === '/api/billing/tracking/start') {
       if (saved)
         throw new InputError('Review starting stock to change the company tracking date.', 409);
@@ -628,6 +642,7 @@ export class StockAvailabilityService {
     const issue = saved ? coverageIssue(saved, ctx.signature, Date.now()) : startTrackingMessage;
     const billingFrom = !saved && this.store.readBillingTrackingStart(companyId);
     return {
+      setupVersion: setupVersion(),
       from: saved?.from ?? null,
       ...(billingFrom && { billingFrom }),
       current: issue === null,
@@ -1115,6 +1130,7 @@ export class StockAvailabilityService {
             return previous;
           }
           const evidence = await checkBalance(itemId);
+          if (evidence.item.keepBackPreviousUnit !== undefined) throw hold(keepBackUnitIssue);
           const reservedUnits = reservationTotals(evidence.orders, itemId).units;
           const value = {
             itemVersion: evidence.item.version,

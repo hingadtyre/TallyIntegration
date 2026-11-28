@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import {
   closeSync,
   existsSync,
@@ -6,18 +6,19 @@ import {
   lstatSync,
   openSync,
   readFileSync,
+  readSync,
   realpathSync,
   renameSync,
   rmSync,
-  writeFileSync,
 } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Snapshot } from '../shared/contracts.js';
 import { recordActivity } from './activity.js';
 import { cataloguesOverlap } from './marketplace-catalog.js';
 import { acquireWorkspaceOwnership } from './runtime.js';
-import { backupDatabase } from './storage/backup.js';
+import { isFullyQualifiedPath } from './filesystem-path.js';
+import { backupDatabase, backupDigest, writeBackupManifest } from './storage/backup.js';
 import { readBilling, writeBilling, type BillingData } from './storage/billing-records.js';
 import { readSnapshot, writeSnapshot } from './storage/records.js';
 import {
@@ -51,7 +52,7 @@ export interface PilotBackupPreview {
 }
 
 function requireLocalAbsolutePath(file: string): void {
-  if (!isAbsolute(file) || file.includes('\0') || file.replaceAll('\\', '/').startsWith('//')) {
+  if (!isFullyQualifiedPath(file)) {
     throw new Error('Choose an absolute local file or folder path, not a network or device path.');
   }
 }
@@ -59,10 +60,6 @@ function requireLocalAbsolutePath(file: string): void {
 function requireMode(mode: string): asserts mode is WorkspaceMode {
   if (mode !== 'live' && mode !== 'demo')
     throw new Error('Choose exactly one workspace mode: live or demo.');
-}
-
-function hashFile(file: string): string {
-  return createHash('sha256').update(readFileSync(file)).digest('hex');
 }
 
 function requireNoSidecars(file: string): void {
@@ -150,18 +147,29 @@ function loadBackup(
       'The backup needs its matching verified manifest for this workspace mode and current schema.',
     );
   }
-  const bytes = readFileSync(backupFile);
-  if (bytes.length < 100 || !bytes.subarray(0, 16).equals(Buffer.from('SQLite format 3\0'))) {
-    throw new Error('Select a valid, completed SQLite backup file.');
+  const header = Buffer.alloc(100);
+  const descriptor = openSync(backupFile, 'r');
+  try {
+    if (
+      readSync(descriptor, header) !== 100 ||
+      !header.subarray(0, 16).equals(Buffer.from('SQLite format 3\0'))
+    )
+      throw new Error('Select a valid, completed SQLite backup file.');
+  } finally {
+    closeSync(descriptor);
   }
   // Even read-only SQLite can create WAL/SHM files. Reject WAL before opening it.
   // These format bytes are defined at https://www.sqlite.org/fileformat.html#the_database_header.
-  if (bytes[18] !== 1 || bytes[19] !== 1) {
+  if (header[18] !== 1 || header[19] !== 1) {
     throw new Error(
       'Select a self-contained verified backup. A database configured for active WAL use cannot be restored directly.',
     );
   }
-  const before = createHash('sha256').update(bytes).digest('hex');
+  const before = backupDigest(backupFile);
+  if ('sha256' in manifest && manifest.sha256 !== before)
+    throw new Error(
+      'The backup contents do not match the SHA-256 in its manifest. Select the matching pair.',
+    );
   const database = new DatabaseSync(backupFile, { readOnly: true });
   let snapshot: Snapshot;
   let marketplace: MarketplaceData;
@@ -181,7 +189,7 @@ function loadBackup(
       manifest.schemaVersion === 2
         ? { accounts: [], listings: [], changes: [] }
         : readMarketplace(database);
-    if (hashFile(backupFile) !== before)
+    if (backupDigest(backupFile) !== before)
       throw new Error('The backup changed during inspection. Inspect a completed backup again.');
     database.exec('COMMIT');
   } finally {
@@ -253,8 +261,9 @@ function restoredSnapshot(
     item.observedAt = null;
     item.version = Math.max(item.version, currentVersions.get(item.id) ?? 0) + 1;
   }
+  const currentListingVersions = new Map(current.listings.map((row) => [row.id, row.version]));
   for (const listing of restored.listings) {
-    if (!listing.paused) listing.version++;
+    listing.version = Math.max(listing.version, currentListingVersions.get(listing.id) ?? 0) + 1;
     listing.paused = true;
     delete listing.proposalIssue;
     delete listing.orderProposalPending;
@@ -536,23 +545,12 @@ export async function restorePilotBackup(options: {
     );
     backupDatabase(database, safetyCandidate);
     safetyBackup = safetyCandidate;
-    writeFileSync(
-      `${safetyBackup}.json`,
-      JSON.stringify(
-        {
-          createdAt: new Date().toISOString(),
-          schemaVersion: schemaVersion(database),
-          mode: options.mode,
-          verified: true,
-          credentialsIncluded: false,
-          restoreSupported: true,
-          restoreScope: 'offline-pilot-only',
-          reason: 'before-pilot-restore',
-        },
-        null,
-        2,
-      ),
-      { flag: 'wx', mode: 0o600 },
+    writeBackupManifest(
+      safetyBackup,
+      schemaVersion(database),
+      options.mode,
+      new Date().toISOString(),
+      'before-pilot-restore',
     );
     syncFile(safetyBackup);
     syncFile(`${safetyBackup}.json`);
@@ -565,7 +563,7 @@ export async function restorePilotBackup(options: {
       marketplace,
       restoredBilling(source.billing, currentBilling, snapshot),
     );
-    if (hashFile(source.preview.backupFile) !== options.expectedSha256)
+    if (backupDigest(source.preview.backupFile) !== options.expectedSha256)
       throw new Error('The backup changed before replacement. Inspect it again.');
     database.close();
     database = undefined;

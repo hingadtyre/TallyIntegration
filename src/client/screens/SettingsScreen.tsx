@@ -32,7 +32,7 @@ export function SettingsScreen({ state, workspace }: { state: Snapshot; workspac
       <div className="page-heading">
         <div>
           <h1>Settings</h1>
-          <p>Saved locally. Valid changes apply without restarting the app.</p>
+          <p>These settings apply to every company in this workspace as soon as you save.</p>
         </div>
       </div>
       <form className="settings-layout" onSubmit={saveSettings}>

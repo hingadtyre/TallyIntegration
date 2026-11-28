@@ -168,7 +168,9 @@ function BillingPreview({
                       <small>{item.unit}</small>
                     </td>
                     <td data-label="Physical stock">{item.physical ?? 'Unknown'}</td>
-                    <td data-label="Keep back from marketplaces">{item.keepBackUnits}</td>
+                    <td data-label="Keep back from marketplaces">
+                      {item.keepBackUnits ?? 'Review in Inventory'}
+                    </td>
                     <td data-label="Units without a matched bill">
                       {item.unmatchedUnits ?? 'Unknown'}
                     </td>

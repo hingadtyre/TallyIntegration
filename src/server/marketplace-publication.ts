@@ -6,6 +6,7 @@ import {
 import type { Snapshot } from '../shared/contracts.js';
 import {
   isKnownMarketplaceLocationStatus,
+  marketplaceEditLimits,
   type MarketplaceApplyResult,
   type MarketplaceChange,
   type MarketplaceEdit,
@@ -112,7 +113,12 @@ function parseEdit(input: unknown): MarketplaceEdit {
     return {
       kind: 'stock',
       locationId: requireText(edit.locationId, 'Location'),
-      quantity: requireWholeNumber(edit.quantity, 'Stock', 0, 5000),
+      quantity: requireWholeNumber(
+        edit.quantity,
+        'Stock',
+        marketplaceEditLimits.stock.min,
+        marketplaceEditLimits.stock.max,
+      ),
       automation: 'once',
     };
   }
@@ -120,7 +126,12 @@ function parseEdit(input: unknown): MarketplaceEdit {
     return {
       kind: 'price',
       field: edit.field,
-      value: requireWholeNumber(edit.value, 'Price', 1, 100_000_000),
+      value: requireWholeNumber(
+        edit.value,
+        'Price',
+        marketplaceEditLimits.price.min,
+        marketplaceEditLimits.price.max,
+      ),
     };
   throw new InputError('Choose a stock or price edit.');
 }
@@ -371,6 +382,13 @@ export class MarketplacePublication {
       throw new InputError('This listing has changed. Refresh and review the current value.', 409);
     const edit = parseEdit(input.edit);
     if (!intent) validateStockPolicy(this.store.read(), listing, edit);
+    const requestId = input.requestId;
+    if (
+      requestId !== undefined &&
+      (typeof requestId !== 'string' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(requestId))
+    )
+      throw new InputError('Invalid marketplace request ID.');
     // A later Apply must not conceal an unconfirmed outcome for this listing.
     if (data.changes.some((c) => blocksListing(c, accountId, listing.id)))
       throw new InputError(
@@ -509,7 +527,7 @@ export class MarketplacePublication {
     const expected = expectedListing(before, edit);
     const at = new Date().toISOString();
     const change: MarketplaceChange = {
-      id: randomUUID(),
+      id: requestId ?? randomUUID(),
       accountId,
       listingId: listing.id,
       sku: listing.sku,
@@ -527,6 +545,8 @@ export class MarketplacePublication {
     const quantityChanges: string[] = [];
     const consumedWork = this.store.updateMarketplace((current, state) => {
       const latest = findMarketplaceListing(current, accountId, listing.id);
+      if (current.changes.some((attempt) => attempt.id === change.id))
+        throw new InputError('This update was already recorded. Reload its saved result.', 409);
       if (current.changes.some((c) => blocksListing(c, accountId, listing.id)))
         throw new InputError(
           'Check the previous update result before applying another edit to this listing.',

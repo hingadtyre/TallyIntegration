@@ -126,7 +126,15 @@ async function runCommand(
     case '/api/zero':
       return service.calculate(input.companyId, input.listingIds, true);
     case '/api/proposals':
-      return service.edit(input.companyId, input.listingId, input.quantity);
+      if (input.listingVersion === undefined || input.previousManualQuantity === undefined)
+        throw new InputError('Reload Inventory and review the current draft before saving.', 428);
+      return service.edit(
+        input.companyId,
+        input.listingId,
+        input.quantity,
+        input.listingVersion,
+        input.previousManualQuantity,
+      );
     case '/api/pause':
       return service.pause(input.companyId, input.listingIds, input.paused, input.listingVersion);
     case '/api/items/keep-back':
@@ -161,7 +169,17 @@ async function runCommand(
     case '/api/mappings':
       return service.mapAndCalculate(input);
     case '/api/mappings/remove':
-      return service.remove(input.companyId, input.listingId, input.leaveRemoteStock);
+      if (input.listingVersion === undefined)
+        throw new InputError(
+          'Reload Inventory and review the current mapping before removing it.',
+          428,
+        );
+      return service.remove(
+        input.companyId,
+        input.listingId,
+        input.leaveRemoteStock,
+        input.listingVersion,
+      );
     case '/api/backup':
       return service.backup();
     case '/api/publish':

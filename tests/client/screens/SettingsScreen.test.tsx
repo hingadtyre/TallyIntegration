@@ -25,6 +25,8 @@ test('settings retain edits after rejection and show confirmed values after a su
   render(<App />);
   await screen.findByRole('heading', { name: 'Inventory' });
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  assert.equal(screen.queryByRole('combobox', { name: 'Tally company' }), null);
+  assert.ok(screen.getByText('All companies'));
   const interval = screen.getByRole('spinbutton', { name: /Tally stock/ }) as HTMLInputElement;
   assert.equal(interval.value, '60');
   assert.equal(

@@ -214,6 +214,70 @@ test('a verified zero expires even when the next scheduled order check is hours 
   assert.equal(result.current.items, undefined);
 });
 
+for (const scenario of [
+  {
+    name: 'a known previous unit',
+    previousUnit: 'cartons',
+    message: 'You previously kept back 2 cartons.',
+    quantity: 2,
+  },
+  {
+    name: 'an unknown original unit',
+    previousUnit: '',
+    message: 'Your saved quantity is 2. Its original unit is unknown.',
+    quantity: 0,
+  },
+]) {
+  test(`Inventory confirms the keep-back for ${scenario.name} in the current unit`, async (t) => {
+    const state = initialState('demo', 'unused');
+    const item = state.items[0];
+    item.name = 'Packing tape';
+    item.unit = 'rolls';
+    item.keepBackPreviousUnit = scenario.previousUnit;
+    item.keepBackUnits = 2;
+    let saved: Record<string, unknown> | undefined;
+    t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+      if (url === '/api/state') return response(state);
+      if (url === '/api/items/keep-back/preview')
+        return response({ physical: item.physical, reservedUnits: 0, itemVersion: item.version });
+      assert.equal(url, '/api/items/keep-back');
+      saved = JSON.parse(String(init?.body));
+      return response({
+        ...state,
+        items: state.items.map((row) =>
+          row.id === item.id
+            ? {
+                ...row,
+                keepBackUnits: scenario.quantity,
+                keepBackPreviousUnit: undefined,
+                version: row.version + 1,
+              }
+            : row,
+        ),
+      });
+    });
+    render(<App />);
+    const name = 'Keep back from marketplaces for Packing tape';
+    const description = `${scenario.message} Enter the quantity to keep back in rolls.`;
+    const input = await screen.findByRole<HTMLInputElement>('spinbutton', { name, description });
+    assert.equal(input.value, '');
+    assert.equal(saved, undefined);
+    fireEvent.change(input, { target: { value: String(scenario.quantity) } });
+    fireEvent.click(within(input.closest('form')!).getByRole('button', { name: 'Save' }));
+    await waitFor(() => assert.ok(!screen.queryByText(description)));
+    assert.equal(
+      screen.getByRole<HTMLInputElement>('spinbutton', { name }).value,
+      String(scenario.quantity),
+    );
+    assert.deepEqual(saved, {
+      companyId: item.companyId,
+      itemId: item.id,
+      itemVersion: item.version,
+      keepBackUnits: scenario.quantity,
+    });
+  });
+}
+
 test('edits keep-back on a collapsed Tally item, previews order reservations, and saves only on request', async (t) => {
   const state = initialState('demo', 'unused');
   const item = state.items.find((row) => row.id === 'item-a')!;
@@ -454,7 +518,65 @@ test('narrow navigation closes after selection and resizing preserves the sideba
   );
 });
 
-test('an empty live workspace guides the user to connections and disables listing actions', async (t) => {
+test('order setup keeps edits after a cancelled page, company or seller switch', async (t) => {
+  const state = initialState('demo', 'unused');
+  state.accounts[0].name = 'Sample seller · Flipkart';
+  state.accounts.push({ ...state.accounts[0], id: 'second', name: 'Second seller' });
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    switch (String(input)) {
+      case '/api/state':
+        return response(state);
+      case '/api/billing/workspace':
+        return response({ rule: null, report: null, trackingFrom: null });
+      case '/api/billing/ledgers':
+        return response({ ledgers: [{ externalId: 'sales', name: 'Sales ledger' }] });
+      default:
+        throw new Error('Unexpected request ' + String(input));
+    }
+  });
+  let discard = false;
+  const confirm = t.mock.method(window, 'confirm', () => discard);
+  render(<App />);
+  await screen.findByRole('heading', { name: 'Inventory' });
+  fireEvent.click(screen.getByRole('button', { name: 'Order matching' }));
+  const field = await screen.findByLabelText(
+    'Where do you enter the order reference on the Tally bill?',
+  );
+  fireEvent.change(field, { target: { value: 'manual' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  const seller = screen.getByRole<HTMLInputElement>('combobox', { name: 'Seller account' });
+  assert.ok(within(seller.parentElement!).getByRole('img', { name: 'Flipkart' }));
+  assert.equal(seller.value, state.accounts[0].name);
+  fireEvent.click(seller);
+  const options = within(screen.getByRole('listbox', { name: 'Seller account' }));
+  for (const account of state.accounts) {
+    const option = options.getByRole('option', { name: 'Flipkart ' + account.name });
+    assert.ok(within(option).getByRole('img', { name: 'Flipkart' }));
+  }
+  fireEvent.change(seller, { target: { value: 'second' } });
+  assert.equal(options.getAllByRole('option').length, 1);
+  fireEvent.keyDown(seller, { key: 'Enter' });
+  const company = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Tally company' });
+  fireEvent.change(company, { target: { value: state.companies[1].id } });
+  assert.equal(confirm.mock.callCount(), 3);
+  assert.equal(company.value, state.companies[0].id);
+  assert.equal(seller.value, state.accounts[0].name);
+  assert.equal((field as HTMLSelectElement).value, 'manual');
+  discard = true;
+  fireEvent.click(seller);
+  fireEvent.click(screen.getByRole('option', { name: 'Flipkart Second seller' }));
+  const secondField = await screen.findByLabelText(
+    'Where do you enter the order reference on the Tally bill?',
+  );
+  assert.equal(seller.value, 'Second seller');
+  assert.ok(within(seller.parentElement!).getByRole('img', { name: 'Flipkart' }));
+  fireEvent.change(secondField, { target: { value: 'manual' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  assert.equal(confirm.mock.callCount(), 5);
+  assert.ok(screen.getByRole('heading', { name: 'Settings', level: 1 }));
+});
+
+test('an empty live workspace puts Tally setup first and hides unavailable stock actions', async (t) => {
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
     if (String(input) === '/api/flipkart/connection') return response(disconnectedFlipkart);
     assert.equal(String(input), '/api/state');
@@ -462,22 +584,10 @@ test('an empty live workspace guides the user to connections and disables listin
   });
   render(<App />);
   await screen.findByRole('heading', { name: 'Start with your Tally company' });
-  const seller = screen.getByRole<HTMLInputElement>('combobox', { name: 'Seller account' });
-  assert.equal(seller.disabled, true);
-  assert.equal(seller.placeholder, 'No seller account');
-  assert.equal(within(seller.parentElement!).queryByRole('img'), null);
-  assert.equal(
-    (screen.getByRole('button', { name: 'Calculate' }) as HTMLButtonElement).disabled,
-    true,
-  );
-  assert.equal(
-    (screen.getByRole('button', { name: /Set to zero/ }) as HTMLButtonElement).disabled,
-    true,
-  );
-  assert.equal(
-    (screen.getByRole('button', { name: /Review changes/ }) as HTMLButtonElement).disabled,
-    true,
-  );
+  assert.equal(screen.queryByRole('combobox', { name: 'Seller account' }), null);
+  assert.equal(screen.queryByRole('group', { name: 'Inventory views' }), null);
+  for (const name of ['Calculate', /Set to zero/, /Review changes/])
+    assert.equal(screen.queryByRole('button', { name }), null);
 
   fireEvent.click(screen.getByRole('button', { name: 'View connections' }));
   assert.ok(screen.getByRole('heading', { name: 'Connections', level: 1 }));
@@ -504,6 +614,53 @@ test('Marketplaces opens without a Tally company and hides the company selector'
   assert.ok(screen.getByText('Marketplace edits apply individually'));
   fireEvent.click(screen.getByRole('button', { name: /^Inventory/ }));
   assert.ok(screen.getByLabelText('Tally company'));
+});
+
+test('a company with no stock items retains seller selection and the option to stop company sync', async (t) => {
+  const state = initialState('demo', 'unused');
+  state.items = [];
+  state.listings = [];
+  state.companies[0].automation = true;
+  t.mock.method(globalThis, 'fetch', async () => response(state));
+  render(<App />);
+  const setup = await screen.findByRole('region', { name: 'Inventory setup' });
+  assert.ok(within(setup).getByRole('heading', { name: 'No stock items imported yet' }));
+  const seller = screen.getByRole('combobox', { name: 'Seller account' });
+  assert.ok(setup.compareDocumentPosition(seller) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.ok(screen.getByRole('button', { name: 'Turn off automatic updates' }));
+});
+
+test('Tally discovery errors stay on Connections when the seller opens Marketplaces before or after a failed check', async (t) => {
+  const state = initialState('live', 'unused');
+  let failDiscovery!: (response: Response) => void;
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    if (url === '/api/state') return response(state);
+    if (url === '/api/marketplaces') return response({ accounts: [] });
+    if (url === '/api/refresh')
+      return new Promise<Response>((resolve) => {
+        failDiscovery = resolve;
+      });
+    throw new Error('Unexpected route');
+  });
+  render(<App />);
+  const connections = await screen.findByRole('button', { name: 'Connections' });
+  const marketplaces = screen.getByRole('button', { name: 'Marketplaces' });
+  const failure = 'Tally discovery failed.';
+  fireEvent.click(connections);
+  fireEvent.click(screen.getByRole('button', { name: 'Check & discover companies' }));
+  await act(async () => failDiscovery(response({ error: failure }, 503)));
+  assert.equal(screen.getByRole('alert').textContent, failure);
+  fireEvent.click(connections);
+  assert.equal(screen.getByRole('alert').textContent, failure);
+  fireEvent.click(marketplaces);
+  await screen.findByRole('heading', { name: 'Marketplaces' });
+  assert.equal(screen.queryByRole('alert'), null);
+
+  fireEvent.click(connections);
+  fireEvent.click(screen.getByRole('button', { name: 'Check & discover companies' }));
+  fireEvent.click(marketplaces);
+  await act(async () => failDiscovery(response({ error: failure }, 503)));
+  assert.equal(screen.queryByRole('alert'), null);
 });
 
 test('returning to Inventory immediately loads an added account and its imported listings', async (t) => {
@@ -1842,9 +1999,10 @@ test('a pending Inventory review stays with the screen and seller that requested
     },
   ];
   let finish!: (response: Response) => void;
-  t.mock.method(globalThis, 'fetch', async (url: string) => {
+  t.mock.method(globalThis, 'fetch', async (url: string, options?: RequestInit) => {
     if (url === '/api/state') return response(state);
     assert.equal(url, '/api/review');
+    assert.deepEqual(JSON.parse(String(options?.body)).listingIds, [listing.id]);
     return new Promise<Response>((resolve) => {
       finish = resolve;
     });

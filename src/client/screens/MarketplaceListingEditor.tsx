@@ -1,5 +1,6 @@
 import { MarketplaceSeller } from '../MarketplaceSeller.js';
 import { marketplaceName } from '../../shared/marketplaces.js';
+import { marketplaceEditLimits } from '../../shared/marketplace-contracts.js';
 import { useEffect, useRef, useState } from 'react';
 import type {
   MarketplaceAccount,
@@ -37,7 +38,6 @@ export function MarketplaceListingEditor({
   onOpenInventory,
   onPolicyUpdated,
   onPending,
-  knownChangeIds,
   onFailure,
   onReviewRecovery,
 }: {
@@ -49,14 +49,13 @@ export function MarketplaceListingEditor({
   onOpenInventory: () => void;
   onPolicyUpdated: (listing: MarketplaceListingView) => void;
   onPending: (pending: boolean) => void;
-  knownChangeIds: string[];
   onFailure: (message: string, uncertain: boolean) => void;
   onReviewRecovery: (change: MarketplaceChange) => void;
 }) {
   const provider = marketplaceName(account.marketplace);
   const [listing, setListing] = useState(target.listing);
   const [policyConfirmation, setPolicyConfirmation] = useState(false);
-  const previousChanges = useRef(new Set(knownChangeIds));
+  const requestId = useRef('');
   const [lostResponse, setLostResponse] = useState(false);
   const original =
     target.kind === 'stock'
@@ -82,12 +81,24 @@ export function MarketplaceListingEditor({
   const [confirmedOverride, setConfirmedOverride] = useState(false);
   const submitting = useRef(false);
   const quantity = Number(value);
-  const valid =
-    listing.observedAt !== null &&
-    value.trim() !== '' &&
-    Number.isFinite(quantity) &&
-    quantity >= 0 &&
-    (target.kind !== 'stock' || Number.isSafeInteger(quantity));
+  const limits = marketplaceEditLimits[target.kind];
+  const inRange =
+    Number.isSafeInteger(quantity) && quantity >= limits.min && quantity <= limits.max;
+  const priceConflict =
+    target.kind === 'price' &&
+    (target.field === 'sellingPrice'
+      ? listing.mrp !== null && quantity > listing.mrp
+      : listing.sellingPrice !== null && quantity < listing.sellingPrice);
+  const validationMessage =
+    value.trim() &&
+    (!inRange
+      ? target.kind === 'stock'
+        ? 'Enter a whole stock quantity from 0 to 5,000.'
+        : 'Enter a whole rupee price from ₹1 to ₹10,00,00,000.'
+      : priceConflict
+        ? 'The selling price must not exceed MRP.'
+        : '');
+  const valid = listing.observedAt !== null && value.trim() !== '' && !validationMessage;
   const conflict =
     policy?.policy === 'limited' &&
     valid &&
@@ -151,12 +162,14 @@ export function MarketplaceListingEditor({
     onPending(true);
     setError('');
     try {
+      requestId.current = reconcile && change ? change.id : crypto.randomUUID();
       const result =
         reconcile && change
           ? await marketplaceApi.reconcile(listing.accountId, change.id)
           : await marketplaceApi.apply({
               accountId: listing.accountId,
               listingId: listing.id,
+              requestId: requestId.current,
               version: currentVersion,
               ...(warnOverride &&
                 confirmedOverride && {
@@ -196,30 +209,24 @@ export function MarketplaceListingEditor({
     submitting.current = true;
     setPending(true);
     try {
-      const saved = await marketplaceApi.listings(listing.accountId, listing.sku, '', 1);
-      const current = saved.listings.find((item) => item.id === listing.id);
-      const recorded = saved.changes.find((item) => {
-        if (item.listingId !== listing.id || previousChanges.current.has(item.id)) return false;
-        return target.kind === 'stock'
-          ? item.edit.kind === 'stock' &&
-              item.edit.locationId === target.locationId &&
-              item.edit.quantity === quantity
-          : item.edit.kind === 'price' &&
-              item.edit.field === target.field &&
-              item.edit.value === quantity;
-      });
-      if (!recorded || !current) {
+      const saved = await marketplaceApi.savedResult(
+        listing.accountId,
+        listing.id,
+        requestId.current,
+      );
+      if (!saved) {
         setError(
           'No saved result was found. Refresh this account’s listings before deciding whether to submit again.',
         );
         return;
       }
-      setChange(recorded);
+      const current = saved.listing ?? { ...listing, observedAt: null };
+      setChange(saved.change);
       setListing(current);
       setCurrentVersion(current.version);
       setLostResponse(false);
       setError('');
-      onResult({ change: recorded, listing: current });
+      onResult({ change: saved.change, listing: current });
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -274,8 +281,11 @@ export function MarketplaceListingEditor({
           <span>{label}</span>
           <input
             type="number"
-            min="0"
-            step={target.kind === 'stock' ? '1' : '0.01'}
+            min={limits.min}
+            max={limits.max}
+            step="1"
+            aria-invalid={!!validationMessage}
+            aria-describedby={validationMessage ? 'marketplace-value-error' : undefined}
             value={value}
             disabled={pending || lostResponse || needsReconcile || finished}
             onChange={(event) => {
@@ -285,6 +295,11 @@ export function MarketplaceListingEditor({
             }}
           />
         </label>
+        {validationMessage && (
+          <p id="marketplace-value-error" className="marketplace-error">
+            {validationMessage}
+          </p>
+        )}
         {reviewKey && !finished && !needsReconcile && !lostResponse && (
           <>
             {waitingForReview && !check?.error && (

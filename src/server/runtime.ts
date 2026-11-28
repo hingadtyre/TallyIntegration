@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer as createOwnershipServer, type Server as OwnershipServer } from 'node:net';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Diagnostics } from './diagnostics.js';
 import { FlipkartConnection } from './flipkart-connection.js';
@@ -10,6 +10,8 @@ import { InventoryService } from './service.js';
 import { Store } from './store.js';
 import { MarketplaceService } from './marketplace-service.js';
 import { liveDashboardPort } from '../shared/dashboard-port.js';
+import { isFullyQualifiedPath } from './filesystem-path.js';
+import { WorkspaceInUseError } from './workspace-in-use.js';
 
 type WorkspaceMode = 'live' | 'demo';
 
@@ -26,7 +28,7 @@ export interface RuntimeRecord extends RuntimeHealth {
 }
 
 function requireLocalAbsolutePath(path: string): void {
-  if (!isAbsolute(path) || path.includes('\0') || path.replaceAll('\\', '/').startsWith('//')) {
+  if (!isFullyQualifiedPath(path)) {
     throw new Error(
       'STOCKBRIDGE_DATA_DIR must be an absolute local folder, not a network or device path.',
     );
@@ -81,7 +83,7 @@ export async function acquireWorkspaceOwnership(
     });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-      throw new Error(
+      throw new WorkspaceInUseError(
         `Stockbridge ${mode} is already running for this data folder. Open its dashboard or stop that instance before starting another.`,
         { cause: error },
       );

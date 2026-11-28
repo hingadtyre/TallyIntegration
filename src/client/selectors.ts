@@ -24,6 +24,13 @@ export function inventoryGroups(state: Snapshot, filters: InventoryFilters): Ite
   const query = filters.query.trim().toLocaleLowerCase();
   const drafts =
     filters.view === 'drafts' ? new Set(state.proposals.map((row) => row.listingId)) : null;
+  const byItem = new Map<string, Listing[]>();
+  for (const listing of state.listings) {
+    if (!listing.itemId || (filters.accountId && listing.accountId !== filters.accountId)) continue;
+    const siblings = byItem.get(listing.itemId);
+    if (siblings) siblings.push(listing);
+    else byItem.set(listing.itemId, [listing]);
+  }
   return state.items
     .filter((item) => item.companyId === filters.companyId)
     .filter((item) => filters.view !== 'low' || isLowStock(item))
@@ -32,11 +39,7 @@ export function inventoryGroups(state: Snapshot, filters: InventoryFilters): Ite
       const parentMatches =
         !query ||
         `${item.name} ${item.brand} ${item.externalId}`.toLocaleLowerCase().includes(query);
-      const allChildren = state.listings.filter(
-        (listing) =>
-          listing.itemId === item.id &&
-          (!filters.accountId || listing.accountId === filters.accountId),
-      );
+      const allChildren = byItem.get(item.id) ?? [];
       const listings = allChildren.filter(
         (listing) =>
           (!drafts || drafts.has(listing.id)) &&
@@ -64,7 +67,12 @@ export function actionScope(
   state: Snapshot,
   filters: InventoryFilters,
   selected: string[],
+  filteredGroups?: ItemGroup[],
 ): string[] {
+  if (!selected.length)
+    return (filteredGroups ?? inventoryGroups(state, filters)).flatMap((group) =>
+      group.listings.map((listing) => listing.id),
+    );
   const itemIds = new Set(
     state.items.filter((item) => item.companyId === filters.companyId).map((item) => item.id),
   );
@@ -79,9 +87,5 @@ export function actionScope(
       .map((listing) => listing.id),
   );
   const selection = selected.filter((id) => valid.has(id));
-  return selected.length
-    ? [...new Set(selection)]
-    : inventoryGroups(state, filters).flatMap((group) =>
-        group.listings.map((listing) => listing.id),
-      );
+  return [...new Set(selection)];
 }

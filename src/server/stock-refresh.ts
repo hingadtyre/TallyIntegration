@@ -23,6 +23,8 @@ function mergeStock(state: Snapshot, company: Company, items: TallyStockItem[], 
       const unitChanged = existing.unit !== incoming.unit;
       const metadataChanged = unitChanged || existing.name !== incoming.name;
       const availableAgain = existing.observedAt === null;
+      if (unitChanged && existing.keepBackUnits > 0)
+        existing.keepBackPreviousUnit ??= existing.unit;
       if (balanceChanged || metadataChanged) existing.version++;
       Object.assign(existing, incoming, { observedAt: at });
       if (balanceChanged || metadataChanged || availableAgain) {

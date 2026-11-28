@@ -116,6 +116,9 @@ function item(value: unknown, field: string): StockItem {
     lowStockThreshold: number(row.lowStockThreshold, `${field}.lowStockThreshold`, 0),
     keepBackUnits:
       row.keepBackUnits === undefined ? 0 : number(row.keepBackUnits, `${field}.keepBackUnits`, 0),
+    ...(row.keepBackPreviousUnit != null && {
+      keepBackPreviousUnit: string(row.keepBackPreviousUnit, `${field}.keepBackPreviousUnit`, true),
+    }),
   };
 }
 

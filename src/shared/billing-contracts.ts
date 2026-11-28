@@ -77,7 +77,7 @@ export interface BillingReport {
     name: string;
     unit: string;
     physical: number | null;
-    keepBackUnits: number;
+    keepBackUnits: number | null;
     unmatchedUnits: number | null;
     previewAvailable: number | null;
   }[];

@@ -115,3 +115,41 @@ test('a recovered poll clears its own warning and preserves an unrelated failed 
   await act(async () => t.mock.timers.tick(15000));
   assert.equal(result.current.error, 'Could not save the draft.');
 });
+
+test('changing context preserves the poll error and suppresses both the late backup notice and the history refresh warning', async (t) => {
+  const state = initialState('demo', 'unused');
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let reads = 0;
+  let finishBackup!: (value: Response) => void;
+  t.mock.method(globalThis, 'fetch', async (path: string) => {
+    if (path === '/api/backup')
+      return new Promise<Response>((resolve) => {
+        finishBackup = resolve;
+      });
+    assert.equal(path, '/api/state');
+    reads++;
+    return reads === 2 || reads === 3
+      ? response({ error: 'Workspace unavailable.' }, 503)
+      : response(state);
+  });
+  const { result } = renderHook(() => useWorkspace());
+  await act(async () => {});
+  await act(async () => t.mock.timers.tick(15_000));
+  let backup!: ReturnType<typeof result.current.backUpNow>;
+  act(() => {
+    backup = result.current.backUpNow();
+  });
+  act(() => result.current.clearActionFeedback());
+  assert.equal(result.current.error, 'Workspace unavailable.');
+  await act(async () => {
+    finishBackup(response({ path: 'verified.sqlite', verified: true }));
+    assert.equal((await backup).ok, true);
+  });
+  assert.equal(result.current.error, 'Workspace unavailable.');
+  assert.equal(result.current.notice, '');
+  assert.equal(result.current.busy, '');
+  await act(async () => {
+    await result.current.refreshSnapshot();
+  });
+  assert.equal(result.current.error, '');
+});

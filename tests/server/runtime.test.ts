@@ -51,6 +51,7 @@ test('runtime paths come from the application location and only accept absolute 
   for (const value of [
     '',
     'relative-data',
+    ...(process.platform === 'win32' ? ['/data', '\\data', 'C:data'] : []),
     '\\\\server\\share',
     '//server/share',
     '\\\\?\\C:\\data',
@@ -165,6 +166,7 @@ test('demo startup adds the integration company once and preserves saved demo ch
     body: JSON.stringify({
       companyId: 'demo-integration',
       listingId: pair.id,
+      listingVersion: pair.version,
       leaveRemoteStock: true,
     }),
   });

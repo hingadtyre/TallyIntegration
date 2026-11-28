@@ -18,6 +18,21 @@ type TableName =
   | 'proposals'
   | 'activity';
 
+/** Older workspaces stored the latest observed item unit, which can differ from
+ * the unit used when the seller entered a keep-back. Version 15 also saved
+ * pending unit reviews, but did not distinguish confirmed and inherited amounts. */
+export function markLegacyKeepBackForReview(state: Snapshot, version: number): void {
+  if (version >= 16) return;
+  for (const item of state.items) {
+    if (item.keepBackUnits === 0) {
+      delete item.keepBackPreviousUnit;
+    } else if (version < 15 || item.keepBackPreviousUnit === undefined) {
+      item.keepBackPreviousUnit = '';
+      item.version++;
+    }
+  }
+}
+
 /** Reconstruct the API read model from explicit records. Store supplies a read
  * transaction so all these queries observe the same committed database state. */
 export function readSnapshot(database: DatabaseSync): Snapshot {
@@ -59,6 +74,7 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
     SELECT id, company_id AS companyId, external_id AS externalId, name, brand, unit,
       physical, observed_at AS observedAt, version, low_stock_threshold AS lowStockThreshold,
       ${version >= 12 ? 'keep_back_units' : '0'} AS keepBackUnits
+      ${version >= 15 ? ', keep_back_previous_unit AS keepBackPreviousUnit' : ''}
     FROM stock_items ORDER BY sort_order
   `,
     )
@@ -133,7 +149,7 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
       companyId: row.companyId ?? undefined,
       listingId: row.listingId ?? undefined,
     }));
-  return validateSnapshot(
+  const state = validateSnapshot(
     {
       mode: metadata?.mode,
       publishingEnabled: false,
@@ -148,6 +164,8 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
     },
     { convertLegacyHolds: version < 9 },
   );
+  markLegacyKeepBackForReview(state, version);
+  return state;
 }
 
 /** Identifiers come only from the explicit mappings below, never from user input.
@@ -270,6 +288,7 @@ export function writeSnapshot(database: DatabaseSync, input: Snapshot): void {
       version: item.version,
       low_stock_threshold: item.lowStockThreshold,
       ...(version >= 12 && { keep_back_units: item.keepBackUnits }),
+      ...(version >= 15 && { keep_back_previous_unit: item.keepBackPreviousUnit ?? null }),
       sort_order: index,
     })),
   );

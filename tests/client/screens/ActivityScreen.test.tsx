@@ -40,7 +40,9 @@ test('activity includes global and current-company events and combines search wi
   assert.equal(screen.queryByText('Polling settings saved.'), null);
   assert.ok(screen.getByText('Stock observation is stale.'));
   fireEvent.change(screen.getByLabelText('Activity level'), { target: { value: 'error' } });
-  assert.ok(screen.getByRole('heading', { name: 'No activity to show' }));
+  assert.ok(screen.getByRole('heading', { name: 'No matching activity' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+  assert.ok(screen.getByText('Polling settings saved.'));
   fireEvent.change(screen.getByLabelText('Activity level'), { target: { value: 'warning' } });
   assert.ok(screen.getByText('Stock observation is stale.'));
 });
