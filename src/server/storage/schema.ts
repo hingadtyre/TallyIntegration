@@ -1,12 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 16;
+export const CURRENT_SCHEMA_VERSION = 17;
 
 /** Each managed record has an explicit table. Array order is presentation state,
  * so sort_order is retained without making names or positions into identities. */
 export function createSchema(
   database: DatabaseSync,
-  version: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 = CURRENT_SCHEMA_VERSION,
+  version: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 = CURRENT_SCHEMA_VERSION,
 ): void {
   database.exec(`
     CREATE TABLE app_metadata (
@@ -118,6 +118,14 @@ export function createSchema(
   if (version >= 13) addPendingOrderProposal(database);
   if (version >= 14) createBillingOrdersSchema(database);
   if (version >= 15) addKeepBackPreviousUnit(database);
+  if (version >= 17) addProposalResumeOnPublish(database);
+}
+
+export function addProposalResumeOnPublish(database: DatabaseSync): void {
+  database.exec(`
+    ALTER TABLE proposals ADD COLUMN resume_on_publish INTEGER NOT NULL DEFAULT 0
+      CHECK (resume_on_publish = 0 OR (resume_on_publish = 1 AND edited = 0 AND quantity = calculated))
+  `);
 }
 
 export function addKeepBackPreviousUnit(database: DatabaseSync): void {

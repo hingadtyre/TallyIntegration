@@ -184,13 +184,12 @@ export function useWorkspace() {
   }, []);
 
   const publishReview = useCallback(
-    (reviewId: string, positiveEdits?: 'once' | 'allowance', keepBackOverrides?: string[]) =>
+    (reviewId: string, keepBackOverrides?: string[]) =>
       runAction(
         'Publishing reviewed stock',
         async (reportWarning) => {
           const result = await requestJson<InventoryPublishResult>('/publish', {
             reviewId,
-            positiveEdits,
             keepBackOverrides,
           });
           try {
@@ -205,6 +204,23 @@ export function useWorkspace() {
         '',
       ),
     [runAction, reloadSnapshot],
+  );
+
+  const discardReviewedProposal = useCallback(
+    (reviewId: string, listingId: string) =>
+      runAction(
+        'Discarding proposal',
+        async () => {
+          const { review, snapshot } = await requestJson<{ review: Review; snapshot: Snapshot }>(
+            '/review/discard',
+            { reviewId, listingId },
+          );
+          if (mounted.current) setState(snapshot);
+          return review;
+        },
+        null,
+      ),
+    [runAction],
   );
 
   const refreshSnapshot = useCallback(
@@ -326,6 +342,7 @@ export function useWorkspace() {
     previewAutomation,
     tryAutomation,
     publishReview,
+    discardReviewedProposal,
     backUpNow,
     clearActionFeedback,
     dismissError: () => {

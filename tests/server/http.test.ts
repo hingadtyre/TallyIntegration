@@ -13,6 +13,79 @@ const dashboardHeaders = {
   'X-Stockbridge-Request': '1',
 };
 
+test('Discard clears only the saved proposal from its exact review, including the final row', async (t) => {
+  const f = fixture(t);
+  const app = createApp(f.service, f.folder);
+  const address = await listen(app);
+  t.after(() => close(app));
+  const post = (path: string, body: object) =>
+    fetch(address + '/api/' + path, {
+      method: 'POST',
+      headers: dashboardHeaders,
+      body: JSON.stringify(body),
+    });
+  const ids = ['listing-1', 'listing-2'];
+  await f.service.pause('demo-a', [ids[1]], true);
+  f.service.calculate('demo-a', ids, true);
+  f.service.calculate('demo-a', [ids[1]]);
+  const original = f.store.read();
+  const review = (await (
+    await post('review', { companyId: 'demo-a', listingIds: ids })
+  ).json()) as Review;
+  assert.deepEqual(
+    review.rows.map((r) => [r.canDiscard, r.policy]),
+    [
+      [true, 'Pause Tally sync'],
+      [true, 'Resume Tally sync'],
+    ],
+  );
+  const discard = (reviewId: string, listingId: string) =>
+    post('review/discard', { reviewId, listingId });
+  assert.equal((await discard(review.id, 'listing-3')).status, 409);
+  const first = (await (await discard(review.id, ids[0])).json()) as {
+    review: Review;
+    snapshot: Snapshot;
+  };
+  assert.notEqual(first.review.id, review.id);
+  assert.deepEqual(first.review.rows, [review.rows[1]]);
+  assert.deepEqual(
+    first.snapshot.proposals,
+    original.proposals.filter((r) => r.listingId === ids[1]),
+  );
+  assert.equal((await discard(review.id, ids[1])).status, 409);
+  const last = (await (await discard(first.review.id, ids[1])).json()) as {
+    review: Review;
+    snapshot: Snapshot;
+  };
+  assert.deepEqual(last.review.rows, []);
+  assert.deepEqual(last.snapshot.proposals, []);
+  assert.deepEqual(f.store.read().listings, original.listings);
+  assert.deepEqual(f.store.read().companies, original.companies);
+  assert.deepEqual(f.store.read().items, original.items);
+});
+
+test('an older review cannot discard a replacement draft or publish with a retired policy choice', async (t) => {
+  const f = fixture(t);
+  const app = createApp(f.service, f.folder);
+  const address = await listen(app);
+  t.after(() => close(app));
+  f.service.edit('demo-a', 'listing-1', 0);
+  const review = f.service.review('demo-a', ['listing-1']);
+  f.service.edit('demo-a', 'listing-1', 1);
+  assert.throws(
+    () => f.service.discardReviewProposal(review.id, 'listing-1'),
+    /saved proposal changed/,
+  );
+  const response = await fetch(address + '/api/publish', {
+    method: 'POST',
+    headers: dashboardHeaders,
+    body: JSON.stringify({ reviewId: review.id, positiveEdits: 'once' }),
+  });
+  assert.equal(response.status, 409);
+  assert.match(await response.text(), /Reload Inventory/);
+  assert.equal(f.store.read().proposals[0].quantity, 1);
+});
+
 test('two dashboard windows can save different settings before the next refresh', async (t) => {
   const f = fixture(t);
   const app = createApp(f.service, f.folder);

@@ -139,22 +139,19 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
         </p>
         <p>
           Choose Saved proposals at the top of Inventory to see drafts that still need review.
-          Choose Tally stock items to see all items. Calculate compares each proposal with the last
-          stock observed for that seller, SKU and pickup location. If all calculated quantities
-          match and no listing needs a check, you are done. If some match, review the remaining
-          proposals. An unknown quantity still needs a check. Stockbridge refreshes outdated
-          calculated proposals even on a paused listing. A quantity you enter yourself stays yours
-          to review. Review changes keeps the quantities you saw when it opened. Publish checks each
-          listing again. If a calculated quantity has changed, you can review its new value from the
-          results. Other eligible listings can still publish. For a positive manual edit on an Auto
-          listing, choose Update once. Publishing a zero you entered pauses Tally sync at that
-          location. When Tally stock falls too low to fill a set, Stockbridge can publish a
-          calculated zero and update the listing again after restocking. With automatic updates
-          enabled, a change in Tally stock recalculates eligible listings. A verified marketplace
-          sale can also lower stock on other listings supplied by the same Tally item before the
-          sale is billed. Review any package-count changes in the listing’s Set of cell. If a bulk
-          calculation reports blocked listings, use Fix Set of where offered or review the ready
-          drafts.
+          Choose Tally stock items to see all items. Calculate fills the selected listings with
+          fresh quantities based on Tally stock, reservations, keep-back and Set of. With no
+          selection, it uses all listings matching your filters across pages. Set to zero or Save
+          draft stages a manual quantity. Background refreshes preserve it. Calculate replaces it.
+        </p>
+        <p>
+          In Review changes, check the quantity and the sync action for each pickup location.
+          Publishing a manual quantity pauses sync there. Publishing a verified calculation for a
+          paused listing resumes it, even if its stock already matches. A matching active listing
+          needs no update. Discard clears that row’s saved proposal. Closing review keeps the other
+          drafts. If stock changes before Publish, check the new quantity in the results. Other
+          eligible listings can still publish. If Calculate reports a changed package count, use Fix
+          Set of on that listing or review the ready drafts.
         </p>
       </details>
       <details className="guide-topic">

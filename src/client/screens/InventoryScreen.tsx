@@ -65,7 +65,8 @@ export function InventoryScreen({
   const hasUnsaved = dirtyListings.length > 0;
   useEffect(() => onUnsavedChange(hasUnsaved), [hasUnsaved, onUnsavedChange]);
   const [collapsed, setCollapsed] = useState<string[]>([]);
-  const [review, setReview] = useState<Review | null>(null);
+  // Discard rotates the publish ID while keeping the same dialog and its remaining confirmations.
+  const [review, setReview] = useState<{ openedId: string; value: Review } | null>(null);
   const [automationReview, setAutomationReview] = useState<{
     preview: AutomationPreview;
     trial: boolean;
@@ -209,7 +210,7 @@ export function InventoryScreen({
     if (dirtyListings.length)
       return { ok: false as const, error: 'Save or discard your edits before reviewing.' };
     const result = await workspace.prepareReview(reviewCompanyId, ids);
-    if (result.ok) setReview(result.value);
+    if (result.ok) setReview({ openedId: result.value.id, value: result.value });
     return result;
   }
   async function calculate() {
@@ -736,12 +737,20 @@ export function InventoryScreen({
       </div>
       {active && review && (
         <ReviewDialog
-          key={review.id}
+          key={review.openedId}
           state={state}
-          review={review}
+          review={review.value}
           onClose={() => setReview(null)}
           onPublish={workspace.publishReview}
-          onReviewLatest={(ids) => openReview(ids, review.companyId)}
+          onDiscard={async (reviewId, listingId) => {
+            const result = await workspace.discardReviewedProposal(reviewId, listingId);
+            if (result.ok)
+              setReview((current) =>
+                current?.value.id === reviewId ? { ...current, value: result.value } : current,
+              );
+            return result;
+          }}
+          onReviewLatest={(ids) => openReview(ids, review.value.companyId)}
         />
       )}
       {active && automationReview && !company?.automation && (

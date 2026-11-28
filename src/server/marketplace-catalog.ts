@@ -142,6 +142,7 @@ export function updateInventoryObservations(
     );
     if (existing) {
       existing.title = listing.title;
+      const previousVersion = existing.version;
       const packChanged = observePackageCount(existing, listing);
       if (existing.observed !== location.quantity || packChanged) existing.version++;
       if (
@@ -149,8 +150,16 @@ export function updateInventoryObservations(
         existing.observed !== null &&
         location.quantity !== null &&
         existing.observed !== location.quantity
-      )
+      ) {
         quantityOnlyChanges?.push(existing.id);
+        // A new stock observation leaves the seller's reviewed resume in place.
+        // A prior change to pack, mapping or policy has already advanced the version.
+        if (existing.paused) {
+          const draft = state.proposals.find((row) => row.listingId === existing.id);
+          if (draft?.resumeOnPublish && draft.listingVersion === previousVersion)
+            draft.listingVersion = existing.version;
+        }
+      }
       existing.observed = location.quantity;
       existing.observedAt = listing.observedAt;
       if (

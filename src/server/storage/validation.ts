@@ -9,6 +9,7 @@ import type {
   Snapshot,
   StockItem,
 } from '../../shared/contracts.js';
+import { CURRENT_SCHEMA_VERSION } from './schema.js';
 
 type RecordValue = Record<string, unknown>;
 
@@ -211,13 +212,23 @@ function listing(value: unknown, field: string, legacyHolds?: Set<string>): List
   return result;
 }
 
-function proposal(value: unknown, field: string): Proposal {
+function proposal(value: unknown, field: string, version: number): Proposal {
   const row = record(value, field);
+  const resumeOnPublish = version >= 17 ? row.resumeOnPublish : undefined;
+  if (
+    resumeOnPublish !== undefined &&
+    (resumeOnPublish !== true || row.edited !== false || row.quantity !== row.calculated)
+  )
+    throw new InvalidStoredState(
+      `${field}.resumeOnPublish`,
+      'requires an explicit calculated proposal',
+    );
   return {
     listingId: string(row.listingId, `${field}.listingId`),
     quantity: integer(row.quantity, `${field}.quantity`),
     calculated: integer(row.calculated, `${field}.calculated`),
     edited: boolean(row.edited, `${field}.edited`),
+    ...(resumeOnPublish === true && { resumeOnPublish }),
     itemVersion: integer(row.itemVersion, `${field}.itemVersion`, -1),
     listingVersion: integer(row.listingVersion, `${field}.listingVersion`),
     ruleVersion: string(row.ruleVersion, `${field}.ruleVersion`),
@@ -275,10 +286,10 @@ function unique(values: string[], field: string): Set<string> {
  * Parsing creates detached values; TypeScript assertions cannot validate disk data. */
 export function validateSnapshot(
   value: unknown,
-  options?: { convertLegacyHolds: boolean },
+  version: number = CURRENT_SCHEMA_VERSION,
 ): Snapshot {
   const row = record(value, 'snapshot');
-  const legacyHolds = options?.convertLegacyHolds ? new Set<string>() : undefined;
+  const legacyHolds = version < 9 ? new Set<string>() : undefined;
   if (row.publishingEnabled !== false)
     throw new InvalidStoredState('publishingEnabled', 'must remain false in this build');
   const state: Snapshot = {
@@ -288,7 +299,7 @@ export function validateSnapshot(
     items: array(row.items, 'items', item),
     accounts: array(row.accounts, 'accounts', account),
     listings: array(row.listings, 'listings', (entry, field) => listing(entry, field, legacyHolds)),
-    proposals: array(row.proposals, 'proposals', proposal),
+    proposals: array(row.proposals, 'proposals', (entry, field) => proposal(entry, field, version)),
     activity: array(row.activity, 'activity', activity),
     settings: settings(row.settings),
     connection: connection(row.connection),
@@ -346,5 +357,5 @@ export function parseLegacySnapshot(json: string): Snapshot {
   } catch {
     throw new InvalidStoredState('snapshot', 'is not valid JSON');
   }
-  return validateSnapshot(value, { convertLegacyHolds: true });
+  return validateSnapshot(value, 1);
 }

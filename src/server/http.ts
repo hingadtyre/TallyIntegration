@@ -160,6 +160,8 @@ async function runCommand(
       return service.automationReviews.trial(input.companyId, input.previewId, input.listingId);
     case '/api/review':
       return service.prepareReview(input.companyId, input.listingIds);
+    case '/api/review/discard':
+      return service.discardReviewProposal(input.reviewId, input.listingId);
     case '/api/settings':
       if ('changes' in input) {
         if ('settings' in input) throw new InputError('Send either settings or the edited fields.');
@@ -183,7 +185,12 @@ async function runCommand(
     case '/api/backup':
       return service.backup();
     case '/api/publish':
-      return service.publish(input.reviewId, input.positiveEdits, input.keepBackOverrides);
+      if (input.positiveEdits !== undefined)
+        throw new InputError(
+          'Reload Inventory to review the current Tally sync action before publishing.',
+          409,
+        );
+      return service.publish(input.reviewId, input.keepBackOverrides);
     default:
       throw new InputError('Route not found.', 404);
   }

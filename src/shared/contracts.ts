@@ -95,6 +95,8 @@ export interface Listing {
   version: number;
 }
 export interface Proposal {
+  /** The seller explicitly calculated this paused destination for a reviewed resume. */
+  resumeOnPublish?: boolean;
   /** Read-only reason a calculated proposal needs attention in the current Inventory snapshot. */
   reviewProblem?: string;
   listingId: string;
@@ -113,6 +115,7 @@ export function calculatedStockMatchesObservation(listing: Listing, draft?: Prop
   return (
     !!draft &&
     !draft.edited &&
+    !(listing.paused && draft.resumeOnPublish) &&
     !draft.stale &&
     !draft.reviewProblem &&
     !listing.proposalIssue &&
@@ -177,8 +180,8 @@ export interface ReviewRow {
   keepBackWarning?: MarketplaceKeepBackReview;
   /** Whether the destination was paused when the seller opened this review. */
   paused?: boolean;
-  /** Present for positive manual edits, including null when Update once is eligible. */
-  oneTimeProblem?: string | null;
+  /** The reviewed row has a saved proposal that the seller can discard. */
+  canDiscard?: boolean;
   listingId: string;
   sku: string;
   account: string;

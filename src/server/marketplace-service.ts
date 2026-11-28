@@ -1079,9 +1079,10 @@ export class MarketplaceService {
           return {
             ...identity,
             status: 'unchanged',
-            message:
-              intent.draft?.edited && quantity === 0
-                ? 'Stock is already zero. Tally sync paused for this location.'
+            message: intent.draft?.edited
+              ? `Stock is already ${quantity === 0 ? 'zero' : quantity}. Tally sync paused for this location.`
+              : intent.calculatedReview && intent.draft?.resumeOnPublish
+                ? 'The current marketplace quantity already matches. Tally sync resumed for this location.'
                 : 'The current marketplace quantity already matches.',
           };
         if ('latestQuantity' in result)
@@ -1101,7 +1102,13 @@ export class MarketplaceService {
           result.change.state === 'confirmed' || result.change.state === 'failed'
             ? result.change.state
             : 'uncertain';
-        return { ...identity, status, message: result.change.message };
+        return {
+          ...identity,
+          status,
+          message: intent.draft?.edited
+            ? result.change.message + ' Tally sync paused for this location.'
+            : result.change.message,
+        };
       });
     } catch (error) {
       return {

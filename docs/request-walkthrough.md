@@ -203,7 +203,7 @@ mutate(
   '/proposals',
   { companyId, listingId: listing.id, ...baseline, quantity: amount },
   'Saving draft',
-  'Draft saved. Review it before publication; the active policy has not changed.',
+  'Draft saved. Review and publish when ready.',
 );
 ```
 
@@ -248,22 +248,23 @@ Bodies below use JavaScript shorthand. For example, `{companyId}` means an objec
 | ------------------------------------------------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | [Refresh inventory](../src/client/useWorkspace.ts)                              | POST `/api/inventory/refresh`              | `{companyId?, accountId?}`                                                                                                  | Snapshot with `refresh: {message, partial}`                            |
 | [Discover companies](../src/client/screens/ConnectionsScreen.tsx)               | POST `/api/refresh`                        | `{}`                                                                                                                        | Snapshot after discovery attempt                                       |
-| [Calculate](../src/client/screens/InventoryScreen.tsx)                          | POST `/api/calculate`                      | `{companyId, listingIds}`                                                                                                   | Snapshot and per-listing ready, preserved or blocked results           |
-| [Set to zero](../src/client/screens/InventoryScreen.tsx)                        | POST `/api/zero`                           | `{companyId, listingIds}`                                                                                                   | Snapshot with zero proposals                                           |
+| [Calculate](../src/client/screens/InventoryScreen.tsx)                          | POST `/api/calculate`                      | `{companyId, listingIds}`                                                                                                   | Snapshot and per-listing calculation results                           |
+| [Set to zero](../src/client/screens/InventoryScreen.tsx)                        | POST `/api/zero`                           | `{companyId, listingIds}`                                                                                                   | Snapshot with manual zero drafts                                       |
 | [Save draft](../src/client/screens/InventoryScreen.tsx)                         | POST `/api/proposals`                      | `{companyId, listingId, listingVersion, previousManualQuantity, quantity}`                                                  | Snapshot with saved proposal                                           |
 | [Pause/resume one listing](../src/client/screens/InventoryScreen.tsx)           | POST `/api/pause`                          | `{companyId, listingIds, paused}`                                                                                           | Snapshot with saved listing pause state                                |
 | [Preview company sync](../src/client/screens/AutomationDialog.tsx)              | POST `/api/automation/preview`             | `{companyId}`                                                                                                               | Single-use review of all mapped accounts and locations                 |
 | [Enable or turn off company updates](../src/client/screens/InventoryScreen.tsx) | POST `/api/automation`                     | `{companyId, enabled, previewId}` to enable, `{companyId, enabled: false}` to turn off                                      | Snapshot with the company setting                                      |
 | [Try one listing](../src/client/screens/AutomationDialog.tsx)                   | POST `/api/automation/trial`               | `{companyId, listingId, previewId}`                                                                                         | Publication result for the approved location                           |
 | [Review](../src/client/useWorkspace.ts)                                         | POST `/api/review`                         | `{companyId, listingIds}`                                                                                                   | Captured review with ID and per-row checks                             |
-| [Publish](../src/client/useWorkspace.ts)                                        | POST `/api/publish`, then GET `/api/state` | `{reviewId, positiveEdits?}`                                                                                                | Outcomes by listing destination, then an updated snapshot              |
+| [Discard reviewed row](../src/client/useWorkspace.ts)                           | POST `/api/review/discard`                 | `{reviewId, listingId}`                                                                                                     | Remaining review rows and updated snapshot                             |
+| [Publish](../src/client/useWorkspace.ts)                                        | POST `/api/publish`, then GET `/api/state` | `{reviewId, keepBackOverrides?}`                                                                                            | Outcomes by listing destination, then an updated snapshot              |
 | [Save mapping or Set of](../src/client/screens/MappingDialog.tsx)               | POST `/api/mappings`                       | `{listingId, itemId, listingVersion, expectedUnit, packSource, packSize, sourceScope, tyreFloor, confirmPackEvidence:true}` | Snapshot with the confirmed stock conversion for this listing location |
 | [Unlink](../src/client/screens/InventoryScreen.tsx)                             | POST `/api/mappings/remove`                | `{companyId, listingId, listingVersion, leaveRemoteStock:true}`                                                             | Snapshot with mapping removed                                          |
 | [Save settings](../src/client/screens/SettingsScreen.tsx)                       | POST `/api/settings`                       | `{settings}`                                                                                                                | Snapshot with saved configuration                                      |
 | [Back up now](../src/client/useWorkspace.ts)                                    | POST `/api/backup`, then GET `/api/state`  | `{}` for POST                                                                                                               | `{path, verified:true}`, then the updated snapshot                     |
 | [Read/follow/export diagnostics](../src/client/screens/ActivityScreen.tsx)      | GET `/api/logs`                            | None                                                                                                                        | Plain text from the diagnostic file                                    |
 
-The [HTTP dispatcher](../src/server/http.ts) delegates these commands to the [Inventory service](../src/server/service.ts). A review is a short-lived, single-use capture in memory. Publishing checks the review again against the latest mapping, source, proposal and destination. The [publication rules](../src/server/inventory-publication.ts) distinguish a normal calculation, a manually entered zero that pauses the destination, and a positive manual edit. For positive edits the client can send `positiveEdits: 'once'` to set the absolute amount on an Auto listing. The `'allowance'` choice requests a finite sales allowance and is blocked in live mode until order reconciliation is available.
+A review captures the quantity and intended sync action at each seller location. Publish rechecks the captured proposal, mapping, stock evidence and destination. Manual publication pauses the location. Publishing a verified explicit calculation resumes a paused location under its existing stock policy. Discard checks that the row still has the captured draft before clearing it and returning the rest of the review. [HTTP commands](../src/server/http.ts), [Inventory service](../src/server/service.ts), [publication rules](../src/server/inventory-publication.ts)
 
 The [Review dialog](../src/client/screens/InventoryDialogs.tsx) stays open to report each listing's confirmed, unchanged, blocked, failed or uncertain outcome. The selected company, seller account, filters, checkboxes, row collapse and listing history are local views of the snapshot. The diagnostics screen polls every five seconds while Follow is active. Failed discovery returns retained observations with an offline status. When just one company stock export fails, its own status explains why its saved balance is waiting while other companies can continue. The [client](../src/client/useWorkspace.ts) displays that status and its cause.
 
@@ -295,12 +296,12 @@ SELECT id, company_id, name, physical
 FROM stock_items
 ORDER BY name;
 
-SELECT listing_id, quantity, calculated, edited, created_at
+SELECT listing_id, quantity, calculated, edited, resume_on_publish, created_at
 FROM proposals
 ORDER BY sort_order;
 ```
 
-The first query shows saved physical observations. The second shows saved proposals; `edited = 1` records a manual edit. A backup is a point-in-time copy, so it will not change when the live application later saves something.
+The first query shows saved physical observations. The second shows proposals in a schema-17 backup. An `edited` value of 1 marks a manual quantity. A `resume_on_publish` value of 1 marks an explicitly calculated proposal that will resume its destination after verification. The backup reflects the state at the time it was created.
 
 Use the backup for inspection rather than changing the active workspace file. [The customer guide](customer-setup.md) explains the database and `-wal`/`-shm` companion files; do not delete or separate those companions while Stockbridge is running. Direct SQL edits bypass the application's validation, version changes and activity recording.
 

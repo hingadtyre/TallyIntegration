@@ -134,6 +134,60 @@ function createVersionTwo(file: string, state: Snapshot): void {
   }
 }
 
+test('schema sixteen drafts retain no resume instruction and an explicit calculated resume survives restart', (t) => {
+  const f = fixture(t);
+  const original = legacyState(f.directory);
+  original.proposals.push({
+    ...original.proposals[0],
+    listingId: original.listings[1].id,
+    quantity: 5,
+    edited: false,
+  });
+  original.listings[1].paused = true;
+  queryFile(f.file, (db) => {
+    createSchema(db, 16);
+    db.exec('PRAGMA user_version = 16');
+    writeSnapshot(db, original);
+  });
+  const store = f.open();
+  assert.deepEqual(store.read(), original);
+  assert.ok(store.migrationBackupPath);
+  assert.deepEqual(queryFile(store.migrationBackupPath, readSnapshot), original);
+  store.update((state) => {
+    state.proposals[1].resumeOnPublish = true;
+  });
+  const reopened = f.open().read();
+  assert.deepEqual(reopened.proposals[0], original.proposals[0]);
+  assert.deepEqual(reopened.proposals[1], { ...original.proposals[1], resumeOnPublish: true });
+  assert.equal(reopened.listings[1].paused, true);
+  assert.throws(
+    () =>
+      store.update((state) => {
+        state.proposals[0].resumeOnPublish = true;
+      }),
+    /resumeOnPublish/,
+  );
+  assert.throws(
+    () =>
+      store.update((state) => {
+        state.proposals[1].quantity++;
+      }),
+    /resumeOnPublish/,
+  );
+  assert.deepEqual(store.read(), reopened);
+});
+
+test('an unknown field in a legacy JSON proposal cannot grant permission to resume', (t) => {
+  const f = fixture(t);
+  const original = legacyState(f.directory);
+  original.proposals[0].edited = false;
+  original.proposals[0].quantity = original.proposals[0].calculated;
+  const imported = structuredClone(original);
+  imported.proposals[0].resumeOnPublish = true;
+  createLegacy(f.file, imported);
+  assert.deepEqual(f.open().read(), original);
+});
+
 test('schema eleven items start with zero keep-back without changing drafts or queued stock', (t) => {
   const f = fixture(t);
   const original = legacyState(f.directory);

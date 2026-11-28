@@ -4,6 +4,10 @@
 
 This is the readiness checklist for the first customer delivery. The [approved architecture](design/architecture.md#customer-release-completion) defines the required behavior; [README](../README.md) describes the delivered build; [customer setup](customer-setup.md) describes the available operating steps. Test fixtures establish local behavior, not a live Tally or Flipkart connection.
 
+## Reviewed Inventory stock changes on 28 November 2026
+
+Explicit Calculate replaces saved drafts in the selected or filtered scope. A manual quantity, including zero, stages a pause. A fresh calculation stages a resume for a paused pickup location. The seller can discard individual proposals before publishing. Schema 17 retains the intended action through restart and removes pending resumes on offline restore. Customer acceptance still requires exercising the reviewed flow at an approved Flipkart location. [Review decision](adr/0009-review-stock-and-sync-together.md)
+
 ## Flow audit on 28 November 2026
 
 The audit covered Inventory, Order matching, Marketplaces, Activity, Connections, Settings, backup and restore, and the Windows pilot launcher. High severity identifies a risk of acting on the wrong stock, seller evidence or workspace, or losing a supported recovery path. Medium severity identifies a blocked task, lost work, or a misleading operational result. Low severity identifies a presentation issue.
@@ -56,7 +60,7 @@ The review covered five additional cases within the audit findings above.
 - **High.** If a sale arrives while a seller is reviewing the starting date, saving the older form now asks for a fresh review and preserves the new reservation.
 - **High.** If the browser loses the response to Apply while the original edit is still checking available stock, Reload saved result waits for that specific edit. A duplicate request cannot send it again while it is in progress.
 - **High.** A browser tab opened before an upgrade must reload Inventory before it can remove a mapping or overwrite a draft using outdated details.
-- **Medium.** An older manual draft of 5,100 units stays editable. Calculate flags the 5,000-unit limit and excludes that draft from ready results.
+- **Medium.** In that build an older manual draft of 5,100 units stayed editable and Calculate flagged the 5,000-unit limit. Explicit Calculate now replaces a manual draft when a fresh quantity can be calculated.
 - **Medium.** Starting the same Windows workspace twice during credential initialization now opens the first process’s verified dashboard. Upgrade still verifies the process it started.
 
 Order matching and Inventory also share the seller-account picker. In Chrome, the selected seller and the open list showed the Flipkart logo. The full sample seller label fit at 390 pixels.

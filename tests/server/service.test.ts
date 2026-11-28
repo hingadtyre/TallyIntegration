@@ -55,8 +55,9 @@ test('oversized calculations are blocked while valid manual drafts can still be 
   f.service.edit('demo-a', listing.id, 4999, listing.version, 5100);
   assert.equal(
     (await f.service.calculateAvailable('demo-a', [listing.id])).calculation[0].status,
-    'preserved',
+    'blocked',
   );
+  assert.equal(f.store.read().proposals[0].quantity, 4999);
 });
 
 test('live selectors hide an unused legacy seller without changing its saved name or real companies', (t) => {
@@ -437,18 +438,24 @@ test('an unverified stale proposal keeps its old quantity and reason until the b
   assert.equal(refreshed.listings[0].proposalIssue, undefined);
 });
 
-test('edited quantity and zero drafts survive calculation without activating policies', (t) => {
+test('explicit Calculate replaces selected manual quantities including zero and leaves live policies alone', async (t) => {
   const f = fixture(t);
   const original = f.service.snapshot().listings;
   f.service.edit('demo-a', 'listing-1', 1);
   f.service.calculate('demo-a', ['listing-2'], true);
-  const result = f.service.calculate('demo-a', ['listing-1', 'listing-2', 'listing-3']);
+  f.service.edit('demo-a', 'listing-5', 1);
+  const result = await f.service.calculateAvailable('demo-a', [
+    'listing-1',
+    'listing-2',
+    'listing-3',
+  ]);
   assert.deepEqual(
-    result.proposals.map((row) => [row.listingId, row.quantity, row.edited]),
+    result.proposals.map((row) => [row.listingId, row.quantity, row.edited]).sort(),
     [
-      ['listing-1', 1, true],
-      ['listing-2', 0, true],
+      ['listing-1', 5, false],
+      ['listing-2', 5, false],
       ['listing-3', 5, false],
+      ['listing-5', 1, true],
     ],
   );
   assert.deepEqual(result.listings, original);
@@ -456,7 +463,7 @@ test('edited quantity and zero drafts survive calculation without activating pol
   assert.throws(() => f.service.edit('demo-a', 'listing-1', 6), InputError);
 });
 
-test('a changed source preserves the seller edit but makes its review stale', (t) => {
+test('a changed source marks a manual draft stale until Calculate replaces it', (t) => {
   const f = fixture(t);
   f.service.edit('demo-a', 'listing-1', 1);
   f.store.update((state) => {
@@ -464,13 +471,18 @@ test('a changed source preserves the seller edit but makes its review stale', (t
     item.physical = 0;
     item.version++;
   });
-  const afterCalculate = f.service.calculate('demo-a', ['listing-1']);
-  assert.equal(afterCalculate.proposals[0].quantity, 1);
-  assert.equal(afterCalculate.proposals[0].stale, true);
   const review = f.service.review('demo-a', ['listing-1']);
   assert.equal(review.rows[0].stale, true);
   assert.match(review.rows[0].problem!, /changed/i);
-  f.service.edit('demo-a', 'listing-1', 0);
+  const afterCalculate = f.service.calculate('demo-a', ['listing-1']);
+  assert.deepEqual(
+    [
+      afterCalculate.proposals[0].quantity,
+      afterCalculate.proposals[0].edited,
+      afterCalculate.proposals[0].stale,
+    ],
+    [0, false, false],
+  );
   assert.equal(f.service.review('demo-a', ['listing-1']).rows[0].problem, null);
 });
 
@@ -508,8 +520,8 @@ test('paused listings calculate the current target and retain sales allowances a
   assert.deepEqual(
     review.rows.map((row) => [row.quantity, row.policy, row.problem]),
     [
-      [5, 'Tally sync paused', null],
-      [1, 'Tally sync paused · 1 sale remaining', null],
+      [5, 'Resume Tally sync', null],
+      [1, 'Resume Tally sync · 1 sale remaining', null],
     ],
   );
   f.service.edit('demo-a', 'listing-5', 0);

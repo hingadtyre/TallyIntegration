@@ -64,6 +64,7 @@ type PublicationEvidence = {
   keepBack?: Awaited<ReturnType<typeof checkManualKeepBack>>;
 };
 type RecheckedQuantity = { latestQuantity: number; alreadyCurrent: boolean };
+type ReviewedResume = { intent: InventoryIntent; evidence?: PublicationEvidence };
 
 export function blocksListing(change: MarketplaceChange, accountId: string, listingId: string) {
   return (
@@ -285,15 +286,35 @@ export class MarketplacePublication {
     return this.checkKeepBack(accountId, { ...input, locationId: edit.locationId });
   }
 
-  private saveObservation(listing: MarketplaceListing): void {
+  private saveObservation(listing: MarketplaceListing, resume?: ReviewedResume): boolean {
     const quantityChanges: string[] = [];
-    this.store.updateMarketplace((data, state) => {
+    const resumed = this.store.updateMarketplace((data, state) => {
       const current = findMarketplaceListing(data, listing.accountId, listing.id);
+      let resumed = false;
+      if (resume) {
+        // Check the saved draft and destination in the same transaction that resumes it.
+        // Validate against the version before recording our own numeric observation.
+        try {
+          const target = inventoryTarget(state, resume.intent, listing, resume.evidence?.available);
+          if (
+            target.quantity === resume.intent.draft?.quantity &&
+            (target.listing.packSource !== 'packages' ||
+              listing.packageCount === target.listing.packSize)
+          ) {
+            activateInventoryIntent(state, resume.intent, target.listing);
+            resumed = true;
+          }
+        } catch (error) {
+          if (!(error instanceof InputError)) throw error;
+        }
+      }
       const updated = { ...listing, version: current.version + 1 };
       data.listings[data.listings.indexOf(current)] = updated;
       updateInventoryObservations(state, updated, quantityChanges);
+      return resumed;
     });
     this.recordQuantityChanges(quantityChanges);
+    return resumed;
   }
 
   private finish(
@@ -485,7 +506,9 @@ export class MarketplacePublication {
         intent.draft?.listingVersion !== intent.listingVersion);
     const quantityChanged =
       calculatedReview && edit.kind === 'stock' && intent.draft?.quantity !== edit.quantity;
-    const alreadyCurrent = !!calculatedReview && matchesEdit(before, edit);
+    const alreadyCurrent = !!intent?.draft && matchesEdit(before, edit);
+    const resume =
+      calculatedReview && intent.draft?.resumeOnPublish ? { intent, evidence } : undefined;
     if (
       !orderStockDrift &&
       !alreadyCurrent &&
@@ -568,8 +591,7 @@ export class MarketplacePublication {
       // determines whether this direct edit locks a destination.
       if (!intent && edit.kind === 'stock')
         edit.automation = destinations.some((row) => row.itemId !== null) ? 'pause' : 'once';
-      if (intent?.draft?.edited && edit.kind === 'stock' && edit.quantity === 0)
-        edit.automation = 'pause';
+      if (intent?.draft?.edited && edit.kind === 'stock') edit.automation = 'pause';
       // Only an unlocked Inventory publication can leave automatic work to retry.
       const pending =
         intent && edit.kind === 'stock' && edit.automation !== 'pause'
@@ -612,7 +634,7 @@ export class MarketplacePublication {
               target.listing.syncPendingItemVersion !== calculatedReview.syncPendingItemVersion) ||
             (target.listing.orderSyncPending != null &&
               target.listing.orderSyncPending !== calculatedReview.orderSyncPending));
-        if (saved && (quantityChanged || (alreadyCurrent && newerWork))) {
+        if (saved && (quantityChanged || (alreadyCurrent && newerWork && !resume))) {
           // Refresh the saved calculation only. This review cannot consume a newer sync
           // marker or authorize dispatch of any quantity the seller has not seen.
           if (!sameBaseline(latest, before, edit)) {
@@ -626,11 +648,14 @@ export class MarketplacePublication {
               prepareProposal(state, target.listing, undefined, evidence?.available),
             );
           delete target.listing.proposalIssue;
-          return { latestQuantity: target.quantity, alreadyCurrent };
+          return { latestQuantity: target.quantity, alreadyCurrent: alreadyCurrent && !resume };
         }
-        activateInventoryIntent(state, intent, target.listing);
-        if (matchesEdit(before, edit)) {
-          if (intent.orderOnly || intent.trial) {
+        const matched = matchesEdit(before, edit);
+        // A resumable draft and its pause stay in place across the remote write,
+        // including timeouts and restarts. A fresh confirmation consumes both.
+        if (!resume || matched) activateInventoryIntent(state, intent, target.listing);
+        if (matched) {
+          if (intent.orderOnly || intent.trial || !sameBaseline(latest, before, edit)) {
             const updated = { ...before, version: latest.version + 1 };
             current.listings[current.listings.indexOf(latest)] = updated;
             updateInventoryObservations(state, updated, quantityChanges);
@@ -699,7 +724,7 @@ export class MarketplacePublication {
       };
     }
     if ('latestQuantity' in consumedWork) return consumedWork;
-    return this.dispatch(change, token, before, expected, consumedWork, firstPickupWrite);
+    return this.dispatch(change, token, before, expected, consumedWork, firstPickupWrite, resume);
   }
 
   private async dispatch(
@@ -709,6 +734,7 @@ export class MarketplacePublication {
     expected: MarketplaceListing,
     consumedWork: PendingStockSync[],
     firstPickupWrite = false,
+    resume?: ReviewedResume,
   ) {
     const { accountId, edit } = change;
     this.finish(change.id, 'sending', 'Applying update.');
@@ -751,26 +777,40 @@ export class MarketplacePublication {
       [],
       'completed',
     );
-    return this.observe(completed, token, token === null ? expected : before);
+    return this.observe(completed, token, token === null ? expected : before, resume);
   }
 
   private async observe(
     change: MarketplaceChange,
     token: string | null,
     fallback: MarketplaceListing,
+    resume?: ReviewedResume,
   ): Promise<MarketplaceApplyResult> {
     let confirmed = false;
+    let resumeMessage = '';
     try {
       const listing =
         token === null
           ? { ...fallback, observedAt: new Date().toISOString() }
-          : await this.client.getListing(token, fallback);
+          : await this.client.getListing(token, fallback, { requireCurrentStatus: !!resume });
       if (!sameListingIdentity(fallback, listing))
         throw new InputError('The listing identity changed.', 409);
       const matches = matchesEdit(listing, change.edit);
-      this.saveObservation(listing);
-      confirmed =
+      const verified =
         matches && (change.edit.kind !== 'stock' || change.stockRequestFinality === 'completed');
+      let eligibleResume = verified ? resume : undefined;
+      try {
+        eligibleResume?.evidence?.verify();
+      } catch (error) {
+        if (!(error instanceof InputError)) throw error;
+        eligibleResume = undefined;
+      }
+      const resumed = this.saveObservation(listing, eligibleResume);
+      if (verified && resume)
+        resumeMessage = resumed
+          ? ' Tally sync resumed for this location.'
+          : ' The review changed during publication. Its requested sync change was skipped.';
+      confirmed = verified;
     } catch {
       // A read failure cannot prove that the preceding write failed.
     }
@@ -778,9 +818,9 @@ export class MarketplacePublication {
       change.id,
       confirmed ? 'confirmed' : 'uncertain',
       confirmed
-        ? token === null
-          ? 'Sample value updated. No marketplace was contacted.'
-          : 'Updated value confirmed by a fresh listing check.'
+        ? (token === null
+            ? 'Sample value updated. No marketplace was contacted.'
+            : 'Updated value confirmed by a fresh listing check.') + resumeMessage
         : 'The marketplace has not confirmed the stock or price outcome. Check result before making another change.',
     );
     return {

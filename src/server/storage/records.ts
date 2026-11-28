@@ -131,11 +131,17 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
     SELECT listing_id AS listingId, quantity, calculated, edited,
       item_version AS itemVersion, listing_version AS listingVersion,
       rule_version AS ruleVersion, created_at AS createdAt, stale
+      ${version >= 17 ? ', resume_on_publish AS resumeOnPublish' : ''}
     FROM proposals ORDER BY sort_order
   `,
     )
     .all()
-    .map((row) => ({ ...row, edited: row.edited === 1, stale: row.stale === 1 }));
+    .map((row) => ({
+      ...row,
+      edited: row.edited === 1,
+      stale: row.stale === 1,
+      resumeOnPublish: row.resumeOnPublish === 1 ? true : undefined,
+    }));
   const activity = database
     .prepare(
       `
@@ -162,7 +168,7 @@ export function readSnapshot(database: DatabaseSync): Snapshot {
       settings,
       connection,
     },
-    { convertLegacyHolds: version < 9 },
+    version,
   );
   markLegacyKeepBackForReview(state, version);
   return state;
@@ -365,6 +371,7 @@ export function writeSnapshot(database: DatabaseSync, input: Snapshot): void {
       quantity: proposal.quantity,
       calculated: proposal.calculated,
       edited: Number(proposal.edited),
+      ...(version >= 17 && { resume_on_publish: Number(proposal.resumeOnPublish === true) }),
       item_version: proposal.itemVersion,
       listing_version: proposal.listingVersion,
       rule_version: proposal.ruleVersion,

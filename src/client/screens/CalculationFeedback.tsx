@@ -22,12 +22,11 @@ export function CalculationFeedback({
     const listing = listings.get(row.listingId);
     return listing && (listing.observed === null || !listing.observedAt);
   }).length;
-  const preserved = rows.filter((row) => row.status === 'preserved').length;
   const blocked = rows.filter((row) => row.status === 'blocked');
   const packOnly = blocked.every((row) => row.fix === 'pack');
   const summary: string[] = [];
   if (matched) summary.push(formatStockMatches(matched));
-  const toPublish = ready.length + preserved - matched - unchecked;
+  const toPublish = ready.length - matched - unchecked;
   if (matched || unchecked) {
     if (toPublish || !unchecked) summary.push(`${toPublish} to publish`);
   } else {
@@ -35,7 +34,6 @@ export function CalculationFeedback({
   }
   if (unchecked)
     summary.push(`${unchecked} ${unchecked === 1 ? 'needs' : 'need'} a Flipkart check`);
-  if (preserved) summary.push(`${preserved} edited draft${preserved === 1 ? '' : 's'} kept`);
   if (blocked.length)
     summary.push(
       `${blocked.length} listing${blocked.length === 1 ? ' needs' : 's need'} ${packOnly ? 'Set of confirmation' : 'attention'}`,

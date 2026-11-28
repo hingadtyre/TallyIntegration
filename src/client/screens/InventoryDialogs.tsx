@@ -38,6 +38,7 @@ export function ReviewDialog({
   review,
   onClose,
   onPublish,
+  onDiscard,
   onReviewLatest,
 }: {
   state: Snapshot;
@@ -45,43 +46,16 @@ export function ReviewDialog({
   onClose: () => void;
   onPublish: (
     reviewId: string,
-    positiveEdits?: 'once' | 'allowance',
     keepBackOverrides?: string[],
   ) => Promise<ActionResult<InventoryPublishResult>>;
+  onDiscard: (reviewId: string, listingId: string) => Promise<ActionResult<Review>>;
   onReviewLatest: (listingIds: string[]) => Promise<ActionResult<Review>>;
 }) {
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<'publish' | 'discard' | 'review' | null>(null);
   const [result, setResult] = useState<InventoryPublishResult | null>(null);
   const [error, setError] = useState('');
   const [confirmed, setConfirmed] = useState<string[]>([]);
-  const [positiveEdits, setPositiveEdits] = useState<'once' | 'allowance' | undefined>(
-    state.mode === 'demo' ? 'allowance' : undefined,
-  );
-  const hasPositiveEdits = review.rows.some(
-    (row) =>
-      row.oneTimeProblem !== undefined &&
-      !row.stale &&
-      (!row.oneTimeProblem || (state.mode === 'demo' && !row.problem)),
-  );
-  const rows = review.rows.map((row) => {
-    if (row.oneTimeProblem === undefined || positiveEdits === 'allowance') return row;
-    if (!positiveEdits && row.oneTimeProblem) return { ...row, problem: row.oneTimeProblem };
-    if (!positiveEdits)
-      return {
-        ...row,
-        problem: 'Choose how to publish positive edits.',
-        policy: 'Awaiting choice',
-      };
-    return {
-      ...row,
-      problem: row.oneTimeProblem,
-      policy: row.oneTimeProblem
-        ? 'Update once unavailable'
-        : row.paused
-          ? 'Tally sync paused · update once'
-          : 'Auto · update once',
-    };
-  });
+  const rows = review.rows;
   const outcomes = new Map(result?.rows.map((entry) => [entry.listingId, entry]));
   const changed = review.rows.flatMap((row) => {
     const outcome = outcomes.get(row.listingId);
@@ -95,39 +69,51 @@ export function ReviewDialog({
     review.publishingEnabled &&
     eligible.length > 0 &&
     warnings.every(({ row }) => confirmed.includes(row.listingId)) &&
-    (!hasPositiveEdits || !!positiveEdits) &&
     !pending &&
     !result &&
     !error;
   async function publish() {
     if (!canPublish) return;
-    setPending(true);
+    setPending('publish');
     const outcome = await onPublish(
       review.id,
-      hasPositiveEdits ? positiveEdits : undefined,
       warnings.length ? warnings.map(({ row }) => row.listingId) : undefined,
     );
-    setPending(false);
+    setPending(null);
     if (outcome.ok) setResult(outcome.value);
-    else setError(outcome.error);
+    else
+      setError(
+        outcome.error +
+          ' Check Activity and the latest marketplace stock before preparing another review.',
+      );
+  }
+  async function discard(listingId: string) {
+    if (pending || result || error) return;
+    setPending('discard');
+    const next = await onDiscard(review.id, listingId);
+    if (!next.ok) setError(next.error + ' Return to Inventory to review the latest proposals.');
+    setPending(null);
   }
   async function reviewLatest() {
     if (pending || !changed.length) return;
     setError('');
-    setPending(true);
+    setPending('review');
     const next = await onReviewLatest(changed.map((row) => row.listingId));
-    setPending(false);
+    setPending(null);
     if (!next.ok) setError(next.error);
   }
   const company = state.companies.find((entry) => entry.id === review.companyId);
   const currentListings = changed.length
     ? new Map(state.listings.map((listing) => [listing.id, listing]))
     : null;
-  if (!rows.length && review.matchedCount) {
+  if (!rows.length) {
     return (
       <Modal title="Review proposed stock" onClose={onClose}>
         <p className="modal-intro" role="status">
-          {formatStockMatches(review.matchedCount)} · 0 to publish
+          {review.matchedCount
+            ? formatStockMatches(review.matchedCount)
+            : 'No proposals left in this review'}{' '}
+          · 0 to publish
         </p>
         <div className="modal-actions">
           <button className="button secondary" onClick={onClose}>
@@ -175,41 +161,9 @@ export function ReviewDialog({
           {state.mode === 'demo'
             ? 'This sample publication uses local data.'
             : 'Publishing sends eligible quantities to the reviewed listings.'}{' '}
-          These quantities stay fixed while Inventory updates. Publish skips calculated quantities
-          that have changed.
+          Discard a proposal to remove it from Inventory. Publish applies the quantities and sync
+          changes shown below and skips calculations that have changed since review.
         </p>
-      )}
-      {hasPositiveEdits && !result && (
-        <fieldset className="pack-fields" disabled={pending || !!error}>
-          <legend>Positive stock edits</legend>
-          <label className="checkbox-label">
-            <input
-              type="radio"
-              name="positive-edits"
-              checked={positiveEdits === 'once'}
-              onChange={() => setPositiveEdits('once')}
-            />
-            <span>
-              <strong>Update once</strong> · Set the reviewed quantity. With automatic updates on, a
-              Tally stock change can replace it and a verified marketplace sale can lower it.
-            </span>
-          </label>
-          <label className="checkbox-label">
-            <input
-              type="radio"
-              name="positive-edits"
-              disabled={state.mode === 'live'}
-              checked={positiveEdits === 'allowance'}
-              onChange={() => setPositiveEdits('allowance')}
-            />
-            <span>
-              <strong>Allow this many more sales</strong> · Limit future sales to the edited
-              quantity.{' '}
-              {state.mode === 'live' &&
-                'Live sales allowances require order tracking and are unavailable.'}
-            </span>
-          </label>
-        </fieldset>
       )}
       <div className="review-table-wrap stock-review">
         <table className="review-table">
@@ -219,7 +173,7 @@ export function ReviewDialog({
               <th scope="col">Observed</th>
               <th scope="col">{result ? 'Reviewed' : 'Proposed'}</th>
               <th scope="col">{result ? 'Reviewed policy' : 'After publishing'}</th>
-              {result && <th scope="col">Publication result</th>}
+              <th scope="col">{result ? 'Publication result' : 'Action'}</th>
             </tr>
           </thead>
           <tbody>
@@ -262,6 +216,21 @@ export function ReviewDialog({
                     </span>
                     {row.policy}
                   </td>
+                  {!result && (
+                    <td>
+                      {row.canDiscard && (
+                        <button
+                          className="text-button"
+                          type="button"
+                          aria-label={`Discard proposal for ${row.sku} at ${row.location}`}
+                          disabled={!!pending || !!error}
+                          onClick={() => void discard(row.listingId)}
+                        >
+                          Discard proposal
+                        </button>
+                      )}
+                    </td>
+                  )}
                   {result && (
                     <td>
                       <span className="review-cell-label" aria-hidden="true">
@@ -296,7 +265,7 @@ export function ReviewDialog({
         </table>
       </div>
       {!result && warnings.length > 0 && (
-        <fieldset className="pack-fields" disabled={pending || !!error}>
+        <fieldset className="pack-fields" disabled={!!pending || !!error}>
           <legend>Confirm manual stock override</legend>
           {warnings.map(({ row, warning }) => {
             const held = formatQuantity(warning.keepBackUnits) + ' ' + warning.unit;
@@ -334,18 +303,17 @@ export function ReviewDialog({
       )}
       {error && (
         <p className="message error" role="alert">
-          {error}{' '}
-          {!result &&
-            'Check Activity and the latest marketplace stock before preparing another review.'}
+          {error}
         </p>
       )}
       <div className="modal-actions">
-        <button className="button secondary" onClick={onClose} disabled={pending}>
+        {pending === 'discard' && <span role="status">Discarding proposal…</span>}
+        <button className="button secondary" onClick={onClose} disabled={!!pending}>
           Back to inventory
         </button>
         {!result && (
           <button className="button primary" disabled={!canPublish} onClick={() => void publish()}>
-            {pending
+            {pending === 'publish'
               ? 'Publishing…'
               : !review.publishingEnabled
                 ? 'Publish unavailable'
@@ -353,7 +321,11 @@ export function ReviewDialog({
           </button>
         )}
         {changed.length > 0 && (
-          <button className="button primary" disabled={pending} onClick={() => void reviewLatest()}>
+          <button
+            className="button primary"
+            disabled={!!pending}
+            onClick={() => void reviewLatest()}
+          >
             {pending
               ? 'Preparing review…'
               : changed.length === 1

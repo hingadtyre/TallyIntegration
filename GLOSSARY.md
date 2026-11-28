@@ -97,7 +97,7 @@ The seller’s permission for Stockbridge to publish automatic stock updates for
 A seller-approved publication of the calculated stock for one mapped listing at one seller location while company sync is off.
 
 **Automation pause**:
-A stop of all automatic stock publication for one seller's marketplace listing at one location, including zero updates, until the seller resumes sync. Applying a manually entered zero pauses that destination. A zero calculated from available stock can be published while sync continues. The seller can still review and publish a quantity while paused, and Flipkart can still record sales.
+A stop of automatic stock publication for one seller's listing at one location. Saving a manual proposal leaves sync untouched. Publishing a manual quantity, including zero, pauses that destination. Flipkart can still record sales. Publishing a verified explicit calculation for a paused destination resumes its sync under the company setting.
 _Avoid_: Disabled listing, deleted mapping
 
 **Manual override**:
@@ -115,7 +115,7 @@ The stock quantity last read from a marketplace for a listing at a particular se
 _Avoid_: Live stock when the value has not just been verified
 
 **Proposed stock**:
-A quantity prepared for review before publication to a marketplace. Resuming sync replaces the saved proposal for that location with a fresh calculation. Observed marketplace stock is the quantity last seen at the location.
+A quantity prepared for review before publication to a marketplace. A manual proposal stages a pause. Calculate replaces it with a fresh quantity and stages a resume for a paused destination. A background refresh preserves the seller's manual draft. Discard in review clears only that destination's saved proposal. Observed stock is the quantity last seen at the marketplace location.
 
 **Stock publication**:
 An attempt to send a proposed stock quantity to a marketplace. A sent request and a confirmed marketplace update are distinct outcomes.

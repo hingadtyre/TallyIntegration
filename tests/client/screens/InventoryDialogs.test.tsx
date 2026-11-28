@@ -390,7 +390,6 @@ test('choosing a manual keep-back override explicitly approves only the affected
             policy: 'Auto',
             stale: false,
             problem: null,
-            oneTimeProblem: null,
             keepBackWarning: {
               itemName: 'Tyre',
               unit: 'tyres',
@@ -401,8 +400,9 @@ test('choosing a manual keep-back override explicitly approves only the affected
           },
         ],
       }}
+      onDiscard={async () => assert.fail('Unexpected discard')}
       onClose={() => {}}
-      onPublish={async (_id, _mode, overrides) => {
+      onPublish={async (_id, overrides) => {
         submitted.push(overrides);
         return { ok: true, value: { rows: [] } };
       }}
@@ -461,6 +461,7 @@ test('review reports stale or blocked destinations and keeps publication unavail
           },
         ],
       }}
+      onDiscard={async () => assert.fail('Unexpected discard')}
       onClose={() => {}}
       onPublish={async () => {
         throw new Error('A blocked review cannot publish');
@@ -478,10 +479,10 @@ test('review reports stale or blocked destinations and keeps publication unavail
   );
 });
 
-test('choosing Update once on a paused listing keeps the pause visible and submits the reviewed quantity once', async () => {
+test('a positive manual stock edit shows the reviewed pause and publishes without a policy choice', async () => {
   const state = initialState('demo', 'unused');
   state.mode = 'live';
-  const modes: unknown[] = [];
+  const published: unknown[] = [];
   render(
     <ReviewDialog
       state={state}
@@ -498,17 +499,16 @@ test('choosing Update once on a paused listing keeps the pause visible and submi
             location: 'Warehouse',
             quantity: 2,
             observed: 4,
-            policy: 'Allow 2 more sales',
+            policy: 'Pause Tally sync',
             stale: false,
-            paused: true,
-            problem: 'Sales allowances require order tracking.',
-            oneTimeProblem: null,
+            problem: null,
           },
         ],
       }}
+      onDiscard={async () => assert.fail('Unexpected discard')}
       onClose={() => {}}
-      onPublish={async (id, mode) => {
-        modes.push([id, mode]);
+      onPublish={async (id, overrides) => {
+        published.push([id, overrides]);
         return {
           ok: true,
           value: {
@@ -523,22 +523,75 @@ test('choosing Update once on a paused listing keeps the pause visible and submi
           },
         };
       }}
-      onReviewLatest={async () => assert.fail('An update once cannot retry a calculated quantity')}
+      onReviewLatest={async () => assert.fail('No changed calculation')}
     />,
   );
-  assert.equal(
-    (screen.getByRole('button', { name: 'Publish 0 eligible listings' }) as HTMLButtonElement)
-      .disabled,
-    true,
-  );
-  assert.equal((screen.getByLabelText(/Update once/) as HTMLInputElement).checked, false);
-  assert.ok((screen.getByLabelText(/Allow this many more sales/) as HTMLInputElement).disabled);
-  fireEvent.click(screen.getByLabelText(/Update once/));
-  assert.equal(screen.queryByText('Sales allowances require order tracking.'), null);
-  assert.ok(screen.getByText('Tally sync paused · update once'));
+  assert.equal(screen.queryByRole('radio'), null);
+  assert.ok(screen.getByText('Pause Tally sync'));
   fireEvent.click(screen.getByRole('button', { name: 'Publish 1 eligible listing' }));
   await screen.findByText('Readback confirmed two sets.');
-  assert.deepEqual(modes, [['positive-review', 'once']]);
+  assert.deepEqual(published, [['positive-review', undefined]]);
+});
+
+test('a pending discard locks publish and a stale discard keeps the latest saved proposal out of reach', async () => {
+  const state = initialState('demo', 'unused');
+  let finishDiscard!: () => void;
+  const response = new Promise<void>((resolve) => {
+    finishDiscard = resolve;
+  });
+  let attempts = 0;
+  render(
+    <ReviewDialog
+      state={state}
+      review={{
+        id: 'captured',
+        companyId: 'demo-a',
+        createdAt: new Date().toISOString(),
+        publishingEnabled: true,
+        rows: [
+          {
+            listingId: 'first',
+            sku: 'TYRE',
+            account: 'Seller',
+            location: 'North',
+            quantity: 3,
+            observed: 5,
+            policy: 'Pause Tally sync',
+            canDiscard: true,
+            stale: false,
+            problem: null,
+          },
+        ],
+      }}
+      onDiscard={async (reviewId, listingId) => {
+        assert.deepEqual([reviewId, listingId], ['captured', 'first']);
+        attempts++;
+        await response;
+        return { ok: false, error: 'The proposal changed. Open a fresh review.' };
+      }}
+      onClose={() => assert.fail('Cannot close during discard')}
+      onPublish={async () => assert.fail('Cannot publish during or after a stale discard')}
+      onReviewLatest={async () => assert.fail('No new quantity to review')}
+    />,
+  );
+  const discard = screen.getByRole<HTMLButtonElement>('button', {
+    name: /Discard proposal for TYRE at North/,
+  });
+  const publish = screen.getByRole<HTMLButtonElement>('button', {
+    name: 'Publish 1 eligible listing',
+  });
+  fireEvent.click(discard);
+  assert.ok(publish.disabled);
+  assert.ok(discard.disabled);
+  assert.ok(screen.getByRole<HTMLButtonElement>('button', { name: 'Back to inventory' }).disabled);
+  fireEvent.click(publish);
+  fireEvent.click(discard);
+  finishDiscard();
+  assert.match((await screen.findByRole('alert')).textContent ?? '', /proposal changed/);
+  assert.ok(publish.disabled);
+  assert.ok(discard.disabled);
+  assert.equal(attempts, 1);
+  assert.ok(screen.getByText('TYRE'));
 });
 
 test('a blocked manual edit allows other live rows to proceed and an expired review cannot be sent again', async () => {
@@ -570,23 +623,23 @@ test('a blocked manual edit allows other live rows to proceed and an expired rev
             ...destination,
             listingId: 'manual',
             sku: 'HELD',
-            policy: 'Limited sales',
-            problem: 'Live allowances are unavailable.',
-            oneTimeProblem: 'Update once requires Auto.',
+            policy: 'Pause Tally sync',
+            problem: 'Confirm the pack size.',
           },
         ],
       }}
+      onDiscard={async () => assert.fail('Unexpected discard')}
       onClose={() => {}}
-      onPublish={async (id, mode) => {
+      onPublish={async (id, overrides) => {
         attempts++;
         assert.equal(id, 'old-review');
-        assert.equal(mode, undefined);
+        assert.equal(overrides, undefined);
         return { ok: false, error: 'Open a fresh Inventory review before publishing.' };
       }}
       onReviewLatest={async () => assert.fail('An expired review has no verified replacement.')}
     />,
   );
-  assert.ok(screen.getByText('Update once requires Auto.'));
+  assert.ok(screen.getByText('Confirm the pack size.'));
   assert.equal(screen.queryByRole('group', { name: 'Positive stock edits' }), null);
   const publish = screen.getByRole('button', {
     name: 'Publish 1 eligible listing',

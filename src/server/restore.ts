@@ -275,6 +275,7 @@ function restoredSnapshot(
   for (const account of restored.accounts)
     account.status = restored.mode === 'demo' ? 'demo' : 'not-connected';
   for (const proposal of restored.proposals) {
+    delete proposal.resumeOnPublish;
     proposal.itemVersion = -1;
     proposal.stale = true;
   }

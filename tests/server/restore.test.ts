@@ -251,6 +251,22 @@ test('offline restore preserves local settings and a verified safety copy while 
     assert.equal(existsSync(f.destination + suffix), false);
 });
 
+test('offline restore keeps a calculated proposal for review and clears the instruction to resume', async (t) => {
+  const f = fixture(t);
+  customizeBackup(f.backupFile, (db) => {
+    db.exec('UPDATE listings SET paused = 1');
+    db.exec('UPDATE proposals SET quantity = calculated, edited = 0, resume_on_publish = 1');
+  });
+  const saved = queryFile(f.backupFile, readSnapshot).proposals[0];
+  assert.equal(saved.resumeOnPublish, true);
+  await restorePilotBackup(restoreOptions(f));
+  const restored = queryFile(f.destination, readSnapshot);
+  assert.equal(restored.proposals[0].quantity, saved.quantity);
+  assert.equal(restored.proposals[0].resumeOnPublish, undefined);
+  assert.equal(restored.proposals[0].stale, true);
+  assert.equal(restored.listings.find((row) => row.id === saved.listingId)?.paused, true);
+});
+
 test('confirmation and the inspected digest are required before any replacement', async (t) => {
   const f = fixture(t);
   const options = restoreOptions(f);

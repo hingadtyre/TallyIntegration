@@ -124,12 +124,12 @@ export function invalidateReservationDrafts(state: Snapshot, itemIds: Set<string
 }
 
 export function describeReviewPolicy(listing: Listing, draft?: Proposal): string {
-  const paused = listing.paused || (draft?.edited && draft.quantity === 0);
-  if (draft?.edited && draft.quantity > 0)
-    return `${paused ? 'Tally sync paused · ' : ''}Allow ${draft.quantity} more sales`;
-  if (listing.policy === 'limited')
-    return paused
-      ? `Tally sync paused · ${listing.remaining} ${listing.remaining === 1 ? 'sale' : 'sales'} remaining`
-      : `Limited sales · ${listing.remaining} remaining`;
-  return paused ? 'Tally sync paused' : 'Auto';
+  let sync = listing.paused ? 'Keep Tally sync paused' : 'Auto';
+  if (!listing.paused && draft?.edited) sync = 'Pause Tally sync';
+  if (listing.paused && draft?.resumeOnPublish) sync = 'Resume Tally sync';
+  if (listing.policy !== 'limited') return sync;
+  const allowance = `${listing.remaining} ${listing.remaining === 1 ? 'sale' : 'sales'} remaining`;
+  return sync === 'Auto'
+    ? `Limited sales · ${listing.remaining} remaining`
+    : `${sync} · ${allowance}`;
 }

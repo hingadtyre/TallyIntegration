@@ -1664,7 +1664,11 @@ test('failed mapping keeps the dialog, selected listing and confirmation availab
   assert.equal(mappingAttempts, 1);
 });
 
-async function openZeroStockInventory(t: TestContext, observed: Array<number | null>) {
+async function openStockInventory(
+  t: TestContext,
+  observed: Array<number | null>,
+  setup?: (state: Snapshot) => void,
+) {
   const f = serverFixture(t);
   const listings = f.store.update((state) => {
     state.items = state.items.filter((item) => item.id === 'item-a');
@@ -1677,6 +1681,7 @@ async function openZeroStockInventory(t: TestContext, observed: Array<number | n
       if (row.observed === null) row.observedAt = null;
       row.paused = false;
     }
+    setup?.(state);
     return state.listings;
   });
   const markets = new MarketplaceService(f.store, f.folder);
@@ -1695,11 +1700,11 @@ async function openZeroStockInventory(t: TestContext, observed: Array<number | n
     send(new URL(path, address), init),
   );
   const view = render(<App />);
-  return { listings, requests, view, [Symbol.asyncDispose]: dispose };
+  return { listings, requests, view, store: f.store, [Symbol.asyncDispose]: dispose };
 }
 
 test('five calculated zeros already observed on Flipkart stay out of review after Calculate, repeat and reload', async (t) => {
-  await using workspace = await openZeroStockInventory(t, [0, 0, 0, 0, 0]);
+  await using workspace = await openStockInventory(t, [0, 0, 0, 0, 0]);
   const { listings, requests, view } = workspace;
   for (let attempt = 0; attempt < 2; attempt++) {
     fireEvent.click(await screen.findByRole('button', { name: 'Calculate' }));
@@ -1735,15 +1740,15 @@ test('five calculated zeros already observed on Flipkart stay out of review afte
 });
 
 test('mixed stock reviews the difference, an unknown observation and an explicit zero pause', async (t) => {
-  await using workspace = await openZeroStockInventory(t, [0, 3, null, 0]);
+  await using workspace = await openStockInventory(t, [0, 3, null, 0]);
   const { listings, requests } = workspace;
   const [matched, different, unknown, manual] = listings;
-  fireEvent.click(await screen.findByRole('checkbox', { name: 'Select ' + manual.sku }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Calculate' }));
+  await screen.findAllByText('Matches the last Flipkart check');
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Select ' + manual.sku }));
   fireEvent.click(screen.getByRole('button', { name: /Set to zero/ }));
   await screen.findByText(/Zero-stock drafts saved/);
   fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Calculate' }));
-  await screen.findByText('Matches the last Flipkart check');
   const unknownRow = within(
     screen.getByRole('checkbox', { name: 'Select ' + unknown.sku }).closest('tr')!,
   );
@@ -1752,7 +1757,7 @@ test('mixed stock reviews the difference, an unknown observation and an explicit
   const dialog = within(await screen.findByRole('dialog', { name: 'Review proposed stock' }));
   assert.equal(dialog.queryByText(matched.sku), null);
   for (const listing of [different, unknown, manual]) assert.ok(dialog.getByText(listing.sku));
-  assert.ok(dialog.getByText('Tally sync paused'));
+  assert.ok(dialog.getByText('Pause Tally sync'));
   const reviewCalls = requests.mock.calls.filter((call) => call.arguments[0] === '/api/review');
   assert.equal(reviewCalls.length, 1);
   const body = JSON.parse(String(reviewCalls[0].arguments[1]?.body));
@@ -1760,12 +1765,87 @@ test('mixed stock reviews the difference, an unknown observation and an explicit
   fireEvent.click(dialog.getByRole('button', { name: /^Publish \d eligible listings/ }));
   const results = within(await screen.findByRole('dialog', { name: 'Stock publication results' }));
   assert.equal(results.queryByText(matched.sku), null);
-  assert.ok(results.getByText('Stock is already zero. Tally sync paused for this location.'));
+  assert.ok(results.getByText('Pause Tally sync'));
   fireEvent.click(results.getByRole('button', { name: 'Back to inventory' }));
   const manualRow = within(
     screen.getByRole('checkbox', { name: 'Select ' + manual.sku }).closest('tr')!,
   );
   assert.ok(manualRow.getByRole('button', { name: /Resume sync/ }));
+});
+
+test('Calculate replaces only filtered zero drafts, and Publish resumes only the retained reviewed destination', async (t) => {
+  await using workspace = await openStockInventory(t, [3, 2, 2, 2, 10], (state) => {
+    state.items[0].physical = 12;
+    state.items[0].keepBackUnits = 2;
+    state.listings.forEach((listing) => {
+      listing.tyreFloor = false;
+    });
+    state.listings[4].paused = true;
+  });
+  const { listings, store, requests } = workspace;
+  const [discarded, outside, , , paused] = listings;
+  fireEvent.click(await screen.findByRole('button', { name: /Set to zero/ }));
+  await screen.findByText(/Zero-stock drafts saved/);
+  assert.ok(store.read().proposals.every((draft) => draft.edited && draft.quantity === 0));
+  fireEvent.change(screen.getByLabelText('Filter by pack size'), { target: { value: '1' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Calculate' }));
+  await screen.findByText('Publishing resumes Tally sync');
+  for (const listing of [discarded, paused])
+    assert.equal(
+      screen.getByLabelText<HTMLInputElement>('Proposed stock for ' + listing.sku).value,
+      '10',
+    );
+  const calculated = store.read();
+  assert.ok(calculated.listings.find((row) => row.id === paused.id)?.paused);
+  assert.equal(calculated.proposals.find((draft) => draft.listingId === outside.id)?.quantity, 0);
+  fireEvent.click(screen.getByRole('button', { name: /Review changes/ }));
+  const review = within(await screen.findByRole('dialog', { name: 'Review proposed stock' }));
+  assert.ok(review.getByText('Resume Tally sync'));
+  assert.ok(review.getByRole('button', { name: 'Publish 2 eligible listings' }));
+  fireEvent.click(
+    review.getByRole('button', {
+      name: 'Discard proposal for ' + discarded.sku + ' at ' + discarded.location,
+    }),
+  );
+  await review.findByRole('button', { name: 'Publish 1 eligible listing' });
+  assert.equal(review.queryByText(discarded.sku), null);
+  const trimmed = store.read();
+  assert.equal(
+    trimmed.proposals.some((draft) => draft.listingId === discarded.id),
+    false,
+  );
+  assert.ok(trimmed.listings.find((row) => row.id === paused.id)?.paused);
+  fireEvent.click(review.getByRole('button', { name: 'Publish 1 eligible listing' }));
+  const results = within(await screen.findByRole('dialog', { name: 'Stock publication results' }));
+  assert.ok(results.getByText(paused.sku));
+  assert.equal(results.queryByText(discarded.sku), null);
+  assert.equal(store.read().listings.find((row) => row.id === paused.id)?.paused, false);
+  assert.equal(store.read().listings.find((row) => row.id === discarded.id)?.observed, 3);
+  const sent = (path: string) =>
+    JSON.parse(
+      String(requests.mock.calls.find((call) => call.arguments[0] === path)?.arguments[1]?.body),
+    );
+  assert.deepEqual(sent('/api/calculate').listingIds.sort(), [discarded.id, paused.id].sort());
+  assert.notEqual(sent('/api/review/discard').reviewId, sent('/api/publish').reviewId);
+  fireEvent.click(results.getByRole('button', { name: 'Back to inventory' }));
+  fireEvent.change(screen.getByLabelText('Filter by pack size'), { target: { value: '2' } });
+  fireEvent.click(screen.getByRole('button', { name: /Review changes/ }));
+  const last = within(await screen.findByRole('dialog', { name: 'Review proposed stock' }));
+  fireEvent.click(last.getByRole('button', { name: /Discard proposal/ }));
+  await last.findByText(/No proposals left in this review/);
+  assert.equal(last.queryByRole('button', { name: /Publish/ }), null);
+  fireEvent.click(last.getByRole('button', { name: 'Back to inventory' }));
+  assert.equal(
+    screen.getByLabelText<HTMLInputElement>('Proposed stock for ' + outside.sku).value,
+    '',
+  );
+  assert.deepEqual(
+    store
+      .read()
+      .proposals.map((draft) => draft.listingId)
+      .sort(),
+    [listings[2].id, listings[3].id].sort(),
+  );
 });
 
 test('a mixed calculation links to the affected Set of and reviews only the ready draft', async (t) => {
@@ -1902,23 +1982,22 @@ test('a filtered quantity edit blocks review until saved and stays separate from
       assert.equal(body.companyId, 'demo-a');
       if (path === '/api/calculate') {
         submittedScopes.push(body.listingIds!);
-        if (!state.proposals.length)
-          state = {
-            ...state,
-            proposals: [
-              {
-                listingId: 'listing-2',
-                quantity: 5,
-                calculated: 5,
-                edited: false,
-                itemVersion: 1,
-                listingVersion: 1,
-                ruleVersion: 'flipkart-tyres-v1',
-                createdAt: preparedAt,
-                stale: false,
-              },
-            ],
-          };
+        state = {
+          ...state,
+          proposals: [
+            {
+              listingId: 'listing-2',
+              quantity: 5,
+              calculated: 5,
+              edited: false,
+              itemVersion: 1,
+              listingVersion: 1,
+              ruleVersion: 'flipkart-tyres-v1',
+              createdAt: preparedAt,
+              stale: false,
+            },
+          ],
+        };
         return response({ ...state, calculation: [{ listingId: 'listing-2', status: 'ready' }] });
       }
       if (path === '/api/inventory/refresh') {
@@ -1987,7 +2066,7 @@ test('a filtered quantity edit blocks review until saved and stays separate from
     true,
   );
   fireEvent.click(screen.getByRole('button', { name: 'Save draft quantity for SAMPLE-CEAT-2-2' }));
-  await screen.findByText('Choose how to publish at review');
+  await screen.findByText('Publishing pauses Tally sync');
   await waitFor(() =>
     assert.equal(
       (screen.getByRole('button', { name: /Review changes/ }) as HTMLButtonElement).disabled,
@@ -2000,9 +2079,11 @@ test('a filtered quantity edit blocks review until saved and stays separate from
   fireEvent.click(screen.getByRole('button', { name: 'Calculate' }));
   await waitFor(() => assert.equal(submittedScopes.length, 2));
   assert.deepEqual(submittedScopes, [['listing-2'], ['listing-2']]);
-  assert.equal(
-    (screen.getByLabelText('Proposed stock for SAMPLE-CEAT-2-2') as HTMLInputElement).value,
-    '1',
+  await waitFor(() =>
+    assert.equal(
+      (screen.getByLabelText('Proposed stock for SAMPLE-CEAT-2-2') as HTMLInputElement).value,
+      '5',
+    ),
   );
 });
 

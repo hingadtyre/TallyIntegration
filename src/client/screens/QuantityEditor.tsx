@@ -106,12 +106,16 @@ export function QuantityEditor({
       : 'Updating proposal…';
     descriptionClass = listing.proposalIssue ? 'text-amber' : '';
   } else if (proposal?.edited) {
-    description =
-      proposal.quantity === 0 ? 'Publishing pauses Tally sync' : 'Choose how to publish at review';
+    description = listing.paused
+      ? 'Tally sync stays paused after publishing'
+      : 'Publishing pauses Tally sync';
     descriptionClass = 'text-teal';
   } else if (proposal?.reviewProblem) {
     description = proposal.reviewProblem;
     descriptionClass = 'text-amber';
+  } else if (proposal?.resumeOnPublish) {
+    description = 'Publishing resumes Tally sync';
+    descriptionClass = 'text-teal';
   } else if (calculatedStockMatchesObservation(listing, proposal)) {
     description = 'Matches the last Flipkart check';
   } else if (proposal && (listing.observed === null || !listing.observedAt)) {

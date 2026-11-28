@@ -27,12 +27,13 @@ export async function checkCalculationStock(
   state: Snapshot,
   listings: Listing[],
   readItem: (id: string) => Promise<CheckedStock>,
+  explicit = false,
 ): Promise<ItemEvidence> {
   const sources: ItemEvidence = new Map();
   for (const listing of listings) {
     const itemId = listing.itemId!;
     const edited = state.proposals.some((p) => p.listingId === listing.id && p.edited);
-    if (sources.has(itemId) || (edited && !listing.orderProposalPending)) continue;
+    if (sources.has(itemId) || (!explicit && edited && !listing.orderProposalPending)) continue;
     // An invalid pack belongs to this listing. Another pack of the same item can still qualify.
     try {
       if (desiredStock(state, listing) === 0 && !listing.orderProposalPending) continue;
@@ -72,6 +73,7 @@ export function saveCalculation(
     strict?: boolean;
     sources?: ItemEvidence;
     refreshStale?: boolean;
+    explicit?: boolean;
   } = {},
 ): CalculationRow[] {
   // These guards reread SQLite. Verify before taking the snapshot write lock.
@@ -136,7 +138,7 @@ export function saveCalculation(
         }
         const edited =
           !options.zero && state.proposals.find((p) => p.listingId === listing.id && p.edited);
-        if (edited) {
+        if (edited && !options.explicit) {
           requireStockSource(state, listing);
           const limitIssue = draftStockLimitIssue(edited.quantity);
           if (limitIssue) throw new InputError(limitIssue);
@@ -173,6 +175,13 @@ export function saveCalculation(
           : calculationAvailability(state, listing, options.sources);
         const draft = prepareProposal(state, listing, options.zero ? 0 : undefined, available);
         const previous = state.proposals.find((p) => p.listingId === listing.id);
+        if (
+          !draft.edited &&
+          listing.paused &&
+          (options.explicit ||
+            (previous?.resumeOnPublish && previous.listingVersion === listing.version))
+        )
+          draft.resumeOnPublish = true;
         if (
           options.refreshStale &&
           previous &&

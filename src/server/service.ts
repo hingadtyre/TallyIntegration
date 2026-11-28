@@ -68,7 +68,6 @@ function draftReviewProblem(
   draft: Proposal | undefined,
   companyId: string,
   catalog: ReturnType<typeof indexAutomationCatalog> | null,
-  positiveEdits: 'allowance' | 'once' = 'allowance',
 ): string | null {
   if (!draft) return 'Calculate or save a proposal first.';
   const issue = draftStockLimitIssue(draft.quantity);
@@ -94,7 +93,6 @@ function draftReviewProblem(
           itemVersion: draft.itemVersion,
           listingVersion: draft.listingVersion,
           draft,
-          positiveEdits,
         },
         destination,
       );
@@ -152,7 +150,8 @@ export class InventoryService {
     string,
     {
       review: Review;
-      drafts: Proposal[];
+      publishing?: boolean;
+      drafts: Map<string, Proposal>;
       calculated: Map<string, CalculatedReview>;
     }
   >();
@@ -275,24 +274,28 @@ export class InventoryService {
   calculate(companyId: unknown, ids: unknown, zero = false): Snapshot {
     const state = this.store.read();
     const selected = requireListings(state, companyId, ids);
-    saveCalculation(this.store, state, String(companyId), selected, {
+    const calculation = saveCalculation(this.store, state, String(companyId), selected, {
       zero,
+      explicit: !zero,
       strict: zero || selected.length === 1,
     });
-    if (zero) for (const row of selected) this.marketplaces?.supersedeInventoryReview(row.id);
+    for (const row of calculation) if (row.status === 'ready') this.proposalReplaced(row.listingId);
     return this.snapshot();
   }
 
   async calculateAvailable(
     companyId: unknown,
     ids: unknown,
-    readOnly = false,
+    source: 'seller' | 'resume' = 'seller',
   ): Promise<CalculationResult> {
     const state = this.store.read();
     const selected = requireListings(state, companyId, ids);
     const calculation = await this.calculateListings(state, String(companyId), selected, {
-      readOnly,
+      explicit: source === 'seller',
     });
+    if (source === 'seller')
+      for (const row of calculation)
+        if (row.status === 'ready') this.proposalReplaced(row.listingId);
     return { ...this.snapshot(), calculation };
   }
 
@@ -300,19 +303,23 @@ export class InventoryService {
     state: Snapshot,
     companyId: string,
     selected: Listing[],
-    options: { readOnly: boolean; refreshStale?: boolean },
+    options: { refreshStale?: boolean; explicit?: boolean },
   ) {
     const batch = {};
     const marketplaces = this.marketplaces;
     const sources =
       marketplaces && this.store.readStockCoverage(companyId)
-        ? await checkCalculationStock(state, selected, (itemId) =>
-            marketplaces.availableStock(companyId, itemId, batch, options.readOnly),
+        ? await checkCalculationStock(
+            state,
+            selected,
+            (itemId) => marketplaces.availableStock(companyId, itemId, batch, true),
+            options.explicit,
           )
         : undefined;
     return saveCalculation(this.store, state, companyId, selected, {
       sources,
       refreshStale: options.refreshStale,
+      explicit: options.explicit,
     });
   }
 
@@ -352,7 +359,6 @@ export class InventoryService {
     now: number,
   ) {
     const rows = await this.calculateListings(state, companyId, selected, {
-      readOnly: true,
       refreshStale: true,
     });
     for (const row of rows) {
@@ -401,14 +407,17 @@ export class InventoryService {
       const draft = prepareProposal(state, listing, quantity);
       if (!listing.orderProposalPending) delete listing.proposalIssue;
       state.proposals = [...state.proposals.filter((row) => row.listingId !== listing.id), draft];
-      const intent =
-        quantity === 0 ? 'review zero and pause Tally sync' : `review ${quantity} listing units`;
-      recordActivity(state, 'edit-proposal', `Draft saved: ${intent}. Active policy unchanged.`, {
-        companyId: String(companyId),
-        listingId: listing.id,
-      });
+      recordActivity(
+        state,
+        'edit-proposal',
+        `Draft saved for review. Publish ${quantity} and pause Tally sync.`,
+        {
+          companyId: String(companyId),
+          listingId: listing.id,
+        },
+      );
     });
-    this.marketplaces?.supersedeInventoryReview(String(listingId));
+    this.proposalReplaced(String(listingId));
     return this.snapshot();
   }
 
@@ -512,6 +521,7 @@ export class InventoryService {
   ): Promise<Snapshot> {
     if (typeof paused !== 'boolean') throw new InputError('Pause must be true or false.');
     const resumed = new Set<string>();
+    const decisions = new Set<string>();
     this.store.update((state) => {
       const listings = requireListings(state, companyId, ids);
       if (
@@ -523,6 +533,11 @@ export class InventoryService {
           409,
         );
       for (const listing of listings) {
+        decisions.add(listing.id);
+        if (paused) {
+          const draft = state.proposals.find((row) => row.listingId === listing.id);
+          if (draft) delete draft.resumeOnPublish;
+        }
         if (listing.paused !== paused) {
           listing.paused = paused;
           if (paused) {
@@ -552,7 +567,8 @@ export class InventoryService {
       if (resumed.size)
         state.proposals = state.proposals.filter((draft) => !resumed.has(draft.listingId));
     });
-    if (resumed.size) return this.calculateAvailable(companyId, [...resumed], true);
+    for (const id of decisions) this.marketplaces?.supersedeInventoryReview(id);
+    if (resumed.size) return this.calculateAvailable(companyId, [...resumed], 'resume');
     return this.snapshot();
   }
 
@@ -617,17 +633,7 @@ export class InventoryService {
         paused: listing.paused,
         stale: draft?.stale ?? false,
         problem,
-        ...(draft?.edited &&
-          draft.quantity > 0 && {
-            oneTimeProblem: draftReviewProblem(
-              state,
-              listing,
-              draft,
-              String(companyId),
-              catalog,
-              'once',
-            ),
-          }),
+        canDiscard: !!draft,
       };
     });
     // Capture exact destinations; neither a later filter nor a new row enlarges this review.
@@ -639,25 +645,31 @@ export class InventoryService {
       ...(selected.length > rows.length && { matchedCount: selected.length - rows.length }),
       publishingEnabled: !!this.marketplaces,
     };
-    if (this.marketplaces) {
-      const ids = new Set(rows.map((row) => row.listingId));
-      for (const [key, value] of this.reviews)
-        if (Date.now() - Date.parse(value.review.createdAt) > 900_000 || this.reviews.size >= 50)
-          this.reviews.delete(key);
-      this.reviews.set(review.id, {
-        review,
-        drafts: state.proposals.filter((row) => ids.has(row.listingId)),
-        calculated,
-      });
-    }
+    const reviewedIds = new Set(rows.map((row) => row.listingId));
+    for (const [key, value] of this.reviews)
+      if (
+        !value.publishing &&
+        (Date.now() - Date.parse(value.review.createdAt) > 900_000 || this.reviews.size >= 50)
+      )
+        this.reviews.delete(key);
+    this.reviews.set(review.id, {
+      review,
+      drafts: new Map(
+        state.proposals
+          .filter((row) => reviewedIds.has(row.listingId))
+          .map((row) => [row.listingId, row]),
+      ),
+      calculated,
+    });
     return review;
   }
 
   async prepareReview(companyId: unknown, ids: unknown): Promise<Review> {
     const review = this.review(companyId, ids);
     const marketplaces = this.marketplaces;
+    const drafts = this.capturedReview(review.id).drafts;
     const manualRows = review.rows.filter(
-      (row) => row.oneTimeProblem !== undefined && (!row.problem || !row.oneTimeProblem),
+      (row) => !row.problem && drafts.get(row.listingId)?.edited && (row.quantity ?? 0) > 0,
     );
     if (!marketplaces || !manualRows.length) return review;
     const state = this.store.read();
@@ -681,61 +693,126 @@ export class InventoryService {
     return review;
   }
 
+  private proposalReplaced(listingId: string) {
+    // Separate browser windows can review the same draft. Replacing it invalidates
+    // that row in every open review, even for identical quantities saved in one clock tick.
+    for (const capture of this.reviews.values()) capture.drafts.delete(listingId);
+    this.marketplaces?.supersedeInventoryReview(listingId);
+  }
+
+  private capturedReview(reviewId: unknown) {
+    const captured = typeof reviewId === 'string' ? this.reviews.get(reviewId) : undefined;
+    if (
+      !captured ||
+      captured.publishing ||
+      Date.now() - Date.parse(captured.review.createdAt) > 900_000
+    )
+      throw new InputError('Open a fresh Inventory review to continue.', 409);
+    return captured;
+  }
+
+  discardReviewProposal(
+    reviewId: unknown,
+    listingId: unknown,
+  ): { review: Review; snapshot: Snapshot } {
+    const captured = this.capturedReview(reviewId);
+    const row = captured.review.rows.find((entry) => entry.listingId === listingId);
+    if (!row?.canDiscard) throw new InputError('Choose a saved proposal in this review.', 409);
+    const draft = captured.drafts.get(row.listingId);
+    if (!draft)
+      throw new InputError(
+        'The saved proposal changed. Open a fresh review before discarding it.',
+        409,
+      );
+    this.store.update((state) => {
+      const current = state.proposals.find((row) => row.listingId === listingId);
+      if (
+        !current ||
+        current.createdAt !== draft.createdAt ||
+        current.quantity !== draft.quantity ||
+        current.edited !== draft.edited ||
+        current.calculated !== draft.calculated ||
+        current.itemVersion !== draft.itemVersion ||
+        current.listingVersion !== draft.listingVersion ||
+        current.ruleVersion !== draft.ruleVersion ||
+        current.resumeOnPublish !== draft.resumeOnPublish
+      )
+        throw new InputError(
+          'The saved proposal changed. Open a fresh review before discarding it.',
+          409,
+        );
+      state.proposals = state.proposals.filter((row) => row.listingId !== listingId);
+    });
+    this.proposalReplaced(draft.listingId);
+    const review = {
+      ...captured.review,
+      id: randomUUID(),
+      rows: captured.review.rows.filter((row) => row.listingId !== listingId),
+    };
+    this.reviews.delete(captured.review.id);
+    captured.calculated.delete(draft.listingId);
+    this.reviews.set(review.id, {
+      review,
+      drafts: captured.drafts,
+      calculated: captured.calculated,
+    });
+    return { review, snapshot: this.snapshot() };
+  }
+
   async publish(
     reviewId: unknown,
-    positiveEdits: unknown = 'allowance',
     keepBackOverrides: unknown = [],
   ): Promise<InventoryPublishResult> {
-    if (positiveEdits !== 'allowance' && positiveEdits !== 'once')
-      throw new InputError('Choose a sales allowance or Update once for positive manual edits.');
     if (!this.marketplaces)
       throw new InputError('Inventory publishing is unavailable in this runtime.', 409);
-    const captured = typeof reviewId === 'string' ? this.reviews.get(reviewId) : undefined;
-    if (!captured || Date.now() - Date.parse(captured.review.createdAt) > 900_000)
-      throw new InputError('Open a fresh Inventory review before publishing.', 409);
+    const captured = this.capturedReview(reviewId);
     const confirmed = new Set(Array.isArray(keepBackOverrides) ? keepBackOverrides : []);
-    this.reviews.delete(captured.review.id);
-    const rows: InventoryPublishResult['rows'] = [];
-    const batch = {};
-    for (const row of captured.review.rows) {
-      const draft = captured.drafts.find((entry) => entry.listingId === row.listingId);
-      let problem =
-        positiveEdits === 'once' && row.oneTimeProblem !== undefined
-          ? row.oneTimeProblem
-          : row.problem;
-      if (!problem && row.keepBackWarning && !confirmed.has(row.listingId))
-        problem = 'Confirm the keep-back warning for this listing before publishing.';
-      if (!draft || problem) {
-        rows.push({
-          listingId: row.listingId,
-          sku: row.sku,
-          status: 'blocked',
-          message: problem ?? 'A current proposal is required.',
-        });
-        continue;
-      }
-      rows.push(
-        await this.marketplaces.publishInventory(
-          {
-            companyId: captured.review.companyId,
+    captured.publishing = true;
+    try {
+      const rows: InventoryPublishResult['rows'] = [];
+      const batch = {};
+      for (const row of captured.review.rows) {
+        const draft = captured.drafts.get(row.listingId);
+        let problem = row.problem;
+        if (!problem && row.keepBackWarning && !confirmed.has(row.listingId))
+          problem = 'Confirm the keep-back warning for this listing before publishing.';
+        if (!draft || problem) {
+          rows.push({
             listingId: row.listingId,
-            itemVersion: draft.itemVersion,
-            listingVersion: draft.listingVersion,
-            positiveEdits,
-            draft,
-            calculatedReview: captured.calculated.get(row.listingId),
-            ...(row.keepBackWarning && {
-              keepBackConfirmation: {
-                reviewKey: row.keepBackWarning.reviewKey,
-                quantity: draft.quantity,
-              },
-            }),
-          },
-          batch,
-        ),
-      );
+            sku: row.sku,
+            status: 'blocked',
+            message: problem ?? 'The reviewed proposal changed. Open a fresh review.',
+          });
+          continue;
+        }
+        rows.push(
+          await this.marketplaces.publishInventory(
+            {
+              companyId: captured.review.companyId,
+              listingId: row.listingId,
+              itemVersion: draft.itemVersion,
+              listingVersion: draft.listingVersion,
+              draft,
+              calculatedReview: captured.calculated.get(row.listingId),
+              ...(row.keepBackWarning && {
+                keepBackConfirmation: {
+                  reviewKey: row.keepBackWarning.reviewKey,
+                  quantity: draft.quantity,
+                },
+              }),
+            },
+            batch,
+            () => {
+              if (captured.drafts.get(row.listingId) !== draft)
+                throw new InputError('The reviewed proposal changed. Open a fresh review.', 409);
+            },
+          ),
+        );
+      }
+      return { rows };
+    } finally {
+      this.reviews.delete(captured.review.id);
     }
-    return { rows };
   }
 
   private saveMapping(input: Record<string, unknown>): void {

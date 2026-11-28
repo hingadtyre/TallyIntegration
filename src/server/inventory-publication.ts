@@ -23,7 +23,6 @@ export interface InventoryIntent {
   draft?: Proposal;
   calculatedReview?: CalculatedReview;
   keepBackConfirmation?: MarketplaceApplyInput['keepBackConfirmation'];
-  positiveEdits?: 'allowance' | 'once';
   /** Receipt authorizing a decrease-only check when there is no Tally change. */
   orderOnly?: string;
   /** A seller-reviewed calculated update while company automation is off. */
@@ -100,7 +99,12 @@ export function inventoryTarget(
   } else if (intent.calculatedReview) {
     intent.calculatedReview.verify(state, listing, marketplace);
     const current = state.proposals.find((entry) => entry.listingId === listing.id);
-    if (!current || current.edited)
+    if (
+      !current ||
+      current.edited ||
+      !!current.resumeOnPublish !== !!draft.resumeOnPublish ||
+      (draft.resumeOnPublish && !listing.paused)
+    )
       throw new InputError('The reviewed draft was replaced or removed. Open a fresh review.', 409);
   } else {
     const current = state.proposals.find((row) => row.listingId === listing.id);
@@ -148,26 +152,16 @@ export function inventoryTarget(
     );
   if (draft?.edited && quantity > desiredStock(state, listing, 'manual-ceiling'))
     throw new InputError('The edited quantity exceeds the current calculated stock.', 409);
-  const updateOnce = draft?.edited && quantity > 0 && intent.positiveEdits === 'once';
-  if (updateOnce && listing.policy !== 'auto')
-    throw new InputError(
-      'Update once requires Auto. The existing sales allowance still applies.',
-      409,
-    );
-  if (
-    state.mode === 'live' &&
-    quantity > 0 &&
-    !updateOnce &&
-    (draft?.edited || listing.policy === 'limited')
-  )
-    throw new InputError(
-      'Positive sales allowances require verified order reconciliation. For an Auto listing, choose Update once to publish this quantity.',
-      409,
-    );
+  if (listing.policy === 'limited') {
+    if (quantity > (listing.remaining ?? 0))
+      throw new InputError('This quantity exceeds the remaining sales allowance.', 409);
+    if (state.mode === 'live' && quantity > 0)
+      throw new InputError('Positive sales allowances require verified order reconciliation.', 409);
+  }
   return { listing, quantity };
 }
 
-/** Called in the same transaction that records an attempt, or confirms a no-op. */
+/** Consume a manual draft at acceptance, and an explicit resume only on confirmation. */
 export function activateInventoryIntent(
   state: Snapshot,
   intent: InventoryIntent,
@@ -175,14 +169,11 @@ export function activateInventoryIntent(
 ): void {
   if (intent.trial) return;
   if (intent.draft?.edited) {
-    if (intent.draft.quantity === 0) {
-      listing.paused = true;
-      listing.version++;
-    } else if (intent.positiveEdits !== 'once') {
-      listing.policy = 'limited';
-      listing.remaining = intent.draft.quantity;
-      listing.version++;
-    }
+    listing.paused = true;
+    listing.version++;
+  } else if (intent.calculatedReview && intent.draft?.resumeOnPublish) {
+    listing.paused = false;
+    listing.version++;
   }
   if (intent.draft) state.proposals = state.proposals.filter((row) => row.listingId !== listing.id);
   listing.syncPendingItemVersion = null;
