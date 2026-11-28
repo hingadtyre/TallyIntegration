@@ -45,7 +45,12 @@ interface ReviewSession {
 export interface BillingSources {
   tally: (endpoint: string) => Pick<TallyClient, 'listLedgers' | 'readSalesBills' | 'readStock'>;
   orders: Pick<FlipkartBillingClient, 'readOrders'> &
-    Partial<Pick<FlipkartBillingClient, 'readStockOrders' | 'readFulfilmentOrders'>>;
+    Partial<
+      Pick<
+        FlipkartBillingClient,
+        'readStockOrders' | 'readFulfilmentOrders' | 'readExactOrder' | 'readHandoverCount'
+      >
+    >;
 }
 
 function configuredRule(data: BillingData, scope: BillingScope): BillingRule | null {

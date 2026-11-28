@@ -75,7 +75,7 @@ Goods sent back to the seller because delivery to the marketplace buyer was unsu
 Goods sent back after the marketplace buyer received them and requested a return.
 
 **Physical receipt**:
-The seller's confirmation that an individual returned package has arrived and has been checked. A marketplace or courier delivery status alone does not establish physical receipt.
+The seller's confirmation that an individual returned package has arrived and has been checked. The seller assesses whether the goods inside are fit to sell again.
 _Avoid_: Delivered when only a tracking status is known
 
 **Keep back from marketplaces**:
@@ -124,7 +124,7 @@ An attempt to send a proposed stock quantity to a marketplace. A sent request an
 Evidence that a Flipkart order item was billed through the selected Tally company and sales ledger for its mapped item and units. A ledger entry identifies a possible sales channel. A matching order reference or explicit seller confirmation links the bill to the order item.
 
 **Unbilled stock reservation**:
-The Tally units already committed to a verified Flipkart order but still awaiting a matching stock deduction in Tally. Every listing supplied by the same stock item draws on the remaining available units.
+The units of a **Tally stock item** committed to a verified order while its stock deduction is outstanding. Releasing the reservation removes that commitment from shared availability and leaves the recorded Tally balance untouched.
 
 **Stock recovery review**:
 A seller’s comparison of the current marketplace quantity with the newly calculated available stock after an earlier update had an uncertain outcome. Recovery requires evidence that the earlier request can no longer change stock.
@@ -139,4 +139,4 @@ A Tally stock item with no associated listing in the marketplace account current
 A seller’s marketplace listing whose stock source at a particular pickup location has yet to be linked to a Tally stock item. Several orders for that listing and location can wait for one stock mapping.
 
 **Order tracking start date**:
-The Indian calendar day from which a Tally company checks orders from its participating Flipkart sellers. A seller can save this date for bill matching alone. Confirming starting stock also establishes that all earlier relevant sales were recorded in Tally and identifies which orders can reserve units.
+The first Indian calendar day included when a **Tally company** checks orders by the date they were placed with its participating Flipkart sellers. A seller can save this date for bill matching alone or also confirm starting stock to establish that earlier relevant sales were recorded in Tally and identify which orders can reserve units.

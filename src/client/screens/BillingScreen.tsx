@@ -343,7 +343,53 @@ function BillingReview({
       setBusy('');
     }
   }
+  async function receiveTracked(order: TrackedBillOrder) {
+    const receipt = order.returnReceipt;
+    if (
+      locked ||
+      !receipt ||
+      !window.confirm(
+        `Have all ${receipt.quantity} ${receipt.unit} for order item ${order.orderItemId} been received back and checked as sellable? Stockbridge will recheck Tally before releasing the reservation.`,
+      )
+    )
+      return;
+    setBusy('Rechecking Tally and recording the return…');
+    setError('');
+    setNotice('');
+    try {
+      await requestJson<{ saved: true }>('/billing/confirm-return', {
+        companyId,
+        accountId,
+        orderItemId: order.orderItemId,
+        token: receipt.token,
+        confirmed: true,
+      });
+      setNotice('Return check completed for ' + order.orderItemId + '.');
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setTrackingRevision((value) => value + 1);
+      setBusy('');
+    }
+  }
   const shownRule = tracked ? rule : (report?.rule ?? rule);
+  function coverageSetup(trackedFrom?: string, checking = false) {
+    return (
+      <StockCoverageSetup
+        key={JSON.stringify([rule, coverageRevision])}
+        companyId={companyId}
+        accountId={accountId}
+        companyName={inventory.companies.find((company) => company.id === companyId)?.name}
+        trackedFrom={trackedFrom}
+        disabled={
+          checking || !!busy || mappingBusy || !!findOrder || (!tracked && !!report && !confirmed)
+        }
+        onSavingChange={setCoverageSaving}
+        onDirtyChange={setCoverageDirty}
+        onStart={startTracking}
+      />
+    );
+  }
   return (
     <div className="billing-layout">
       {busy && <p role="status">{busy}</p>}
@@ -367,8 +413,10 @@ function BillingReview({
             revision: trackingRevision,
             headingRef: trackedHeading,
             onTrackingDateChanged: syncCheckedDate,
+            renderDateEditor: coverageSetup,
             onFind: openBillFinder,
             onRelease: (order) => void releaseTracked(order),
+            onReceive: (order) => void receiveTracked(order),
             renderMapping: (order, disabled) => (
               <TrackedListingMapping
                 order={order}
@@ -526,17 +574,7 @@ function BillingReview({
           )
         )}
       </section>
-      {rule && !editing && !setupOpen && (
-        <StockCoverageSetup
-          key={JSON.stringify([rule, coverageRevision])}
-          companyId={companyId}
-          accountId={accountId}
-          disabled={!!busy || mappingBusy || !!findOrder || (!tracked && !!report && !confirmed)}
-          onSavingChange={setCoverageSaving}
-          onDirtyChange={setCoverageDirty}
-          onStart={startTracking}
-        />
-      )}
+      {rule && !tracked && !editing && !setupOpen && coverageSetup()}
       {!trackingFrom && !editing && (report || rule) && (
         <BillingListingMappings
           key={trackingRevision}

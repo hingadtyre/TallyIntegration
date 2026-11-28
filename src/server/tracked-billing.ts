@@ -8,9 +8,14 @@ import { TallyClient, type TallySalesBill } from '../adapters/tally.js';
 import {
   billingFulfilments,
   type BillingFulfilment,
+  type MarketplaceOrderLookup,
   type TrackedBillHistory,
 } from '../shared/billing-contracts.js';
-import { isVerifiedSale, type StockSyncCoverage } from '../shared/stock-coverage.js';
+import {
+  isVerifiedReturn,
+  isVerifiedSale,
+  type StockSyncCoverage,
+} from '../shared/stock-coverage.js';
 import {
   fingerprint,
   isInspectedBillLink,
@@ -27,10 +32,11 @@ import {
   reconcileOrders,
   rulesForCheck,
   type CompanyBillEvidence,
+  type StockAvailabilityService,
 } from './stock-availability.js';
 import { stockConfiguration } from './stock-configuration.js';
 import type { Store } from './store.js';
-import { InputError } from './validation.js';
+import { InputError, requireText } from './validation.js';
 
 type Check = NonNullable<TrackedBillHistory['check']>;
 type Access = (id: string) => Promise<{ token: string | null; verify: () => void }>;
@@ -61,6 +67,7 @@ export interface ExpandedBillEvidence {
   stockCoverageFrom?: string;
   failedGroups: Map<string, Set<BillingFulfilment>>;
   observed: Set<string>;
+  unreadableBills: Set<string>;
   uncheckedItems: Map<string, string>;
 }
 
@@ -78,11 +85,109 @@ export class TrackedBillingService {
       orders: new FlipkartBillingClient(),
     },
     private readonly access: Access,
+    private readonly availability?: StockAvailabilityService,
   ) {}
 
   invalidate(accountId: string) {
     for (const [key, session] of this.sessions)
       if (session.results.some((row) => row.accountId === accountId)) this.sessions.delete(key);
+  }
+
+  async lookup(scope: BillingScope, input: Record<string, unknown>, pickup: boolean) {
+    const { companyId, accountId } = scope;
+    const orderId = requireText(input.orderId, 'Flipkart order ID').trim();
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(orderId))
+      throw new InputError('Enter one complete order ID.');
+    const location = pickup ? requireText(input.locationId, 'Pickup location') : null;
+    const configured = () =>
+      this.store
+        .readBilling()
+        .rules.some((rule) => rule.companyId === companyId && rule.accountId === accountId);
+    if (!configured())
+      throw new InputError('Confirm bill matching for this company and seller first.', 409);
+    const state = this.store.read();
+    let lookup: MarketplaceOrderLookup;
+    if (state.mode === 'demo') {
+      const sample = sampleBills(
+        scope,
+        sampleOrderDate(scope, state.items, this.store.readStockCoverage(companyId)?.orders),
+        '',
+        new Date().toISOString(),
+      );
+      const items = billingFulfilments.flatMap((fulfilment) =>
+        sample.byFulfilment[fulfilment]
+          .filter((order) => order.orderId === orderId)
+          .map(
+            ({
+              orderItemId,
+              sku,
+              quantity,
+              orderDate,
+              locationId,
+              marketplaceStatus,
+              marketplaceHold,
+              stockShipmentId,
+            }) => ({
+              orderItemId,
+              sku,
+              quantity,
+              orderDate,
+              locationId,
+              marketplaceStatus: marketplaceStatus ?? null,
+              marketplaceHold,
+              fulfilment,
+              shipmentId: stockShipmentId,
+            }),
+          ),
+      );
+      lookup = { orderId, checkedAt: new Date().toISOString(), items };
+      if (!pickup) return lookup;
+      if (!items.some((item) => item.locationId === location))
+        throw new InputError('Choose a pickup location shown on this order.');
+      const shipments = Object.values(sample.byFulfilment)
+        .flat()
+        .filter(
+          (order) =>
+            order.locationId === location &&
+            order.marketplaceStatus === 'READY_TO_DISPATCH' &&
+            !order.marketplaceHold &&
+            order.stockShipmentId,
+        );
+      return {
+        shipmentCount: new Set(shipments.map((order) => order.stockShipmentId)).size,
+        checkedAt: lookup.checkedAt,
+      };
+    }
+    const auth = await this.access(accountId);
+    const verify = () => {
+      auth.verify();
+      if (!configured()) throw changed();
+    };
+    verify();
+    const reader = this.sources.orders;
+    if (!auth.token || !reader.readExactOrder)
+      throw new InputError('Verify access to this seller before checking an order.', 409);
+    try {
+      lookup = await reader.readExactOrder(auth.token, orderId);
+      verify();
+      if (!pickup) return lookup;
+      if (!location || !lookup.items.some((item) => item.locationId === location))
+        throw new InputError('Choose a pickup location shown on this order.');
+      if (!reader.readHandoverCount)
+        throw new InputError('Pickup counts are unavailable for this seller.', 502);
+      const shipmentCount = await reader.readHandoverCount(auth.token, location);
+      verify();
+      return { shipmentCount, checkedAt: new Date().toISOString() };
+    } catch (cause) {
+      verify();
+      if (cause instanceof InputError) throw cause;
+      throw new InputError(
+        cause instanceof FlipkartBillingError
+          ? cause.message
+          : 'Could not verify the order with Flipkart. Try again.',
+        502,
+      );
+    }
   }
 
   async check(
@@ -175,6 +280,8 @@ export class TrackedBillingService {
     const reads: GroupRead[] = [];
     const vouchers = new Map<string, TallySalesBill[]>();
     const byLedger = new Map<string, TallySalesBill[]>();
+    let billingIssue: string | undefined;
+    const unreadableLedgers = new Set<string>();
     const demo = ctx.state.mode === 'demo';
     const identity = { externalId: companyId.slice('tally:'.length), name: ctx.company.name };
     const tally = this.sources.tally(ctx.state.settings.tallyUrl);
@@ -241,10 +348,11 @@ export class TrackedBillingService {
             sample?.bills ??
             (await tally.readSalesBills(identity, rule.ledgerId, saleDay(from), saleDay(to)));
         } catch {
-          throw new InputError(
-            'Could not read the Tally sales bills for this check. Verify the company and ledger, then refresh.',
-            502,
-          );
+          billingIssue =
+            'Could not read the Tally sales bills for this check. Verify the company and ledger, then refresh.';
+          if (inspection) throw new InputError(billingIssue, 502);
+          unreadableLedgers.add(rule.ledgerId);
+          bills = [];
         }
         byLedger.set(rule.ledgerId, bills);
       }
@@ -280,7 +388,10 @@ export class TrackedBillingService {
     const stockOrders = new Set(
       stockCoverageCurrent
         ? coverage.orders
-            .filter((e) => e.accountId === accountId && isVerifiedSale(e.order))
+            .filter(
+              (e) =>
+                e.accountId === accountId && (isVerifiedSale(e.order) || isVerifiedReturn(e.order)),
+            )
             .map((e) => e.order.orderItemId)
         : [],
     );
@@ -366,6 +477,9 @@ export class TrackedBillingService {
       failedGroups.set(row.accountId, groups);
     }
     const configured = new Set(ctx.rules.map((rule) => rule.accountId));
+    const unreadableBills = new Set(
+      rules.filter((rule) => unreadableLedgers.has(rule.ledgerId)).map((rule) => rule.accountId),
+    );
     const uncheckedItems = new Map<string, string>();
     for (const { itemId, accountId: peer } of ctx.bindings) {
       if (!itemId || peer === accountId) continue;
@@ -373,6 +487,11 @@ export class TrackedBillingService {
         uncheckedItems.set(
           itemId,
           'Another seller shares this stock item. Confirm its bill matching rule to verify the bill.',
+        );
+      else if (unreadableBills.has(peer))
+        uncheckedItems.set(
+          itemId,
+          'Another seller shares this stock item and its Tally bills could not be read. Refresh to verify the bill.',
         );
       else if (failedGroups.has(peer))
         uncheckedItems.set(
@@ -389,9 +508,10 @@ export class TrackedBillingService {
     const checks = billingFulfilments.map((type) => {
       const groupResults = results.filter((row) => row.group === type);
       const selected = groupResults.find((row) => row.accountId === accountId);
+      const currentItems = new Set(selected?.observed);
       const count =
         selected && !selected.error
-          ? visible.filter(({ order }) => groupsByOrder.get(order.orderItemId)?.has(type)).length
+          ? visible.filter(({ order }) => currentItems.has(order.orderItemId)).length
           : null;
       const issues: string[] = [];
       for (const row of groupResults) {
@@ -416,9 +536,16 @@ export class TrackedBillingService {
       from,
       to,
       groups: checks,
-      complete: checks.every((row) => row.count !== null && !row.error),
+      complete: !billingIssue && checks.every((row) => row.count !== null && !row.error),
+      ...(billingIssue && { billingIssue }),
     };
-    if (!inspection)
+    if (!inspection) {
+      if (check.complete) {
+        check.lastCompleteAt = new Date().toISOString();
+        this.store.saveLastBillingCheck(companyId, accountId, signature, check.lastCompleteAt);
+      } else {
+        check.lastCompleteAt = this.store.readLastBillingCheck(companyId, accountId, signature);
+      }
       this.sessions.set(key, {
         id: check.id,
         from,
@@ -429,7 +556,8 @@ export class TrackedBillingService {
         revisions,
         expires: Date.now() + 600_000,
       });
-    return {
+    }
+    const checked = {
       check,
       evidence,
       groupsByOrder,
@@ -437,7 +565,10 @@ export class TrackedBillingService {
       ...(stockCoverageCurrent && { stockCoverageFrom: stock.from }),
       failedGroups,
       observed,
+      unreadableBills,
       uncheckedItems,
     } satisfies ExpandedBillEvidence;
+    if (!inspection) await this.availability?.verifyTrackedDeductions(accountId, checked);
+    return checked;
   }
 }

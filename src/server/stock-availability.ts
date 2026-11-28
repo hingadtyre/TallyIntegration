@@ -7,6 +7,7 @@ import type { ItemReservations, StockItem } from '../shared/contracts.js';
 import { keepBackUnitIssue, reservationCheckMaxAgeMs } from '../shared/contracts.js';
 import {
   isVerifiedCancellation,
+  isVerifiedReturn,
   isVerifiedSale,
   startTrackingMessage,
   type StockCoverageOrder,
@@ -25,6 +26,7 @@ import { checkCalculationStock, saveCalculation } from './inventory-calculation.
 import { invalidateReservationDrafts, queueOrderProposal } from './proposals.js';
 import { mappedSaleItem, mappedSaleListing, stockConfiguration } from './stock-configuration.js';
 import type { BillingSources } from './billing-service.js';
+import type { TrackedBillingService, ExpandedBillEvidence } from './tracked-billing.js';
 import type { Store } from './store.js';
 import { InputError, isRecentObservation, requireText } from './validation.js';
 
@@ -34,10 +36,10 @@ const hold = (reason: string) => new InputError(reason, 409);
 
 export function coverageIssue(coverage: StockSyncCoverage, signature: string, now: number) {
   if (coverage.signature !== signature)
-    return 'This company’s stock or billing setup changed. In Order matching, choose Review starting stock and check the affected sales.';
+    return 'This company’s stock or billing setup changed. In Order matching, choose Change tracking date and check the affected sales.';
   const lastCheck = Date.parse(coverage.checkedThrough ?? coverage.from);
   if (!Number.isFinite(lastCheck) || lastCheck > now || now - lastCheck > 30 * day)
-    return 'Stockbridge has a gap in order coverage. In Order matching, choose Review starting stock after reconciling earlier sales.';
+    return 'Stockbridge has a gap in order coverage. In Order matching, choose Change tracking date after reconciling earlier sales.';
   return null;
 }
 type Access = (accountId: string) => Promise<{ token: string | null; verify: () => void }>;
@@ -56,6 +58,13 @@ type CompanyCheck = {
   forItem: (id: string) => Promise<CheckedStock>;
   review: (accountId: string, orderItemIds?: string[]) => Promise<ReviewedOrder[]>;
   billEvidence: () => Promise<CompanyBillEvidence>;
+  verifyDeductions: () => Promise<void>;
+  confirmReturn: (
+    accountId: string,
+    orderItemId: string,
+    token: string,
+    verifyTracked: () => void,
+  ) => Promise<{ saved: true }>;
 };
 export type CompanyBillEvidence = {
   ctx: ReturnType<typeof stockConfiguration>;
@@ -66,7 +75,7 @@ export type CompanyBillEvidence = {
   verify: () => void;
 };
 type CheckMode = 'publish' | 'preview' | 'review' | 'bills' | 'inventory';
-type ReviewScope = { accountId: string; orderItemIds?: string[] | 'all' };
+type ReviewScope = { accountId: string; orderItemIds?: string[] | 'all'; verifyClaims?: true };
 
 function configuration(store: Store, companyId: string) {
   return stockConfiguration(store.read(), store.readMarketplace(), store.readBilling(), companyId);
@@ -153,6 +162,11 @@ function orderEvidence(o: StockCoverageOrder) {
     o.stockShipmentId ?? null,
     o.preDispatchWithoutCourierReturn ?? false,
     o.stockReturnConflict ?? false,
+    o.stockReturnObserved ?? false,
+    o.stockReturnVerified ?? false,
+    o.sellableReturnToken,
+    o.verifiedDeduction,
+    o.billingDeduction,
     o.firstSeenUnmapped ?? false,
   ]);
 }
@@ -165,6 +179,7 @@ export function mergeOrders(
 ) {
   const changedItems = new Set<string>();
   const proposalListings = new Set<string>();
+  const releasedItems = new Set<string>();
   const journal = new Map(
     coverage.orders.map((entry) => [
       JSON.stringify([entry.accountId, entry.order.orderItemId]),
@@ -176,11 +191,26 @@ export function mergeOrders(
     const prior = journal.get(key)?.order;
     // Warehouse billing observations can lack a location. A later known location
     // fills this gap. Two different known locations still conflict.
-    const order =
+    const order: StockCoverageOrder =
       prior?.locationId && !observation.locationId
         ? { ...observation, locationId: prior.locationId }
         : observation;
     const scopedReturnConflict = prior?.stockReturnConflict || order.stockReturnConflict;
+    // The provider can omit a previously verified status or return an older observation on retry.
+    const priorStatus =
+      prior?.marketplaceStatus &&
+      (!order.marketplaceStatus ||
+        (prior.statusVerifiedAt &&
+          (!order.statusVerifiedAt ||
+            Date.parse(prior.statusVerifiedAt) > Date.parse(order.statusVerifiedAt))));
+    const statusSource = priorStatus ? prior : order;
+    const status = {
+      marketplaceStatus: statusSource.marketplaceStatus,
+      statusVerifiedAt: statusSource.statusVerifiedAt,
+      marketplaceHold: priorStatus
+        ? (prior.marketplaceHold ?? order.marketplaceHold)
+        : (order.marketplaceHold ?? prior?.marketplaceHold),
+    };
     const shipmentChanged =
       prior?.stockShipmentId &&
       order.stockShipmentId &&
@@ -205,6 +235,7 @@ export function mergeOrders(
         accountId,
         order: {
           ...prior,
+          ...status,
           stockIdentityConflict: true,
           stockDisposition: 'uncertain',
           eligibilityUnverified: true,
@@ -218,15 +249,41 @@ export function mergeOrders(
         (!order.invoiceNumber &&
           ((order.invoiceLookup !== undefined && !!prior?.invoiceNumber) ||
             (order.invoiceLookup !== 'no-number' && prior?.invoiceLookup === 'failed')));
+      // Older readers put every seller cancellation and return under review.
+      // A clean terminal observation can settle an exact legacy shipment; a recorded conflict stays open.
+      const resolvedLegacy =
+        prior?.stockReconciliationRequired &&
+        !prior.marketplaceStatus &&
+        !prior.stockReturnConflict &&
+        !prior.stockReturnObserved &&
+        !prior.preDispatchWithoutCourierReturn &&
+        prior.stockShipmentId &&
+        prior.stockShipmentId === order.stockShipmentId &&
+        ((isVerifiedCancellation(order) && !prior.stockDispatchObserved) ||
+          (isVerifiedReturn(order) && prior.stockDispatchObserved));
       const needsReview =
-        prior?.stockReconciliationRequired ||
+        (prior?.stockReconciliationRequired && !resolvedLegacy) ||
         order.stockReconciliationRequired ||
+        (prior?.stockReturnObserved &&
+          !isVerifiedReturn(order) &&
+          (!isVerifiedReturn(prior) || !isVerifiedSale(order))) ||
         (order.preDispatchWithoutCourierReturn &&
           (prior?.stockDispatchObserved || prior?.stockDisposition === 'cancelled'));
       journal.set(key, {
         accountId,
         order: {
           ...order,
+          ...status,
+          ...(prior?.sellableReturnToken && { sellableReturnToken: prior.sellableReturnToken }),
+          ...(prior?.verifiedDeduction && { verifiedDeduction: prior.verifiedDeduction }),
+          ...(prior?.billingDeduction &&
+            !order.billingDeduction && { billingDeduction: prior.billingDeduction }),
+          ...(prior?.stockReturnObserved && { stockReturnObserved: true }),
+          ...(isVerifiedReturn(prior ?? order) && {
+            stockReturnVerified: true,
+            stockDisposition: 'uncertain',
+            eligibilityUnverified: true,
+          }),
           invoiceNumber: order.invoiceNumber ?? prior?.invoiceNumber ?? null,
           ...(invoiceNeedsRetry && { invoiceLookup: 'failed' as const }),
           ...(prior?.stockShipmentId && { stockShipmentId: prior.stockShipmentId }),
@@ -245,6 +302,9 @@ export function mergeOrders(
       });
     }
     const current = journal.get(key)!.order;
+    if (prior && !isVerifiedCancellation(prior) && isVerifiedCancellation(current)) {
+      for (const id of affectedStockItems(ctx, accountId, current)) releasedItems.add(id);
+    }
     if (isVerifiedSale(current) && (!prior || !isVerifiedSale(prior))) {
       const listing = mappedSaleListing(ctx, accountId, current);
       if (listing?.itemId && ctx.items.get(listing.itemId)?.companyId === ctx.company.id)
@@ -254,7 +314,7 @@ export function mergeOrders(
       for (const id of affectedStockItems(ctx, accountId, current)) changedItems.add(id);
     }
   }
-  return { orders: [...journal.values()], changedItems, proposalListings };
+  return { orders: [...journal.values()], changedItems, proposalListings, releasedItems };
 }
 
 // Different journals and simultaneous programme searches do not establish an
@@ -309,7 +369,16 @@ export function mergeRetainedBillOrders(
   return mergeBillingObservations(
     { ...coverage, orders: coverage.orders.filter((row) => row.accountId !== accountId) },
     accountId,
-    [...retained, ...archived],
+    [
+      ...retained,
+      ...archived.map((row: StockCoverageOrder) => {
+        // Only the stock journal owns confirmations for its current tracking period.
+        const order = { ...row };
+        delete order.verifiedDeduction;
+        delete order.sellableReturnToken;
+        return order;
+      }),
+    ],
     ctx,
   );
 }
@@ -338,12 +407,18 @@ function saveOrderReceipts(
   accountId: string,
   changedItems: Set<string>,
   proposalListings: Set<string>,
+  releasedItems: Set<string>,
   reviewOnly: boolean,
 ) {
-  const affected = new Set<string>();
+  const affected = new Set(releasedItems);
   for (const entry of coverage.orders) {
     const o = entry.order;
-    if (reviewOnly || entry.accountId !== accountId || o.stockSyncQueued || !isVerifiedSale(o))
+    if (
+      reviewOnly ||
+      entry.accountId !== accountId ||
+      o.stockSyncQueued ||
+      !(isVerifiedSale(o) || isVerifiedReturn(o))
+    )
       continue;
     const itemId = mappedSaleItem(ctx, accountId, o);
     if (!itemId || ctx.items.get(itemId)?.companyId !== ctx.company.id) continue;
@@ -376,7 +451,35 @@ type ReconciledOrder = ReviewedOrder & {
   match?: Pick<BilledOrderItem, 'bill' | 'method'>;
   // Null covers the company when the order itself changed identity.
   affectedItems: string[] | null;
+  stockToken?: string;
 };
+
+function stockIdentityToken(
+  ctx: ReturnType<typeof configuration>,
+  accountId: string,
+  order: StockCoverageOrder,
+  item: StockItem,
+  quantity: number,
+) {
+  const listing = mappedSaleListing(ctx, accountId, order);
+  return (
+    listing &&
+    fingerprint([
+      ctx.company.id,
+      accountId,
+      ctx.market.accounts.find((account) => account.id === accountId)?.sellerId,
+      order.orderItemId,
+      orderGeometry(order),
+      listing.id,
+      listing.packSize,
+      item.id,
+      item.externalId,
+      item.unit,
+      quantity,
+      ctx.rules.find((rule) => rule.accountId === accountId)?.ledgerId,
+    ])
+  );
+}
 
 function unresolvedDestinations(
   ctx: ReturnType<typeof configuration>,
@@ -424,16 +527,60 @@ export function reconcileOrders(
     const orders = coverage.orders
       .filter((e) => e.accountId === rule.accountId)
       .map((e) => e.order);
+    const reversedOrders = new Set<string>();
+    const retiredLinks = new Set<string>();
+    for (const order of orders) {
+      const deduction = order.verifiedDeduction;
+      if (!deduction || !isVerifiedReturn(order)) continue;
+      const mapping = mappedSaleListing(ctx, rule.accountId, order);
+      const item = mapping?.itemId && ctx.items.get(mapping.itemId);
+      if (
+        !item ||
+        !mapping?.packSize ||
+        deduction.stockToken !==
+          stockIdentityToken(ctx, rule.accountId, order, item, order.quantity * mapping.packSize)
+      )
+        continue;
+      if (
+        knownBills.some(
+          (bill) =>
+            bill.externalId === deduction.billId &&
+            bill.lines.some((line) => line.itemExternalId === item.externalId),
+        )
+      )
+        continue;
+      if (deduction.linkFingerprint) {
+        const linked = ctx.billing.links.find(
+          (link) =>
+            link.companyId === ctx.company.id &&
+            link.accountId === rule.accountId &&
+            link.orderItemId === order.orderItemId,
+        );
+        if (linked?.fingerprint !== deduction.linkFingerprint) continue;
+        retiredLinks.add(order.orderItemId);
+      }
+      reversedOrders.add(order.orderItemId);
+    }
     const { rows, unverifiedBillItems } = matchBills(
       rule,
       rule,
       {
-        orders: orders.filter((o) => o.stockDisposition !== 'cancelled'),
+        orders,
         bills: vouchers.get(rule.accountId) ?? [],
         knownOrders: coverage.orders,
         knownBills,
       },
-      ctx.billing,
+      retiredLinks.size
+        ? {
+            ...ctx.billing,
+            links: ctx.billing.links.filter(
+              (link) =>
+                link.companyId !== ctx.company.id ||
+                link.accountId !== rule.accountId ||
+                !retiredLinks.has(link.orderItemId),
+            ),
+          }
+        : ctx.billing,
       ctx.state,
       ctx.market.listings,
     );
@@ -462,7 +609,8 @@ export function reconcileOrders(
           'A recorded order changed its identity, quantity or dispatch history. Settle the sale and confirm a new starting date.';
         continue;
       }
-      if (isVerifiedCancellation(order)) {
+      const row = byId.get(order.orderItemId);
+      if (isVerifiedCancellation(order) && row?.status !== 'matched') {
         result.status = 'cancelled';
         result.reason = 'The verified cancellation releases this order’s reservation.';
         continue;
@@ -476,23 +624,68 @@ export function reconcileOrders(
         continue;
       }
       if (ctx.items.get(itemId)?.companyId !== ctx.company.id) continue;
-      if (
-        order.stockDisposition ||
-        order.eligibilityUnverified ||
-        order.stockReconciliationRequired
-      ) {
+      const returned = isVerifiedReturn(order);
+      if (!isVerifiedSale(order) && !returned && !isVerifiedCancellation(order)) {
         result.status = 'review';
         result.reason =
           'An order for this item has an unresolved sale, return or cancellation status. Check the order before increasing stock.';
         continue;
       }
-      const row = byId.get(order.orderItemId);
       result.baseUnits = row?.baseUnits ?? null;
+      const item = ctx.items.get(itemId)!;
+      if (row?.baseUnits)
+        entry.stockToken =
+          stockIdentityToken(ctx, rule.accountId, order, item, row.baseUnits) ?? undefined;
+      const seenBill = order.billingDeduction;
+      if (
+        reversedOrders.has(order.orderItemId) &&
+        row?.status === 'unmatched' &&
+        (!seenBill || seenBill.billId === order.verifiedDeduction?.billId)
+      ) {
+        result.status = 'accounted';
+        result.reason =
+          'A verified Tally stock deduction ended this reservation. Shared stock follows the current Tally balance.';
+        continue;
+      }
+      if (
+        returned &&
+        seenBill &&
+        seenBill.stockToken === entry.stockToken &&
+        row?.status === 'unmatched' &&
+        (!seenBill.linkFingerprint ||
+          ctx.billing.links.some(
+            (link) =>
+              link.companyId === ctx.company.id &&
+              link.accountId === rule.accountId &&
+              link.orderItemId === order.orderItemId &&
+              link.fingerprint === seenBill.linkFingerprint,
+          ))
+      ) {
+        result.status = 'review';
+        result.reason =
+          'Order matching previously found a Tally bill, but its stock deduction could not be verified. Reconcile that bill before releasing these units.';
+        continue;
+      }
       if (!row || row.baseUnits === null || row.status === 'review' || row.status === 'unmapped') {
         result.status = 'review';
         result.reason =
           'An order needs billing or pack review. ' +
           (row?.reason ?? 'Check Order matching and Inventory.');
+        continue;
+      }
+      if (
+        returned &&
+        row.status === 'unmatched' &&
+        order.verifiedDeduction &&
+        knownBills.some(
+          (bill) =>
+            bill.externalId === order.verifiedDeduction!.billId &&
+            bill.lines.some((line) => line.itemExternalId === item.externalId),
+        )
+      ) {
+        result.status = 'review';
+        result.reason =
+          'The previously verified Tally bill has a different stock deduction or order reference. Reconcile the bill before releasing these units.';
         continue;
       }
       if (row.status === 'matched' && row.bill) {
@@ -513,9 +706,24 @@ export function reconcileOrders(
           claims.set(key, entry);
         }
       } else {
-        result.status = 'reserved';
-        result.reason =
-          'The units are reserved until a matching Tally stock deduction is verified.';
+        const receiptToken =
+          returned && entry.stockToken && fingerprint([entry.stockToken, order.stockShipmentId]);
+        if (receiptToken && order.sellableReturnToken === receiptToken) {
+          result.status = 'received';
+          result.reason =
+            'The seller confirmed the full order item was received back and sellable.';
+        } else {
+          result.status = 'reserved';
+          result.reason = returned
+            ? 'The full returned quantity stays reserved until it is received back and sellable.'
+            : 'The units are reserved until a matching Tally stock deduction is verified.';
+          if (receiptToken)
+            result.returnReceipt = {
+              quantity: row.baseUnits,
+              unit: item.unit,
+              token: receiptToken,
+            };
+        }
       }
     }
   }
@@ -598,7 +806,10 @@ export class StockAvailabilityService {
       );
     if (path === '/api/billing/tracking/start') {
       if (saved)
-        throw new InputError('Review starting stock to change the company tracking date.', 409);
+        throw new InputError(
+          'Choose Change tracking date in Order matching and review starting stock for this company.',
+          409,
+        );
       if (!ctx.rules.some((rule) => rule.accountId === accountId))
         throw new InputError(
           'Confirm bill matching for this seller before setting a tracking date.',
@@ -764,6 +975,117 @@ export class StockAvailabilityService {
     return check.billEvidence();
   }
 
+  async confirmSellableReturn(
+    input: Record<string, unknown>,
+    accountId: string,
+    tracked: TrackedBillingService,
+  ) {
+    const companyId = requireText(input.companyId, 'Tally company');
+    const orderItemId = requireText(input.orderItemId, 'Order item');
+    const token = requireText(input.token, 'Return confirmation');
+    if (input.confirmed !== true)
+      throw new InputError('Confirm the full quantity is received back and sellable.');
+    const saved = this.store.readStockCoverage(companyId);
+    if (
+      saved?.orders.some(
+        (row) =>
+          row.accountId === accountId &&
+          row.order.orderItemId === orderItemId &&
+          isVerifiedReturn(row.order) &&
+          row.order.sellableReturnToken === token,
+      ) &&
+      !coverageIssue(saved, configuration(this.store, companyId).signature, Date.now())
+    )
+      return { saved: true };
+    const checked = await tracked.check({ companyId, accountId });
+    const groups = checked.groupsByOrder.get(orderItemId);
+    const target = checked.evidence.orders.find(
+      (row) => row.accountId === accountId && row.order.orderItemId === orderItemId,
+    );
+    if (
+      !checked.check.complete ||
+      !checked.observed.has(orderItemId) ||
+      !groups?.size ||
+      [...groups].some((group) => group !== 'standard' && group !== 'selfShip') ||
+      !target?.itemId ||
+      checked.uncheckedItems.has(target.itemId) ||
+      !isVerifiedReturn(target.order) ||
+      target.result.status === 'review'
+    ) {
+      throw hold(
+        'Refresh the tracked orders and resolve incomplete order and bill evidence before confirming this return.',
+      );
+    }
+    if (
+      !target.stockToken ||
+      fingerprint([target.stockToken, target.order.stockShipmentId]) !== token
+    )
+      throw hold(
+        'The return identity, stock mapping or whole quantity changed. Refresh the order before confirming.',
+      );
+    const check = await this.companyCheck(companyId, undefined, 'review', {
+      accountId,
+      orderItemIds: [orderItemId],
+      verifyClaims: true,
+    });
+    return check.confirmReturn(accountId, orderItemId, token, checked.evidence.verify);
+  }
+
+  async verifyTrackedDeductions(accountId: string, checked: ExpandedBillEvidence) {
+    if (!checked.check.complete || !checked.stockCoverageFrom) return;
+    const { ctx, orders } = checked.evidence;
+    const observed = [];
+    const ids = [];
+    for (const row of orders) {
+      const groups = checked.groupsByOrder.get(row.order.orderItemId);
+      if (
+        row.accountId !== accountId ||
+        !row.match ||
+        !row.stockToken ||
+        !row.itemId ||
+        !checked.observed.has(row.order.orderItemId) ||
+        row.order.orderDate < checked.stockCoverageFrom ||
+        checked.uncheckedItems.has(row.itemId) ||
+        !groups?.size ||
+        [...groups].some((group) => group !== 'standard' && group !== 'selfShip')
+      )
+        continue;
+      const link =
+        row.match.method === 'seller-confirmed' &&
+        ctx.billing.links.find(
+          (entry) =>
+            entry.companyId === ctx.company.id &&
+            entry.accountId === accountId &&
+            entry.orderItemId === row.order.orderItemId,
+        );
+      const proof = {
+        stockToken: row.stockToken,
+        billId: row.match.bill.id,
+        ...(link && { linkFingerprint: link.fingerprint }),
+      };
+      if (JSON.stringify(proof) === JSON.stringify(row.order.verifiedDeduction)) continue;
+      ids.push(row.order.orderItemId);
+      if (JSON.stringify(proof) === JSON.stringify(row.order.billingDeduction)) continue;
+      for (const group of groups)
+        observed.push({ group, order: { ...row.order, billingDeduction: proof } });
+    }
+    if (!ids.length) return;
+    if (observed.length)
+      this.store.saveBillingOrderObservations(ctx.company.id, accountId, observed);
+    // The billing-only match remains available if the independent stock check is unavailable.
+    try {
+      const stock = await this.companyCheck(ctx.company.id, undefined, 'review', {
+        accountId,
+        orderItemIds: ids,
+        verifyClaims: true,
+      });
+      await stock.verifyDeductions();
+    } catch (error) {
+      if (!(error instanceof InputError)) throw error;
+    }
+    checked.evidence.verify();
+  }
+
   private async companyCheck(
     companyId: string,
     batch?: object,
@@ -833,7 +1155,7 @@ export class StockAvailabilityService {
     if (mode === 'bills' && previewFrom && previewFrom < coverage.from) coverage.from = previewFrom;
     const persistOrders = mode === 'publish' || mode === 'review' || mode === 'inventory';
     const demo = ctx.state.mode === 'demo';
-    const rules = rulesForCheck(ctx, coverage, scope, mode === 'bills');
+    const rules = rulesForCheck(ctx, coverage, scope, mode === 'bills' || scope?.verifyClaims);
     const checkInspectedInvoices =
       mode === 'bills' ||
       ctx.billing.links.some((link) => link.companyId === companyId && isInspectedBillLink(link));
@@ -847,6 +1169,13 @@ export class StockAvailabilityService {
           .readBillingOrders(companyId, accountId, coverage.from, to)
           .map(({ order }) => order),
       }));
+    const versionOfClaims = (claims: ReturnType<typeof archivedClaims>) =>
+      fingerprint(
+        claims.map(({ accountId, orders }) => [
+          accountId,
+          orders.map((order) => ({ ...order, statusVerifiedAt: undefined })),
+        ]),
+      );
     let claimsVersion: string | undefined;
     const verify = () => {
       for (const guard of guards) guard();
@@ -855,7 +1184,7 @@ export class StockAvailabilityService {
         current.signature !== ctx.signature ||
         current.reviewState !== ctx.reviewState ||
         journalVersion(this.store.readStockCoverage(companyId)) !== expected ||
-        (claimsVersion !== undefined && fingerprint(archivedClaims()) !== claimsVersion)
+        (claimsVersion !== undefined && versionOfClaims(archivedClaims()) !== claimsVersion)
       )
         throw hold(
           'Stock, orders or billing setup changed during this check. Retry with fresh evidence.',
@@ -906,6 +1235,7 @@ export class StockAvailabilityService {
             rule.accountId,
             merged.changedItems,
             merged.proposalListings,
+            merged.releasedItems,
             mode !== 'publish',
           );
           expected = journalVersion(coverage);
@@ -942,9 +1272,14 @@ export class StockAvailabilityService {
       const reconcileStockBills = (vouchers: Map<string, TallySalesBill[]>) => {
         const participants = { ...ctx, rules };
         const stock = reconcileOrders(participants, coverage, vouchers);
-        if (!stock.some((row) => row.match || isVerifiedCancellation(row.order))) return stock;
+        if (
+          !stock.some(
+            (row) => row.match || isVerifiedCancellation(row.order) || isVerifiedReturn(row.order),
+          )
+        )
+          return stock;
         const claims = archivedClaims();
-        claimsVersion = fingerprint(claims);
+        claimsVersion = versionOfClaims(claims);
         if (!claims.some(({ orders }) => orders.length)) return stock;
 
         // Billing history can contest a voucher or supply dispatch evidence for
@@ -962,6 +1297,18 @@ export class StockAvailabilityService {
         for (const row of stock) {
           const other = verified.get(JSON.stringify([row.accountId, row.order.orderItemId]));
           if (
+            isVerifiedReturn(row.order) &&
+            other &&
+            (!isVerifiedReturn(other.order) || other.result.status === 'review')
+          ) {
+            delete row.match;
+            delete row.result.returnReceipt;
+            row.result.status = 'review';
+            row.result.reason = other.result.reason;
+            if (other.order.stockIdentityConflict) row.affectedItems = null;
+            continue;
+          }
+          if (
             isVerifiedCancellation(row.order) &&
             other &&
             (other.order.stockDispatchObserved ||
@@ -972,6 +1319,7 @@ export class StockAvailabilityService {
             row.result.reason =
               'The saved order history conflicts with a cancellation before dispatch. Reconcile the sale before increasing stock.';
             if (other.order.stockIdentityConflict) row.affectedItems = null;
+            delete row.match;
           }
           if (!row.match || other?.match?.bill.id === row.match.bill.id) continue;
           delete row.match;
@@ -987,7 +1335,46 @@ export class StockAvailabilityService {
           const vouchers = await readVouchers();
           const after = await balances();
           verify();
-          return { before, after, orders: reconcileStockBills(vouchers) };
+          const orders = reconcileStockBills(vouchers);
+          if (
+            persistOrders &&
+            saleDay(to) === saleDay(nowIso()) &&
+            isRecentObservation(to, reservationCheckMaxAgeMs)
+          ) {
+            let changed = false;
+            for (const { accountId, itemId, stockToken, match, order } of orders) {
+              if (!match || !stockToken || !itemId) continue;
+              const item = ctx.items.get(itemId)!;
+              try {
+                checkedPhysical(item, before, after);
+              } catch (error) {
+                if (error instanceof InputError) continue;
+                throw error;
+              }
+              const link =
+                match.method === 'seller-confirmed' &&
+                ctx.billing.links.find(
+                  (saved) =>
+                    saved.companyId === companyId &&
+                    saved.accountId === accountId &&
+                    saved.orderItemId === order.orderItemId &&
+                    saved.billId === match.bill.id,
+                );
+              const deduction = {
+                stockToken,
+                billId: match.bill.id,
+                ...(link && { linkFingerprint: link.fingerprint }),
+              };
+              if (JSON.stringify(order.verifiedDeduction) === JSON.stringify(deduction)) continue;
+              order.verifiedDeduction = deduction;
+              changed = true;
+            }
+            if (changed) {
+              this.store.saveStockCoverage(coverage);
+              expected = journalVersion(coverage);
+            }
+          }
+          return { before, after, orders };
         } catch (error) {
           if (error instanceof InputError) throw error;
           throw hold(
@@ -1051,6 +1438,50 @@ export class StockAvailabilityService {
         return verify();
       }
       return {
+        verifyDeductions: async () => {
+          await (books ??= readBooks());
+          verifyStockCheck();
+        },
+        confirmReturn: async (accountId, orderItemId, token, verifyTracked) => {
+          const { orders } = await (books ??= readBooks());
+          const row = orders.find(
+            (entry) => entry.accountId === accountId && entry.order.orderItemId === orderItemId,
+          );
+          if (
+            !row?.itemId ||
+            !row.stockToken ||
+            !isVerifiedReturn(row.order) ||
+            fingerprint([row.stockToken, row.order.stockShipmentId]) !== token
+          )
+            throw hold(
+              'The return identity, stock mapping or whole quantity changed. Refresh the order before confirming.',
+            );
+          const balance = await checkBalance(row.itemId);
+          balance.verify();
+          verifyTracked();
+          if (
+            row.result.status === 'matched' ||
+            row.result.status === 'accounted' ||
+            row.result.status === 'received'
+          )
+            return { saved: true };
+          if (row.result.returnReceipt?.token !== token) throw hold(row.result.reason);
+          row.order.sellableReturnToken = token;
+          const released = new Set([row.itemId]);
+          const queued = saveOrderReceipts(
+            this.store,
+            ctx,
+            coverage,
+            accountId,
+            released,
+            new Set(),
+            released,
+            true,
+          );
+          this.recentScans.delete(companyId);
+          if (queued) this.onPending?.(companyId);
+          return { saved: true };
+        },
         canReuseForInventory: () => {
           try {
             const current = verifyStockCheck();

@@ -8,28 +8,23 @@ import type {
 import { errorMessage, RequestError, requestJson } from '../api.js';
 import { formatIndiaDay } from '../format.js';
 import type { BillTarget } from './FindTallyBill.js';
+import {
+  ExactOrderLookup,
+  fulfilmentLabels,
+  indiaTimestamp,
+  marketplaceStatusLabel,
+} from './MarketplaceOrderLookup.js';
 
-const checkedThrough = new Intl.DateTimeFormat('en-IN', {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-  timeZone: 'Asia/Kolkata',
-});
 const pageSize = 50;
-
-const fulfilmentLabels: Record<BillingFulfilment, string> = {
-  standard: 'Standard',
-  selfShip: 'Self-ship',
-  express: 'Express',
-  smart: 'Smart',
-  fbf: 'Fulfilment by Flipkart',
-};
 
 const statusLabel: Record<TrackedBillOrder['status'], string> = {
   matched: 'Billed',
   reserved: 'No matched bill',
   unmatched: 'No matched bill',
   review: 'Needs review',
-  cancelled: 'Cancelled',
+  cancelled: 'No matched bill',
+  received: 'Received back and sellable',
+  accounted: 'Previously billed',
   unmapped: 'Needs mapping',
 };
 
@@ -41,10 +36,16 @@ export interface TrackedBillScope {
   onTrackingDateChanged?: (from: string) => void;
   onFind: (order: BillTarget, trigger: HTMLButtonElement) => void;
   onRelease: (order: TrackedBillOrder) => void;
+  onReceive?: (order: TrackedBillOrder) => void;
+  renderDateEditor?: (from: string, disabled: boolean) => ReactNode;
   renderMapping?: (order: TrackedBillOrder, disabled: boolean) => ReactNode;
 }
 
-function useTrackedBillHistory({ companyId, accountId, revision }: TrackedBillScope) {
+function useTrackedBillHistory(
+  { companyId, accountId, revision }: TrackedBillScope,
+  trackingFrom?: string,
+) {
+  const initialFrom = useRef(trackingFrom);
   const [reload, setReload] = useState(0);
   const [result, setResult] = useState<{
     key: string;
@@ -52,8 +53,11 @@ function useTrackedBillHistory({ companyId, accountId, revision }: TrackedBillSc
     error?: string;
     retrying?: BillingFulfilment;
     retryError?: string;
+    fallbackFrom?: string;
   } | null>(null);
   const retryRequest = useRef<AbortController | null>(null);
+  const lastRead = useRef<{ scope: string; history: TrackedBillHistory } | null>(null);
+  const sellerScope = JSON.stringify([companyId, accountId]);
   const key = JSON.stringify([companyId, accountId, revision, reload]);
   useEffect(() => {
     const controller = new AbortController();
@@ -63,18 +67,61 @@ function useTrackedBillHistory({ companyId, accountId, revision }: TrackedBillSc
       controller.signal,
     )
       .then((history) => {
-        if (!controller.signal.aborted) setResult({ key, history });
+        if (!controller.signal.aborted) {
+          lastRead.current = { scope: sellerScope, history };
+          setResult({ key, history });
+        }
       })
       .catch((cause: unknown) => {
-        if (!controller.signal.aborted) setResult({ key, error: errorMessage(cause) });
+        if (controller.signal.aborted) return;
+        const temporary = !(cause instanceof RequestError) || cause.status >= 500;
+        const previous =
+          temporary && lastRead.current?.scope === sellerScope
+            ? lastRead.current.history
+            : undefined;
+        if (!previous) {
+          lastRead.current = null;
+          setResult({ key, error: errorMessage(cause) });
+          return;
+        }
+        setResult({
+          key,
+          error: errorMessage(cause),
+          fallbackFrom: previous.check?.from ?? initialFrom.current,
+          history: {
+            orders: previous.orders.map((order) => ({
+              ...order,
+              status: 'review',
+              savedOnly: true,
+              reason: 'Bill check incomplete.',
+              canFindBill: false,
+              reserved: undefined,
+              returnReceipt: undefined,
+              mapping: undefined,
+              linkToken: undefined,
+            })),
+            billed: [],
+            check: previous.check && {
+              ...previous.check,
+              complete: false,
+              billingIssue: undefined,
+              groups: previous.check.groups.map(({ group }) => ({ group, count: null })),
+            },
+          },
+        });
       });
     return () => {
       controller.abort();
       retryRequest.current?.abort();
       retryRequest.current = null;
     };
-  }, [key, companyId, accountId]);
-  const current = result?.key === key ? result : null;
+  }, [key, companyId, accountId, sellerScope]);
+  const current =
+    result?.key !== key
+      ? null
+      : result.error && result.history && result.fallbackFrom !== trackingFrom
+        ? { ...result, history: undefined }
+        : result;
   async function retry(group: BillingFulfilment) {
     const check = current?.history?.check;
     if (
@@ -92,10 +139,14 @@ function useTrackedBillHistory({ companyId, accountId, revision }: TrackedBillSc
         { companyId, accountId, checkId: check.id, retryGroup: group },
         controller.signal,
       );
-      if (!controller.signal.aborted) setResult({ key, history });
+      if (!controller.signal.aborted) {
+        lastRead.current = { scope: sellerScope, history };
+        setResult({ key, history });
+      }
     } catch (cause) {
       if (controller.signal.aborted) return;
       if (cause instanceof RequestError && [401, 403, 404, 409, 410].includes(cause.status)) {
+        lastRead.current = null;
         setResult({ key, error: errorMessage(cause) });
       } else {
         setResult({ key, history: current.history, retryError: errorMessage(cause) });
@@ -122,6 +173,12 @@ function emptyResultMessage(filter: OrderFilter, search: string, partial: boolea
   return 'No ' + filter + ' order items were found' + suffix;
 }
 
+function matchesSearch(order: TrackedBillOrder, bill: BilledOrderItem | undefined, search: string) {
+  return [order.orderId, order.orderItemId, bill?.bill.number ?? order.manualBillNumber].some(
+    (value) => value?.toLowerCase().includes(search),
+  );
+}
+
 export function TrackedBillOrders({
   scope,
   trackingFrom,
@@ -131,12 +188,13 @@ export function TrackedBillOrders({
   trackingFrom?: string;
   busy: boolean;
 }) {
-  const { current, retry, refresh } = useTrackedBillHistory(scope);
+  const { current, retry, refresh } = useTrackedBillHistory(scope, trackingFrom);
   const [filter, setFilter] = useState<OrderFilter>('all');
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(pageSize);
   const check = current?.history?.check;
   const missingCounts = check?.groups.some((group) => group.count === null);
+  const verifiedSubtotal = current?.history?.orders.filter((order) => !order.savedOnly).length;
   const checkedFrom = check?.from;
   const displayedFrom = checkedFrom ?? trackingFrom;
   const { onTrackingDateChanged } = scope;
@@ -153,16 +211,16 @@ export function TrackedBillOrders({
       orders?.filter((order) => {
         const bill = matches.get(order.orderItemId)?.bill;
         if (filter === 'billed' && !bill) return false;
-        if (filter === 'unresolved' && (bill || order.status === 'cancelled')) return false;
-        return (
-          !search ||
-          [order.orderId, order.orderItemId, bill?.number ?? order.manualBillNumber].some((value) =>
-            value?.toLowerCase().includes(search),
-          )
-        );
+        if (
+          filter === 'unresolved' &&
+          (bill || ['cancelled', 'received', 'accounted'].includes(order.status))
+        )
+          return false;
+        return !search || matchesSearch(order, matches.get(order.orderItemId), search);
       }),
     [orders, matches, search, filter],
   );
+  const savedCount = visibleOrders?.filter((order) => order.savedOnly).length ?? 0;
 
   function changeQuery(value: string) {
     setQuery(value);
@@ -176,10 +234,15 @@ export function TrackedBillOrders({
           <h2 ref={scope.headingRef} tabIndex={-1}>
             Tracked orders
           </h2>
-          <p>
-            Orders for this seller since{' '}
-            {displayedFrom ? formatIndiaDay(displayedFrom) + ' (India)' : 'tracking started'}.
-          </p>
+          {displayedFrom && scope.renderDateEditor ? (
+            scope.renderDateEditor(displayedFrom, !!current?.retrying)
+          ) : (
+            <p>
+              {displayedFrom
+                ? 'Orders placed since ' + formatIndiaDay(displayedFrom) + ' (India)'
+                : 'Orders for this seller since tracking started.'}
+            </p>
+          )}
         </div>
         <button className="button secondary" disabled={locked || !current} onClick={refresh}>
           Refresh tracked orders
@@ -195,15 +258,32 @@ export function TrackedBillOrders({
                   ? 'Fulfilment check · Incomplete'
                   : 'Order counts complete · Bill checks incomplete'}
             </strong>
-            {' · '}
-            {formatIndiaDay(check.from)} through {checkedThrough.format(new Date(check.to))} (India)
+            {!current?.error && (
+              <>
+                {' '}
+                · Orders placed {formatIndiaDay(check.from)} through {indiaTimestamp(check.to)}
+              </>
+            )}
           </p>
+          {!check.complete && check.lastCompleteAt && (
+            <p>Last complete check {indiaTimestamp(check.lastCompleteAt)}</p>
+          )}
+          {check.billingIssue && <p role="alert">{check.billingIssue}</p>}
+          {missingCounts &&
+            (check.groups.some(({ count }) => count !== null) ? (
+              <p>
+                {verifiedSubtotal} order {verifiedSubtotal === 1 ? 'item' : 'items'} across the
+                verified fulfilment types for this seller. The current total is unknown.
+              </p>
+            ) : (
+              <p>The current order total for this seller is unknown.</p>
+            ))}
           <dl aria-label="Order item counts by fulfilment type">
             {check.groups.map(({ group, count, error }) => (
               <div key={group}>
                 <dt>{fulfilmentLabels[group]}</dt>
                 <dd>{count ?? 'Unknown'}</dd>
-                {(count === null || error) && (
+                {!current?.error && (count === null || error) && (
                   <dd>
                     {error && <small>{error}</small>}
                     <button
@@ -258,18 +338,27 @@ export function TrackedBillOrders({
       </div>
       {!current && <p role="status">Checking tracked orders…</p>}
       {current?.error && <p role="alert">{current.error}</p>}
+      {current?.error && !check && <p>Current fulfilment counts are unknown.</p>}
       {visibleOrders &&
         (visibleOrders.length ? (
           <>
             <p>
               Showing {visibleOrders.length > limit && `${limit} of `}
               {visibleOrders.length} tracked order {visibleOrders.length === 1 ? 'item' : 'items'}
+              {(check?.complete === false || savedCount > 0 || current?.error) && (
+                <>
+                  {' '}
+                  in this view · {visibleOrders.length - savedCount} observed in this check ·{' '}
+                  {savedCount} saved from earlier checks
+                </>
+              )}
             </p>
             <div className="table-scroll">
               <table className="billing-table tracked-orders-table" aria-label="Tracked orders">
                 <thead>
                   <tr>
                     <th>Order item</th>
+                    <th>Marketplace status</th>
                     <th>Billing status</th>
                     <th>Action</th>
                   </tr>
@@ -300,13 +389,25 @@ export function TrackedBillOrders({
           </>
         ) : (
           <p role="status">
-            {emptyResultMessage(
-              filter,
-              search,
-              filter === 'all' && !search ? !!missingCounts : check?.complete === false,
-            )}
+            {current?.error && !search
+              ? 'No saved order items in this view.'
+              : emptyResultMessage(
+                  filter,
+                  search,
+                  filter === 'all' && !search ? !!missingCounts : check?.complete === false,
+                )}
           </p>
         ))}
+      {search &&
+        current &&
+        !orders?.some((order) => matchesSearch(order, matches.get(order.orderItemId), search)) && (
+          <ExactOrderLookup
+            key={JSON.stringify([query.trim(), scope.revision, check?.id])}
+            companyId={scope.companyId}
+            accountId={scope.accountId}
+            orderId={query.trim()}
+          />
+        )}
     </section>
   );
 }
@@ -332,6 +433,13 @@ function TrackedOrderRow({
         </small>
         {order.fulfilment && <small>{fulfilmentLabels[order.fulfilment]}</small>}
       </td>
+      <td data-label="Marketplace status">
+        <strong>{marketplaceStatusLabel(order.marketplaceStatus, order.marketplaceHold)}</strong>
+        {order.marketplaceStatus && order.statusVerifiedAt && (
+          <small>Last verified {indiaTimestamp(order.statusVerifiedAt)}</small>
+        )}
+        {order.savedOnly && <small>Saved order item · unseen in this check</small>}
+      </td>
       <td data-label="Billing status">
         <strong>{statusLabel[order.status]}</strong>
         {match && (
@@ -343,6 +451,11 @@ function TrackedOrderRow({
           </>
         )}
         <small>{order.reason}</small>
+        {order.reserved && (
+          <small>
+            {order.reserved.quantity} {order.reserved.unit} reserved
+          </small>
+        )}
         {!match && order.manualBillId && (
           <small>
             {order.manualBillNumber
@@ -352,6 +465,15 @@ function TrackedOrderRow({
         )}
       </td>
       <td data-label="Action">
+        {order.returnReceipt && scope.onReceive && (
+          <button
+            className="text-button"
+            disabled={locked}
+            onClick={() => scope.onReceive?.(order)}
+          >
+            Received back and sellable
+          </button>
+        )}
         {order.status === 'unmapped' && scope.renderMapping?.(order, locked)}
         {order.manualBillId && order.linkToken ? (
           <button className="text-button" disabled={locked} onClick={() => scope.onRelease(order)}>

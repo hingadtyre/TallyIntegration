@@ -29,6 +29,7 @@ const shipment = {
   orderItems: [baseItem],
 };
 const empty = () => Response.json({ hasMore: false, shipments: [] });
+const searchable = ['PICKUP_COMPLETE', 'SHIPPED', 'DELIVERED'];
 
 test('billing fulfilment groups cover each documented profile and shipment type once and retain exceptional orders', async () => {
   const types = ['NORMAL', 'SELF', 'EXPRESS'];
@@ -46,19 +47,16 @@ test('billing fulfilment groups cover each documented profile and shipment type 
         assert.deepEqual(filter.serviceProfiles, [profile]);
         assert.deepEqual(filter.orderDate, { from, to });
         assert.equal(filter.shipmentTypes.length, 1);
-        if (filter.type === 'postDispatch')
-          assert.deepEqual(filter.states, [
-            'PICKUP_COMPLETE',
-            'SHIPPED',
-            'DELIVERED',
-            'COMPLETED',
-            'RETURN_REQUESTED',
-            'RETURNED',
-          ]);
+        if (filter.type === 'postDispatch') {
+          assert.equal(filter.states.length, 1);
+          assert.ok(searchable.includes(filter.states[0]));
+        }
         const kind = filter.shipmentTypes[0];
-        const partition = [kind, filter.type, filter.cancellationType ?? filter.hold ?? ''].join(
-          '/',
-        );
+        const partition = [
+          kind,
+          filter.type,
+          filter.cancellationType ?? filter.hold ?? filter.states[0],
+        ].join('/');
         searches.push(partition);
         const status =
           filter.type === 'cancelled'
@@ -91,7 +89,7 @@ test('billing fulfilment groups cover each documented profile and shipment type 
     const expected = expectedTypes.flatMap((kind) => [
       kind + '/preDispatch/true',
       kind + '/preDispatch/false',
-      kind + '/postDispatch/',
+      ...searchable.map((state) => kind + '/postDispatch/' + state),
       kind + '/cancelled/buyerCancellation',
       kind + '/cancelled/sellerCancellation',
       kind + '/cancelled/marketplaceCancellation',
@@ -101,7 +99,7 @@ test('billing fulfilment groups cover each documented profile and shipment type 
     for (const row of rows) {
       const disposition = row.orderItemId.endsWith('/preDispatch/false')
         ? undefined
-        : /\/(?:buyerCancellation|marketplaceCancellation)$/.test(row.orderItemId)
+        : row.orderItemId.includes('/cancelled/')
           ? 'cancelled'
           : 'uncertain';
       assert.equal(row.stockDisposition, disposition, row.orderItemId);
@@ -136,6 +134,303 @@ test('an expanded group requires the correct profile, shipment type and every co
     await assert.rejects(
       client.readFulfilmentOrders(token, from, to, 'smart'),
       FlipkartBillingError,
+    );
+  }
+});
+
+test('normal discovery finds a shipped sale without its ID and ignores a confirmed seller cancellation in other programmes', async () => {
+  const observation = '2026-11-28T12:00:00.000Z';
+  const cancelled = {
+    ...baseItem,
+    orderItemId: 'cancelled',
+    status: 'CANCELLED',
+    cancellationDate: to,
+  };
+  const client = new FlipkartBillingClient({
+    now: () => Date.parse(observation),
+    request: async (input, options) => {
+      assert.equal(options?.method, 'POST');
+      assert.equal(String(input), search);
+      const { filter } = JSON.parse(String(options.body));
+      assert.equal(filter.orderIds, undefined);
+      assert.equal(filter.sku, undefined);
+      assert.equal(filter.skus, undefined);
+      if (filter.shipmentTypes[0] !== 'NORMAL') return empty();
+      let item;
+      if (filter.cancellationType === 'buyerCancellation') item = cancelled;
+      else if (
+        filter.type === 'postDispatch' &&
+        filter.states.length === 1 &&
+        filter.states[0] === 'SHIPPED' &&
+        filter.serviceProfiles[0] === 'NON_FBF'
+      )
+        item = { ...baseItem, status: 'SHIPPED', courierReturn: undefined };
+      else return empty();
+      return Response.json({ hasMore: false, shipments: [{ ...shipment, orderItems: [item] }] });
+    },
+  });
+  for (const read of [
+    client.readOrders(token, from, to),
+    client.readStockOrders(token, from, to),
+    client.readFulfilmentOrders(token, from, to, 'standard'),
+  ]) {
+    const row = (await read).find((item) => item.orderItemId === baseItem.orderItemId)!;
+    assert.equal(row.marketplaceStatus, 'SHIPPED');
+    assert.equal(row.statusVerifiedAt, observation);
+    assert.equal(row.eligibilityUnverified, true);
+    assert.equal(row.postDispatchWithoutCourierReturn, true);
+  }
+  for (const group of ['smart', 'fbf'] as const)
+    assert.deepEqual(await client.readFulfilmentOrders(token, from, to, group), []);
+});
+
+test('a foreign row must have a known membership and a consistent order identity before it can be skipped', async () => {
+  for (const fields of [
+    { serviceProfile: 'UNRECOGNIZED' },
+    { serviceProfile: ['NON_FBF'] },
+    { sku: undefined },
+    { orderId: undefined },
+  ]) {
+    const client = new FlipkartBillingClient({
+      request: async () =>
+        Response.json({
+          hasMore: false,
+          shipments: [{ ...shipment, orderItems: [{ ...baseItem, ...fields }] }],
+        }),
+    });
+    await assert.rejects(
+      client.readFulfilmentOrders(token, from, to, 'fbf'),
+      /incomplete or inconsistent/,
+    );
+  }
+});
+
+test('bill inspection evidence is absent on a shipped line with an additional exception or a contradictory duplicate', async () => {
+  const clean = { ...baseItem, status: 'SHIPPED', courierReturn: null };
+  const found = (items: Record<string, unknown>[], hold = false) => ({
+    ...shipment,
+    hold,
+    orderItems: items,
+  });
+  for (const result of [
+    found([clean], true),
+    found([{ ...clean, is_replacement: true }]),
+    found([{ ...clean, isReplacement: 'unknown' }]),
+    found([{ ...clean, cancellationDate: to }]),
+    found([{ ...clean, add_ons: [{ is_rto: true }] }]),
+    found([{ ...clean, add_ons: [{ is_rto: 'unknown' }] }]),
+    found([{ ...clean, status: 'RETURNED' }]),
+    found([{ ...clean, is_replacement: undefined }, clean]),
+    found([clean, { ...clean, is_replacement: undefined }]),
+  ]) {
+    const client = new FlipkartBillingClient({
+      request: async (_url, options) => {
+        const { filter } = JSON.parse(String(options?.body));
+        return filter.type === 'postDispatch' && filter.states[0] === 'SHIPPED'
+          ? Response.json({ hasMore: false, shipments: [result] })
+          : empty();
+      },
+    });
+    const [order] = await client.readFulfilmentOrders(token, from, to, 'standard');
+    assert.equal(order.eligibilityUnverified, true);
+    assert.equal(order.postDispatchWithoutCourierReturn, undefined);
+  }
+});
+
+test('a Smart shipment in an unexpected shipment-type filter still belongs to the verified Smart programme', async () => {
+  const client = new FlipkartBillingClient({
+    request: async (_url, options) => {
+      const { filter } = JSON.parse(String(options?.body));
+      if (
+        filter.shipmentTypes[0] !== 'EXPRESS' ||
+        filter.type !== 'postDispatch' ||
+        filter.states[0] !== 'SHIPPED'
+      )
+        return empty();
+      return Response.json({
+        hasMore: false,
+        shipments: [
+          {
+            ...shipment,
+            shipmentType: 'SELF',
+            orderItems: [{ ...baseItem, status: 'SHIPPED', serviceProfile: 'Smart_Fulfilment' }],
+          },
+        ],
+      });
+    },
+  });
+  const [order] = await client.readFulfilmentOrders(token, from, to, 'smart');
+  assert.equal(order.marketplaceStatus, 'SHIPPED');
+  assert.equal(order.eligibilityUnverified, undefined);
+});
+
+test('an order cancelled during a scan releases only verified pre-pickup stock, and confirmed returns can retrieve their bill reference', async () => {
+  let firstStatus = 'READY_TO_DISPATCH';
+  let lastStatus = 'CANCELLED';
+  const client = new FlipkartBillingClient({
+    request: async (url, options) => {
+      if (String(url).endsWith('/invoices'))
+        return Response.json({
+          invoices: [
+            {
+              shipmentId: shipment.shipmentId,
+              invoiceNumber: 'SALE-42',
+              orderItems: [{ orderItemId: baseItem.orderItemId }],
+            },
+          ],
+        });
+      const { filter } = JSON.parse(String(options?.body));
+      if (filter.shipmentTypes[0] !== 'NORMAL') return empty();
+      let status;
+      if (filter.type === 'preDispatch' && !filter.hold && firstStatus === 'READY_TO_DISPATCH')
+        status = firstStatus;
+      if (
+        filter.type === 'postDispatch' &&
+        filter.states[0] === 'SHIPPED' &&
+        firstStatus === 'SHIPPED'
+      )
+        status = firstStatus;
+      if (
+        (filter.cancellationType === 'sellerCancellation' && lastStatus === 'CANCELLED') ||
+        (filter.type === 'postDispatch' &&
+          filter.states[0] === 'DELIVERED' &&
+          lastStatus === 'RETURNED')
+      )
+        status = lastStatus;
+      if (!status) return empty();
+      return Response.json({
+        hasMore: false,
+        shipments: [
+          {
+            ...shipment,
+            orderItems: [
+              { ...baseItem, status, ...(status === 'CANCELLED' && { cancellationDate: to }) },
+            ],
+          },
+        ],
+      });
+    },
+  });
+  assert.equal((await client.readStockOrders(token, from, to))[0].stockDisposition, 'cancelled');
+  firstStatus = 'SHIPPED';
+  const [conflicted] = await client.readStockOrders(token, from, to);
+  assert.equal(conflicted.stockDisposition, 'uncertain');
+  assert.equal(conflicted.stockReconciliationRequired, true);
+  lastStatus = 'RETURNED';
+  assert.equal(
+    (await client.readStockOrders(token, from, to, true))[0].stockReturnVerified,
+    undefined,
+  );
+  firstStatus = '';
+  const [returned] = await client.readStockOrders(token, from, to, true);
+  assert.equal(returned.stockReturnVerified, true);
+  assert.equal(returned.invoiceNumber, 'SALE-42');
+});
+
+test('exact order and pickup diagnostics return bounded, read-only evidence from the specified account', async () => {
+  let payload: unknown = { shipments: [shipment] };
+  const urls: string[] = [];
+  const client = new FlipkartBillingClient({
+    now: () => Date.parse(to),
+    request: async (input, options) => {
+      assert.equal(new Headers(options?.headers).get('authorization'), 'Bearer ' + token);
+      assert.equal(options?.method, 'GET');
+      urls.push(String(input));
+      return Response.json(payload);
+    },
+  });
+  const exact = () => client.readExactOrder(token, 'order-a');
+  assert.deepEqual(await exact(), {
+    orderId: 'order-a',
+    checkedAt: to,
+    items: [
+      {
+        orderItemId: 'line-a',
+        shipmentId: 'shipment-a',
+        sku: ' TYRE-PAIR',
+        orderDate: '2026-11-03T12:00:00.000Z',
+        quantity: 2,
+        locationId: 'location-a',
+        marketplaceStatus: 'PACKED',
+        marketplaceHold: false,
+        fulfilment: 'standard',
+      },
+    ],
+  });
+  assert.equal(urls[0], 'https://api.flipkart.net/sellers/v3/shipments?orderIds=order-a');
+  for (const id of ['', 'one,two', 'x'.repeat(129)])
+    await assert.rejects(client.readExactOrder(token, id));
+  assert.equal(urls.length, 1);
+  for (const bad of [
+    { shipments: [{ ...shipment, orderItems: [{ ...baseItem, orderId: 'other' }] }] },
+    { shipments: [shipment, shipment] },
+    { shipments: [{ ...shipment, orderItems: [{ ...baseItem, quantity: 0 }] }] },
+    { shipments: null },
+  ]) {
+    payload = bad;
+    await assert.rejects(exact(), /incomplete or inconsistent/);
+  }
+  payload = { shipments: [] };
+  assert.deepEqual((await exact()).items, []);
+  payload = [
+    { vendorGroupCode: 'A', count: 2, otc: { code: 'private' } },
+    { vendorGroupCode: 'B', count: 3 },
+  ];
+  assert.equal(await client.readHandoverCount(token, 'location-a'), 5);
+  assert.equal(
+    urls.at(-1),
+    'https://api.flipkart.net/sellers/v3/shipments/handover/counts?locationId=location-a',
+  );
+  for (const bad of [
+    null,
+    {},
+    [{ count: 1 }],
+    [{ vendorGroupCode: 'A', count: -1 }],
+    [{ vendorGroupCode: 'A', count: 0.5 }],
+  ]) {
+    payload = bad;
+    await assert.rejects(
+      client.readHandoverCount(token, 'location-a'),
+      /incomplete or inconsistent/,
+    );
+  }
+});
+
+test('a slower order response can finish within the order timeout and failed reads expose only public evidence', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let configuredTimeout = 0;
+  t.mock.method(AbortSignal, 'timeout', (duration: number) => {
+    configuredTimeout = duration;
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), duration);
+    return controller.signal;
+  });
+  const client = new FlipkartBillingClient({
+    request: async (_url, options) =>
+      new Promise<Response>((resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(options.signal?.reason), {
+          once: true,
+        });
+        setTimeout(() => resolve(Response.json({ shipments: [] })), 20_000);
+      }),
+  });
+  const pending = client.readExactOrder(token, 'order-a');
+  t.mock.timers.tick(20_000);
+  assert.deepEqual((await pending).items, []);
+  assert.equal(configuredTimeout, 60_000);
+  for (const code of ['INVALID_STATUS_REQUESTED', 'PRIVATE_ORDER_IDENTIFIER']) {
+    const bad = new FlipkartBillingClient({
+      request: async () =>
+        Response.json({ errors: [{ code, message: 'private customer message' }] }, { status: 400 }),
+    });
+    await assert.rejects(
+      bad.readOrders(token, from, to),
+      (error) =>
+        error instanceof FlipkartBillingError &&
+        error.message.includes('HTTP 400') &&
+        error.message.includes('INVALID_STATUS_REQUESTED') ===
+          (code === 'INVALID_STATUS_REQUESTED') &&
+        !/private/i.test(error.message),
     );
   }
 });
@@ -349,7 +644,6 @@ test('a missing courier-return flag still requires an unheld forward sale in the
             ...shipment,
             orderItems: [
               item('unknown-profile', { serviceProfile: null }),
-              item('malformed-profile', { serviceProfile: ['NON_FBF'] }),
               item('unknown-replacement', { is_replacement: undefined }),
               item('positive-replacement-alias', { isReplacement: true }),
               item('malformed-flag', { courierReturn: 'false' }),
@@ -384,13 +678,18 @@ test('a missing courier-return flag still requires an unheld forward sale in the
     },
   });
   const stock = await client.readStockOrders(token, from, to);
-  assert.equal(stock.length, 19);
+  assert.equal(stock.length, 18);
   for (const row of stock) {
     assert.equal(row.stockDisposition, 'uncertain', row.orderItemId);
     assert.equal(row.eligibilityUnverified, true, row.orderItemId);
+    assert.equal(
+      row.postDispatchWithoutCourierReturn,
+      row.orderItemId === 'shipped' ? true : undefined,
+      row.orderItemId,
+    );
   }
   const preview = await client.readOrders(token, from, to);
-  assert.equal(preview.length, 11);
+  assert.equal(preview.length, 10);
   for (const row of preview) assert.equal(row.eligibilityUnverified, true, row.orderItemId);
 });
 
@@ -419,6 +718,10 @@ test('a duplicate order observation cannot clear disputed eligibility within the
       else {
         const [stock] = await client.readStockOrders(token, from, to);
         assert.equal(stock.stockDisposition, 'uncertain');
+      }
+      if (suspect.serviceProfile === 'FBF') {
+        await assert.rejects(client.readOrders(token, from, to), /incomplete or inconsistent/);
+        continue;
       }
       const preview = await client.readOrders(token, from, to);
       if (suspect.is_replacement === undefined)
@@ -524,7 +827,7 @@ test('optional classification fields leave an identified line visible for review
   assert.equal(orders.length, 1);
   assert.equal(orders[0].eligibilityUnverified, true);
   assert.equal(orders[0].orderDate, '2026-11-03T12:00:00.000Z');
-  assert.equal(count, 4);
+  assert.equal(count, 8);
 });
 
 test('the setup preview and tracked history both require the shipment type and fulfilment profile to verify a sale', async () => {
@@ -565,10 +868,11 @@ test('order errors expose the actionable request limit without exposing provider
   );
 });
 
-test('reads the review window across four dispatch partitions and pages, retaining exact order and invoice line identities', async () => {
+test('reads the setup window across each dispatch state and pages, retaining exact order and invoice line identities', async () => {
   const partitions: string[] = [];
   let invoiceReads = 0;
   const client = new FlipkartBillingClient({
+    now: () => Date.parse(to),
     request: async (input, options) => {
       const url = String(input);
       assert.equal(options?.redirect, 'error');
@@ -603,11 +907,13 @@ test('reads the review window across four dispatch partitions and pages, retaini
       assert.equal(options?.method, 'POST');
       const body = JSON.parse(String(options.body));
       assert.deepEqual(body.filter.serviceProfiles, ['NON_FBF']);
-      if (body.filter.type === 'postDispatch')
-        assert.deepEqual(body.filter.states, ['PICKUP_COMPLETE', 'SHIPPED', 'DELIVERED']);
+      if (body.filter.type === 'postDispatch') {
+        assert.equal(body.filter.states.length, 1);
+        assert.ok(searchable.includes(body.filter.states[0]));
+      }
       assert.deepEqual(body.filter.orderDate, { from, to });
       assert.equal(body.pagination.pageSize, 20);
-      partitions.push(body.filter.type + '-' + body.filter.shipmentTypes[0]);
+      partitions.push(body.filter.states.join(',') + '-' + body.filter.shipmentTypes[0]);
       if (partitions.length === 1)
         return Response.json({
           hasMore: true,
@@ -619,10 +925,9 @@ test('reads the review window across four dispatch partitions and pages, retaini
   });
   const orders = await client.readOrders(token, from, to, true);
   assert.deepEqual(partitions, [
-    'preDispatch-NORMAL',
-    'preDispatch-SELF',
-    'postDispatch-NORMAL',
-    'postDispatch-SELF',
+    'APPROVED,PACKING_IN_PROGRESS,FORM_FAILED,PACKED,READY_TO_DISPATCH-NORMAL',
+    'APPROVED,PACKING_IN_PROGRESS,FORM_FAILED,PACKED,READY_TO_DISPATCH-SELF',
+    ...searchable.flatMap((state) => [state + '-NORMAL', state + '-SELF']),
   ]);
   assert.equal(invoiceReads, 1);
   assert.equal(orders.length, 2);
@@ -635,6 +940,9 @@ test('reads the review window across four dispatch partitions and pages, retaini
     locationId: 'location-a',
     quantity: 2,
     orderDate: '2026-11-03T12:00:00.000Z',
+    marketplaceStatus: 'PACKED',
+    marketplaceHold: false,
+    statusVerifiedAt: to,
   });
   assert.equal(orders[1].invoiceNumber, null);
 });
@@ -782,7 +1090,9 @@ test('stock history includes hold, forward, return and cancellation searches for
       const { filter } = JSON.parse(String(options?.body));
       const kind = filter.shipmentTypes[0];
       assert.deepEqual(filter.serviceProfiles, ['NON_FBF']);
-      partitions.push([kind, filter.type, filter.cancellationType ?? filter.hold ?? ''].join('/'));
+      partitions.push(
+        [kind, filter.type, filter.cancellationType ?? filter.hold ?? filter.states[0]].join('/'),
+      );
       const found = (orderItems: unknown[], hold = false) =>
         Response.json({
           hasMore: false,
@@ -792,7 +1102,8 @@ test('stock history includes hold, forward, return and cancellation searches for
       if (filter.type === 'preDispatch' && filter.hold)
         return found([{ ...baseItem, orderItemId: 'held' }], true);
       if (filter.type === 'postDispatch') {
-        assert.deepEqual(filter.states, ['PICKUP_COMPLETE', 'SHIPPED', 'DELIVERED']);
+        assert.equal(filter.states.length, 1);
+        if (filter.states[0] !== 'SHIPPED') return empty();
         return Response.json({
           hasMore: true,
           nextPageUrl: '?next_token=stock-page-2',
@@ -820,13 +1131,13 @@ test('stock history includes hold, forward, return and cancellation searches for
     for (const part of [
       'preDispatch/true',
       'preDispatch/false',
-      'postDispatch/',
+      ...searchable.map((state) => 'postDispatch/' + state),
       'cancelled/buyerCancellation',
       'cancelled/sellerCancellation',
       'cancelled/marketplaceCancellation',
     ])
       assert.ok(partitions.includes(kind + '/' + part));
-  assert.equal(partitions.length, 12);
+  assert.equal(partitions.length, 16);
   const byId = new Map(orders.map((order) => [order.orderItemId, order]));
   assert.ok(byId.has('sold'));
   assert.equal(byId.get('sold')?.stockDisposition, undefined);
@@ -834,14 +1145,7 @@ test('stock history includes hold, forward, return and cancellation searches for
   assert.equal(byId.get('shipped')?.stockDisposition, undefined);
   assert.equal(byId.get('shipped')?.stockReconciliationRequired, undefined);
   assert.equal(byId.get('buyerCancellation')?.stockReconciliationRequired, undefined);
-  for (const id of [
-    'line-a',
-    'sellerCancellation',
-    'pending-return',
-    'returned',
-    'rto',
-    'rto-addon',
-  ])
+  for (const id of ['line-a', 'rto', 'rto-addon'])
     assert.equal(byId.get(id)?.stockReconciliationRequired, true, id);
   for (const id of [
     'line-a',
@@ -855,9 +1159,14 @@ test('stock history includes hold, forward, return and cancellation searches for
     assert.equal(byId.get(id)?.stockDispatchObserved, true, id);
   assert.equal(byId.get('buyerCancellation')?.stockDisposition, 'cancelled');
   assert.equal(byId.get('marketplaceCancellation')?.stockDisposition, 'cancelled');
+  assert.equal(byId.get('sellerCancellation')?.stockDisposition, 'cancelled');
+  for (const id of ['pending-return', 'returned']) {
+    assert.equal(byId.get(id)?.stockReturnObserved, true);
+    assert.equal(byId.get(id)?.stockReturnVerified, true);
+    assert.equal(byId.get(id)?.stockReconciliationRequired, undefined);
+  }
   for (const id of [
     'line-a',
-    'sellerCancellation',
     'held',
     'replacement',
     'pending-return',

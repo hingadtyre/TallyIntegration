@@ -134,6 +134,7 @@ export class MarketplaceService {
       store,
       dependencies.billingSources,
       billingAccess,
+      this.availability,
     );
     this.billLookup = new BillLookupService(
       store,
@@ -872,6 +873,11 @@ export class MarketplaceService {
 
   async billingCommand(path: string, input: Record<string, unknown>) {
     const account = this.account(input.accountId);
+    if (path === '/api/billing/confirm-return') {
+      return this.serial('stock-evidence:' + requireText(input.companyId, 'Tally company'), () =>
+        this.availability.confirmSellableReturn(input, account.id, this.trackedBilling),
+      );
+    }
     if (
       path === '/api/billing/coverage' ||
       path === '/api/billing/coverage/start' ||
@@ -886,6 +892,8 @@ export class MarketplaceService {
     if (
       [
         '/api/billing/tracked-bills',
+        '/api/billing/lookup-order',
+        '/api/billing/pickup-count',
         '/api/billing/find-bill',
         '/api/billing/link-bill',
         '/api/billing/release-bill',

@@ -4,6 +4,14 @@
 
 This is the readiness checklist for the first customer delivery. The [approved architecture](design/architecture.md#customer-release-completion) defines the required behavior; [README](../README.md) describes the delivered build; [customer setup](customer-setup.md) describes the available operating steps. Test fixtures establish local behavior, not a live Tally or Flipkart connection.
 
+## Order discovery and reservations on 28 November 2026
+
+A read-only replay of the customer's period found both Standard orders through the updated billing and stock readers. The other four fulfilment checks completed with zero items. The CEAT order can show its verified shipped status while its bill or reservation eligibility still needs evidence. The exact order and pickup count were also read successfully. See the [Flipkart validation record](integration/flipkart-validation.md#live-shipment-search-comparison-on-28-november-2026).
+
+Customer acceptance still needs a newly placed, mapped order through reservation, pickup and the Tally deduction, along with the resulting stock publication. A billed cancellation or return follows the stock-affecting voucher entered by the seller in Tally. An unbilled, verified return after pickup remains reserved until the seller confirms receipt of the whole sellable item.
+
+The 28 November order-matching build passed 682 automated tests, formatting, lint and the production build. All 25 extracted Windows package checks passed, including upgrade and restore. Two refreshes in the running demo preserved the placement date, recorded fresh marketplace observation times and kept exactly one tyre reserved for the same order awaiting dispatch. The pilot ZIP for this change is `Stockbridge-Pilot-0.1.0-2026-11-28T12-48-36-833Z-96eb4241-dirty-win-x64.zip`.
+
 ## Reviewed Inventory stock changes on 28 November 2026
 
 Explicit Calculate replaces saved drafts in the selected or filtered scope. A manual quantity, including zero, stages a pause. A fresh calculation stages a resume for a paused pickup location. The seller can discard individual proposals before publishing. Schema 17 retains the intended action through restart and removes pending resumes on offline restore. Customer acceptance still requires exercising the reviewed flow at an approved Flipkart location. [Review decision](adr/0009-review-stock-and-sync-together.md)

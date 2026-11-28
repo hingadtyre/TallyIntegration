@@ -2,8 +2,15 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { FlipkartBillingOrder } from '../../adapters/flipkart-billing.js';
 import type { BillingFulfilment } from '../../shared/billing-contracts.js';
 import { checkedOrder } from './stock-coverage.js';
+import { schemaVersion } from './schema.js';
 
 export function verifyBillingOrders(database: DatabaseSync): void {
+  if (schemaVersion(database) >= 18)
+    database
+      .prepare(
+        'SELECT company_id, account_id, signature, completed_at FROM billing_check_receipts LIMIT 0',
+      )
+      .all();
   database.prepare('SELECT company_id, from_at FROM billing_tracking_dates LIMIT 0').all();
   for (const row of database.prepare('SELECT evidence FROM billing_orders').iterate())
     checkedOrder(JSON.parse(String(row.evidence)), 'billing');

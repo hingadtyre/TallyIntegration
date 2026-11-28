@@ -494,6 +494,11 @@ test('all filters use the same seller history, including older Smart orders, rev
     null,
     'stale matches are hidden',
   );
+  fireEvent.change(filter, { target: { value: 'all' } });
+  assert.ok(table().getByText('AUG-1'));
+  assert.equal(table().getAllByText(/Saved order item/).length, history.orders.length);
+  assert.equal(table().queryByRole('button'), null);
+  assert.equal(table().queryByText('SALE-55'), null);
   fireEvent.click(screen.getByRole('button', { name: 'Refresh tracked orders' }));
   await waitFor(() => assert.equal(typeof finishRefresh, 'function'));
   await act(async () =>
@@ -1415,7 +1420,7 @@ test('company stock tracking starts only after the seller confirms the chosen In
   assert.ok(button.disabled);
   fireEvent.click(confirmation);
   fireEvent.click(button);
-  await screen.findByRole('button', { name: 'Review starting stock' });
+  await screen.findByRole('button', { name: 'Change tracking date' });
   assert.deepEqual(saved, [
     { ...scope, fromDate: today, confirmed: true, setupVersion: 'reviewed' },
   ]);
@@ -1501,17 +1506,15 @@ test('refreshing tracked orders picks up a tracking date and starting stock chan
       onConnect={assert.fail}
     />,
   );
-  await screen.findByText('Bill matching starts on 20 Nov 2026 (India).');
+  await screen.findByText('Orders placed since 20 Nov 2026 (India)');
   await screen.findByText('Fulfilment check · Complete');
-  fireEvent.click(screen.getByRole('button', { name: 'Change billing start date' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Change tracking date' }));
   const oldDate = screen.getByLabelText<HTMLInputElement>('Match orders from (India)');
   assert.equal(oldDate.value, '2026-11-20');
   savedFrom = changed;
   fireEvent.click(screen.getByRole('button', { name: 'Refresh tracked orders' }));
-  await screen.findByText('Orders for this seller since 23 Nov 2026 (India).');
-  await screen.findByText('Stockbridge checks orders for this company from 23 Nov 2026 (India).');
-  assert.equal(screen.queryByLabelText('Match orders from (India)'), null);
-  fireEvent.click(screen.getByRole('button', { name: 'Review starting stock' }));
+  await screen.findByText('Orders placed since 23 Nov 2026 (India)');
+  fireEvent.click(await screen.findByRole('button', { name: 'Change tracking date' }));
   assert.equal(
     screen.getByLabelText<HTMLInputElement>('Track orders from (India)').value,
     '2026-11-23',
@@ -1590,7 +1593,14 @@ test('changing the company date refreshes tracked orders; the short preview runs
   assert.equal(screen.queryByLabelText('Order period'), null);
   assert.equal(screen.queryByText(item.orderItemId), null);
   assert.deepEqual(periods, []);
-  fireEvent.click(screen.getByRole('button', { name: 'Review starting stock' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Change tracking date' }));
+  assert.ok(
+    screen.getByText(
+      'Saving this date changes tracking for all participating sellers in ' +
+        inventory.companies[0].name +
+        '.',
+    ),
+  );
   const date = screen.getByLabelText<HTMLInputElement>('Track orders from (India)');
   const confirmation = screen.getByRole<HTMLInputElement>('checkbox', {
     name: /I have checked all three/,

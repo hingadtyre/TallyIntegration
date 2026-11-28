@@ -161,18 +161,25 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           ledger and where you record the order reference, or choose to match bills manually.
           Preview up to 30 days of Standard and Self-ship orders, then confirm the setup for that
           seller. Set billing start date starts bill matching for the company. A company with
-          confirmed starting stock already has a date.
+          confirmed starting stock already has a date. Choose Change tracking date beside Orders
+          placed since to edit it. Saving changes the period for all participating sellers in the
+          company. With starting stock confirmed, review any earlier reservations before saving.
         </p>
         <p>
           Tracked orders opens automatically from the saved date. Stockbridge checks Standard,
           Self-ship, Express, Smart and Fulfilment by Flipkart. Choose Billed to see the Tally bill
           number, date and match method. Choose Unresolved for unbilled sales, missing mappings and
           items needing review. All includes verified cancellations. Search any view by order
-          number, order item ID or Tally bill number. Unknown means the selected seller’s order
-          check failed. A count with a warning means orders were counted and some bill checks still
-          need attention. Use the retry beside the warning to check the same period again. If a
-          manual link needs review, you can still find its previous bill number under All or
-          Unresolved.
+          number, order item ID or Tally bill number. Each row separates the last known marketplace
+          status from the bill result. In a partial check, Unknown marks a missing fulfilment count.
+          Saved order item means the item was seen earlier. A numeric count beside a warning means
+          some bill checks still need attention. Use the retry beside the warning.
+        </p>
+        <p>
+          If an order appears in Seller Hub but is missing here, search for its full order ID and
+          choose Check exact order on Flipkart. Read the item, shipment and pickup details. You can
+          check how many shipments await handover at that location. Use Refresh tracked orders to
+          check bills and reservations.
         </p>
         <p>
           Choose Map listing beside an unmapped sale to confirm the Tally item and its Set of at the
@@ -188,6 +195,13 @@ export function CustomerSetup({ onOpenSettings }: { onOpenSettings: () => void }
           their stock source. With company sync on, eligible listings sharing the item can publish a
           lower available quantity when a covered order arrives. An unmapped sale can temporarily
           leave too many units available on another listing.
+        </p>
+        <p>
+          A verified cancellation before pickup releases an unbilled reservation. After pickup,
+          choose Received back and sellable only when every unit shown for the returned order item
+          is physically back and sellable. Stockbridge rechecks Tally before releasing the
+          reservation. If a verified bill already deducted the units, record any stock reversal in
+          Tally. Stockbridge reads the resulting stock balance.
         </p>
       </details>
       <details className="guide-topic">

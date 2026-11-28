@@ -1968,6 +1968,28 @@ small {
 .fulfilment-check {
   margin: 0 var(--panel-inset) 16px;
 }
+.tracked-date,
+.exact-order-lookup {
+  display: grid;
+  gap: 8px;
+}
+.tracked-date .billing-actions:empty {
+  display: none;
+}
+.tracked-date .billing-form {
+  margin-block: 10px;
+}
+.exact-order-lookup {
+  justify-items: start;
+  margin: 0 var(--panel-inset) 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.exact-order-lookup :is(h3, p, ul) {
+  margin-block: 0;
+}
 .fulfilment-check dl {
   display: flex;
   flex-wrap: wrap;
@@ -3555,7 +3577,7 @@ small {
   .tracked-orders-table td:empty {
     display: none;
   }
-  .tracked-orders-table tr:has(> td:last-child:empty) td:nth-child(2) {
+  .tracked-orders-table td:last-child {
     grid-column: 1 / -1;
   }
   .billing-choice select {

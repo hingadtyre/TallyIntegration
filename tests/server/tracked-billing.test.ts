@@ -16,6 +16,7 @@ import {
   billingFulfilments,
   type BillingFulfilment,
   type BillLookup,
+  type MarketplaceOrderLookup,
   type TrackedBillHistory,
 } from '../../src/shared/billing-contracts.js';
 import { marketplaceData } from '../support/marketplace-fixture.js';
@@ -317,7 +318,7 @@ test('a warehouse order can be mapped and billed while stock updates wait for th
   assert.equal(promoted.sourceScope, 'company');
   assert.equal(promoted.paused, true);
   assert.equal(f.stockStatus().current, false);
-  assert.match(f.stockStatus().issue ?? '', /Review starting stock/);
+  assert.match(f.stockStatus().issue ?? '', /Change tracking date/);
   assert.deepEqual(f.store.readStockCoverage(f.companyId)?.orders, []);
 });
 
@@ -685,7 +686,8 @@ test('a verified cancellation reported under one programme stays cancelled acros
   const retained = await f.history();
   assert.equal(retained.orders[0].status, 'cancelled');
   assert.equal(retained.orders.length, 1);
-  assert.equal(retained.check?.groups.find((group) => group.group === 'express')?.count, 1);
+  assert.equal(retained.check?.groups.find((group) => group.group === 'express')?.count, 0);
+  assert.equal(retained.orders[0].savedOnly, true);
 });
 
 test('conflicting invoice results across fulfilment types require a retry in either search order', async (t) => {
@@ -747,7 +749,7 @@ test('invoice recovery for an order found in two fulfilment types survives a lat
   const retained = await f.history();
   assert.equal(retained.check?.complete, true);
   for (const group of ['standard', 'smart']) {
-    assert.equal(retained.check.groups.find((g) => g.group === group)?.count, 1);
+    assert.equal(retained.check.groups.find((g) => g.group === group)?.count, 0);
   }
   assert.deepEqual(
     retained.orders.map((row) => row.orderItemId),
@@ -756,6 +758,122 @@ test('invoice recovery for an order found in two fulfilment types survives a lat
   assert.deepEqual(
     retained.billed.map((row) => row.bill.number),
     ['TALLY-908'],
+  );
+});
+
+test('a failed shipment refresh retains the last verified status and the last complete check across restart', async (t) => {
+  const f = fixture(t);
+  const original = {
+    ...f.sale('shipped'),
+    marketplaceStatus: 'SHIPPED',
+    statusVerifiedAt: new Date().toISOString(),
+  };
+  f.orders.set('standard', [original]);
+  const first = await f.history();
+  assert.ok(first.check?.lastCompleteAt);
+  f.reopenLookup();
+  for (const group of billingFulfilments) f.errors.add(group);
+  const partial = await f.history();
+  assert.equal(partial.check?.lastCompleteAt, first.check.lastCompleteAt);
+  assert.ok(partial.check?.groups.every((g) => g.count === null));
+  assert.equal(partial.orders[0].marketplaceStatus, 'SHIPPED');
+  assert.equal(partial.orders[0].statusVerifiedAt, original.statusVerifiedAt);
+  assert.equal(partial.orders[0].savedOnly, true);
+  assert.equal(partial.orders[0].canFindBill, false);
+});
+
+test('a Tally outage preserves independently verified marketplace counts and status', async (t) => {
+  const f = fixture(t);
+  f.orders.set('standard', [{ ...f.sale('waiting'), marketplaceStatus: 'PACKED' }]);
+  const tally = f.sources.tally('');
+  f.sources.tally = () => ({
+    ...tally,
+    readSalesBills: async () => {
+      throw new Error('offline');
+    },
+  });
+  const result = await f.history();
+  assert.equal(result.check?.complete, false);
+  assert.match(result.check.billingIssue!, /Tally/);
+  assert.equal(result.check.groups.find((g) => g.group === 'standard')?.count, 1);
+  assert.equal(result.orders[0].marketplaceStatus, 'PACKED');
+  assert.equal(result.orders[0].savedOnly, undefined);
+  assert.equal(result.orders[0].canFindBill, false);
+  assert.equal(result.orders[0].reserved, undefined);
+  assert.deepEqual(result.billed, []);
+});
+
+test('an observed shipment with unknown return status can inspect a matching voucher without linking or releasing units', async (t) => {
+  const f = fixture(t);
+  const sale = {
+    ...f.sale('ceat'),
+    stockShipmentId: 'shipment-ceat',
+    postDispatchWithoutCourierReturn: true as const,
+    marketplaceStatus: 'SHIPPED',
+    stockDispatchObserved: true as const,
+    eligibilityUnverified: true as const,
+    stockDisposition: 'uncertain' as const,
+  };
+  f.orders.set('standard', [sale]);
+  f.bills.push(f.voucher('SALE-42', sale.orderId));
+  const result = await f.history();
+  assert.deepEqual(result.billed, []);
+  assert.equal(result.orders[0].canFindBill, true);
+  assert.equal(result.orders[0].reserved, undefined);
+  const inspected = (await f.command('find-bill', {
+    orderItemId: sale.orderItemId,
+    billNumber: 'SALE-42',
+  })) as BillLookup;
+  assert.equal(inspected.baseUnits, 2);
+  assert.match(inspected.bills[0].issue!, /return status/);
+  await assert.rejects(
+    f.command('link-bill', {
+      reviewId: inspected.reviewId,
+      orderItemId: sale.orderItemId,
+      billId: inspected.bills[0].id,
+    }),
+    /return status/,
+  );
+  assert.deepEqual(f.store.readBilling().links, []);
+});
+
+test('exact order and handover diagnostics stay within the seller and verified pickup location and never journal stock', async (t) => {
+  const f = fixture(t);
+  const order = f.sale('line', 'OD1234');
+  const before = f.store.readStockCoverage(f.companyId);
+  f.sources.orders.readExactOrder = async (token, id) => {
+    assert.equal(token, f.accountId);
+    return {
+      orderId: id,
+      checkedAt: order.orderDate,
+      items: id === order.orderId ? [{ ...order, marketplaceStatus: 'PACKED' }] : [],
+    };
+  };
+  let counts = 0;
+  f.sources.orders.readHandoverCount = async (token, pickup) => {
+    assert.equal(token, f.accountId);
+    assert.equal(pickup, order.locationId);
+    counts++;
+    return 4;
+  };
+  const result = (await f.command('lookup-order', {
+    orderId: order.orderId,
+  })) as MarketplaceOrderLookup;
+  assert.equal(result.items[0].quantity, 1);
+  const count = (await f.command('pickup-count', {
+    orderId: order.orderId,
+    locationId: order.locationId,
+  })) as { shipmentCount: number };
+  assert.equal(count.shipmentCount, 4);
+  await assert.rejects(
+    f.command('pickup-count', { orderId: order.orderId, locationId: 'elsewhere' }),
+    /location/,
+  );
+  assert.equal(counts, 1);
+  assert.deepEqual(f.store.readStockCoverage(f.companyId), before);
+  assert.deepEqual(
+    f.store.readBillingOrders(f.companyId, f.accountId, order.orderDate, order.orderDate),
+    [],
   );
 });
 
@@ -884,6 +1002,25 @@ test('an inaccessible peer holds shared stock-item bill claims and preserves ind
   const complete = await f.history();
   assert.equal(complete.check?.complete, true);
   assert.equal(complete.billed.length, 2);
+  const tally = f.sources.tally('');
+  f.sources.tally = () => ({
+    ...tally,
+    readSalesBills: async (...args) => {
+      if (args[1] === 'peer-ledger') throw new Error('peer ledger unavailable');
+      return tally.readSalesBills(...args);
+    },
+  });
+  const peerLedgerOutage = await f.history();
+  assert.match(peerLedgerOutage.check!.billingIssue!, /Tally/);
+  assert.deepEqual(
+    peerLedgerOutage.billed.map((row) => row.bill.number),
+    ['INDEPENDENT'],
+  );
+  assert.match(
+    peerLedgerOutage.orders.find((row) => row.orderItemId === 'shared-line')!.reason,
+    /Tally bills could not be read/,
+  );
+  f.sources.tally = () => tally;
   sharedBill.reference = 'misspelled';
   const reviewed = (await f.command('find-bill', {
     orderItemId: 'shared-line',

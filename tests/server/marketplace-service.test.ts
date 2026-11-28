@@ -798,9 +798,9 @@ test('Inventory and Marketplaces report the same automatic stock state as setup 
   const coverage = s.f.store.readStockCoverage(s.item.companyId)!;
   const lastCheck = new Date(Date.parse(coverage.from) - 31 * 86_400_000).toISOString();
   s.f.store.saveStockCoverage({ ...coverage, from: lastCheck, checkedThrough: lastCheck });
-  assert.match(status(), /gap in order coverage.*Review starting stock/);
+  assert.match(status(), /gap in order coverage.*Change tracking date/);
   s.f.store.saveStockCoverage({ ...coverage, signature: 'previous-stock-setup' });
-  assert.match(status(), /setup changed.*Review starting stock/);
+  assert.match(status(), /setup changed.*Change tracking date/);
   s.f.store.saveStockCoverage(coverage);
   s.f.store.updateMarketplace((market) => {
     market.changes[0].state = 'uncertain';

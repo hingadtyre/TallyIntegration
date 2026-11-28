@@ -114,7 +114,14 @@ test('sample order dates stay on the integration installation day and respect bo
   const installed = items.find((item) => item.id === itemId)!.observedAt!;
   const before = new Date(Date.parse(installed) - 1).toISOString();
   const after = new Date(Date.parse(installed) + 1).toISOString();
+  const firstRead = Date.parse(installed) + 1_000;
+  t.mock.timers.enable({ apis: ['Date'], now: firstRead });
   const placed = sampleBills(retail, installed, installed, installed).stockOrders[0];
+  assert.equal(placed.statusVerifiedAt, new Date(firstRead).toISOString());
+  t.mock.timers.setTime(firstRead + 1_000);
+  const reread = sampleBills(retail, installed, installed, installed).stockOrders[0];
+  assert.equal(reread.orderDate, placed.orderDate);
+  assert.equal(reread.statusVerifiedAt, new Date(firstRead + 1_000).toISOString());
   assert.equal(
     sampleOrderDate(retail, items, [
       { accountId: retail.accountId, order: { ...placed, orderDate: before } },

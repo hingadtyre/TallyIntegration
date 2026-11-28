@@ -7,6 +7,7 @@ export function checkedOrder(
   scope: 'stock' | 'billing' = 'stock',
 ): StockCoverageOrder {
   const order = value as Partial<StockCoverageOrder> | null;
+  const token = (field: unknown) => typeof field === 'string' && /^[0-9a-f]{64}$/u.test(field);
   if (
     !order ||
     typeof order !== 'object' ||
@@ -25,8 +26,33 @@ export function checkedOrder(
     typeof order.orderDate !== 'string' ||
     !Number.isFinite(Date.parse(order.orderDate)) ||
     (order.eligibilityUnverified !== undefined && order.eligibilityUnverified !== true) ||
+    (order.marketplaceStatus !== undefined &&
+      (typeof order.marketplaceStatus !== 'string' || !order.marketplaceStatus.trim())) ||
+    (order.marketplaceHold !== undefined && typeof order.marketplaceHold !== 'boolean') ||
+    (order.statusVerifiedAt !== undefined &&
+      (!order.marketplaceStatus ||
+        typeof order.statusVerifiedAt !== 'string' ||
+        !Number.isFinite(Date.parse(order.statusVerifiedAt)))) ||
+    (order.stockReturnObserved !== undefined && order.stockReturnObserved !== true) ||
+    (order.stockReturnVerified !== undefined &&
+      (order.stockReturnVerified !== true ||
+        !order.stockReturnObserved ||
+        !order.stockShipmentId ||
+        !order.stockDispatchObserved)) ||
+    (order.sellableReturnToken !== undefined && !token(order.sellableReturnToken)) ||
+    [order.verifiedDeduction, order.billingDeduction].some(
+      (proof) =>
+        proof !== undefined &&
+        (!proof ||
+          !token(proof.stockToken) ||
+          typeof proof.billId !== 'string' ||
+          !proof.billId.trim() ||
+          (proof.linkFingerprint !== undefined && typeof proof.linkFingerprint !== 'string')),
+    ) ||
     ('preDispatchWithoutCourierReturn' in order &&
       (order.preDispatchWithoutCourierReturn !== true || !order.stockShipmentId)) ||
+    (order.postDispatchWithoutCourierReturn !== undefined &&
+      (order.postDispatchWithoutCourierReturn !== true || !order.stockShipmentId)) ||
     (order.stockSyncQueued !== undefined && order.stockSyncQueued !== true) ||
     (order.firstSeenUnmapped !== undefined && order.firstSeenUnmapped !== true) ||
     (order.stockIdentityConflict !== undefined && order.stockIdentityConflict !== true) ||

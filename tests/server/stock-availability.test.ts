@@ -5,7 +5,8 @@ import {
   type FlipkartBillingOrder,
 } from '../../src/adapters/flipkart-billing.js';
 import type { TallySalesBill, TallyStockItem } from '../../src/adapters/tally.js';
-import { BillingService } from '../../src/server/billing-service.js';
+import { BillingService, type BillingSources } from '../../src/server/billing-service.js';
+import { TrackedBillingService } from '../../src/server/tracked-billing.js';
 import { BillLookupService } from '../../src/server/bill-lookup.js';
 import type { BillLookup, TrackedBillHistory } from '../../src/shared/billing-contracts.js';
 import { saleDay } from '../../src/server/billing-matcher.js';
@@ -104,48 +105,53 @@ function setup(t: TestContext, sellerPacks = [1], flipkart?: FlipkartBillingClie
         reference: 'orderId',
       });
   });
-  const makeService = () =>
-    new StockAvailabilityService(
-      f.store,
-      {
-        orders: flipkart ?? {
-          async readOrders() {
-            throw new Error('Preview is not a stock source');
-          },
-          async readStockOrders(token, from, to, includeInvoices) {
-            if (source.unavailable === token) throw new Error('Offline');
-            return structuredClone(
-              orders
-                .get(token)!
-                .filter((o) => o.orderDate >= from && o.orderDate <= to)
-                .map((o) => ({ ...o, invoiceNumber: includeInvoices ? o.invoiceNumber : null })),
-            );
-          },
-        },
-        tally: () => ({
-          async listLedgers() {
-            return [];
-          },
-          async readStock(_company, asOf) {
-            dates.push(asOf);
-            return [
-              { externalId: 'tyre', name: 'Tyre', unit: 'ea', physical: source.stockRead() },
-              ...otherStock,
-            ];
-          },
-          async readSalesBills(_company, ledger) {
-            if (source.unavailableLedger === ledger) throw new Error('Ledger offline');
-            return structuredClone(bills.get(ledger) ?? []);
-          },
-        }),
+  const sources: BillingSources = {
+    orders: flipkart ?? {
+      async readFulfilmentOrders(token, from, to, group) {
+        if (source.unavailable === token) throw new Error('Offline');
+        return group === 'standard'
+          ? structuredClone(
+              orders.get(token)!.filter((o) => o.orderDate >= from && o.orderDate <= to),
+            )
+          : [];
       },
-      async (id) => ({
-        token: id,
-        verify: () => {
-          if (source.revoked === id) throw new Error('Seller access changed');
-        },
-      }),
-    );
+      async readOrders() {
+        throw new Error('Preview is not a stock source');
+      },
+      async readStockOrders(token, from, to, includeInvoices) {
+        if (source.unavailable === token) throw new Error('Offline');
+        return structuredClone(
+          orders
+            .get(token)!
+            .filter((o) => o.orderDate >= from && o.orderDate <= to)
+            .map((o) => ({ ...o, invoiceNumber: includeInvoices ? o.invoiceNumber : null })),
+        );
+      },
+    },
+    tally: () => ({
+      async listLedgers() {
+        return [];
+      },
+      async readStock(_company, asOf) {
+        dates.push(asOf);
+        return [
+          { externalId: 'tyre', name: 'Tyre', unit: 'ea', physical: source.stockRead() },
+          ...otherStock,
+        ];
+      },
+      async readSalesBills(_company, ledger) {
+        if (source.unavailableLedger === ledger) throw new Error('Ledger offline');
+        return structuredClone(bills.get(ledger) ?? []);
+      },
+    }),
+  };
+  const access = async (id: string) => ({
+    token: id,
+    verify: () => {
+      if (source.revoked === id) throw new Error('Seller access changed');
+    },
+  });
+  const makeService = () => new StockAvailabilityService(f.store, sources, access);
   let service = makeService();
   const lookup = new BillLookupService(f.store, service, new BillingService(f.store));
   const scope = { companyId, accountId: 'seller-0' };
@@ -172,6 +178,15 @@ function setup(t: TestContext, sellerPacks = [1], flipkart?: FlipkartBillingClie
     available: (batch?: object, target = itemId) => service.forItem(companyId, target, batch),
     preview: () => service.forItem(companyId, itemId, undefined, true),
     review: () => service.reviewOrders(companyId, 'seller-0'),
+    track: () => new TrackedBillingService(f.store, sources, access, service).check(scope),
+    returnRow: async () =>
+      (await service.readBillEvidence(companyId, 'seller-0', 'line')).orders[0].result,
+    receive: (token: string, accountId = 'seller-0', confirmed = true) =>
+      service.confirmSellableReturn(
+        { companyId, orderItemId: 'line', token, confirmed },
+        accountId,
+        new TrackedBillingService(f.store, sources, access),
+      ),
     pendingGroups: (accountId = 'seller-0') =>
       new BillingService(f.store).pendingOrders(
         service,
@@ -213,6 +228,191 @@ function setup(t: TestContext, sellerPacks = [1], flipkart?: FlipkartBillingClie
     },
   };
 }
+
+function returned(order: FlipkartBillingOrder): FlipkartBillingOrder {
+  return {
+    ...order,
+    stockShipmentId: 'shipment',
+    stockDisposition: 'uncertain',
+    stockDispatchObserved: true,
+    eligibilityUnverified: true,
+    stockReturnObserved: true,
+    stockReturnVerified: true,
+    marketplaceStatus: 'RETURNED',
+    statusVerifiedAt: new Date().toISOString(),
+  };
+}
+
+test('an unbilled whole order item returns to shared stock exactly once, including after restart', async (t) => {
+  const s = setup(t, [2]);
+  s.confirm();
+  s.setStock(10);
+  const sale = {
+    ...s.orders.get('seller-0')![0],
+    stockShipmentId: 'shipment',
+    stockDispatchObserved: true as const,
+  };
+  s.orders.set('seller-0', [sale]);
+  assert.equal((await s.available()).available, 8);
+  assert.equal((await s.returnRow()).returnReceipt, undefined);
+  s.orders.set('seller-0', [returned(sale)]);
+  assert.equal((await s.available()).available, 8);
+  const action = (await s.returnRow()).returnReceipt!;
+  assert.deepEqual([action.quantity, action.unit], [2, 'ea']);
+  await assert.rejects(s.receive(action.token, 'seller-0', false), /full quantity/);
+  await assert.rejects(s.receive('wrong-token'), /changed/);
+  s.bills.set('seller-0', [{ ...s.bill(), reference: 'unrelated-shop-sale' }]);
+  assert.deepEqual(await s.receive(action.token), { saved: true });
+  assert.equal((await s.available()).available, 10);
+  assert.deepEqual(await s.receive(action.token), { saved: true });
+  s.restoreService();
+  s.orders.set('seller-0', []);
+  assert.equal((await s.available()).available, 10);
+  assert.equal((await s.returnRow()).status, 'received');
+  s.source.unavailable = 'seller-0';
+  assert.deepEqual(await s.receive(action.token), { saved: true });
+});
+
+test('a bill appearing during the return check and its later reversal follow the Tally balance', async (t) => {
+  const s = setup(t, [2]);
+  s.confirm();
+  s.setStock(10);
+  const sale = returned(s.orders.get('seller-0')![0]);
+  s.orders.set('seller-0', [sale]);
+  assert.equal((await s.available()).available, 8);
+  const action = (await s.returnRow()).returnReceipt!;
+  s.bills.set('seller-0', [s.bill()]);
+  s.setStock(8);
+  assert.deepEqual(await s.receive(action.token), { saved: true });
+  assert.equal(
+    s.f.store.readStockCoverage(s.companyId)!.orders[0].order.sellableReturnToken,
+    undefined,
+  );
+  assert.equal((await s.available()).available, 8);
+  assert.equal((await s.returnRow()).status, 'matched');
+  s.restoreService();
+  s.setStock(10);
+  assert.equal((await s.available()).available, 10);
+  s.bills.set('seller-0', [{ ...s.bill(), lines: [] }]);
+  assert.equal((await s.available()).available, 10);
+  assert.equal((await s.returnRow()).status, 'accounted');
+});
+
+test('an incomplete seller read, changed quantity or partial bill cannot release a returned pair', async (t) => {
+  const s = setup(t, [2]);
+  s.confirm();
+  const sale = returned(s.orders.get('seller-0')![0]);
+  s.orders.set('seller-0', [sale]);
+  assert.equal((await s.available()).available, 4);
+  const action = (await s.returnRow()).returnReceipt!;
+  s.source.unavailable = 'seller-0';
+  await assert.rejects(s.receive(action.token), /incomplete/);
+  s.source.unavailable = '';
+  const bill = s.bill();
+  bill.lines[0].quantity = 1;
+  s.bills.set('seller-0', [bill]);
+  await assert.rejects(s.receive(action.token), /evidence/);
+  await assert.rejects(s.available(), /different quantity/);
+  s.bills.clear();
+  s.orders.set('seller-0', [{ ...sale, quantity: 3 }]);
+  await assert.rejects(s.receive(action.token), /evidence|changed/);
+  assert.equal(
+    s.f.store.readStockCoverage(s.companyId)!.orders[0].order.sellableReturnToken,
+    undefined,
+  );
+});
+
+for (const stable of [false, true]) {
+  test(`a bill seen first in tracked history uses independent stock proof when balances are ${stable ? 'stable' : 'unavailable'}`, async (t) => {
+    const s = setup(t, [2]);
+    s.confirm();
+    const sale = s.orders.get('seller-0')![0];
+    s.bills.set('seller-0', [s.bill()]);
+    if (!stable)
+      s.source.stockRead = () => {
+        throw new Error('Tally stock offline');
+      };
+    const check = await s.track();
+    assert.equal(check.evidence.orders[0].result.status, 'matched');
+    assert.equal(
+      !!s.f.store.readStockCoverage(s.companyId)?.orders[0]?.order.verifiedDeduction,
+      stable,
+    );
+    s.restoreService();
+    s.source.stockRead = () => 6;
+    s.orders.set('seller-0', [returned(sale)]);
+    s.bills.clear();
+    if (stable) assert.equal((await s.available()).available, 6);
+    else await assert.rejects(s.available(), /stock deduction could not be verified/);
+  });
+}
+
+test('return confirmations distinguish sellers sharing stock and order-item IDs', async (t) => {
+  const s = setup(t, [2, 2]);
+  s.confirm();
+  for (const [id, orders] of s.orders) s.orders.set(id, orders.map(returned));
+  assert.equal((await s.available()).reservedUnits, 4);
+  const action = (await s.returnRow()).returnReceipt!;
+  await assert.rejects(s.receive(action.token, 'seller-1'), /changed/);
+  assert.deepEqual(await s.receive(action.token), { saved: true });
+  assert.equal((await s.available()).reservedUnits, 2);
+  assert.deepEqual((await s.inventoryBalance())!.bySeller, [{ accountId: 'seller-1', units: 2 }]);
+});
+
+test('fresh cancellation evidence settles a legacy seller-cancellation hold only on the same shipment', async (t) => {
+  const s = setup(t);
+  s.confirm();
+  const sale = { ...s.orders.get('seller-0')![0], stockShipmentId: 'shipment' };
+  s.orders.set('seller-0', [
+    {
+      ...sale,
+      stockDisposition: 'uncertain',
+      eligibilityUnverified: true,
+      stockReconciliationRequired: true,
+    },
+  ]);
+  await assert.rejects(s.available(), /unresolved sale/);
+  s.restoreService();
+  const cancellation = {
+    ...sale,
+    stockDisposition: 'cancelled' as const,
+    marketplaceStatus: 'CANCELLED',
+    marketplaceHold: false,
+    statusVerifiedAt: new Date().toISOString(),
+  };
+  s.orders.set('seller-0', [cancellation]);
+  assert.equal((await s.available()).reservedUnits, 0);
+  s.orders.set('seller-0', [{ ...cancellation, stockShipmentId: 'another-shipment' }]);
+  await assert.rejects(s.available(), /identity/);
+});
+
+test('older marketplace observations cannot replace the latest verified status, hold or verification time', async (t) => {
+  const s = setup(t);
+  s.confirm();
+  const sale = s.orders.get('seller-0')![0];
+  const recent = new Date().toISOString();
+  s.orders.set('seller-0', [
+    { ...sale, marketplaceStatus: 'SHIPPED', marketplaceHold: false, statusVerifiedAt: recent },
+  ]);
+  await s.scan();
+  s.orders.set('seller-0', [
+    {
+      ...sale,
+      marketplaceStatus: 'PACKED',
+      marketplaceHold: true,
+      statusVerifiedAt: new Date(Date.parse(recent) - 60000).toISOString(),
+    },
+  ]);
+  await s.scan();
+  s.restoreService();
+  s.orders.set('seller-0', [sale]);
+  await s.scan();
+  assert.partialDeepStrictEqual(s.f.store.readStockCoverage(s.companyId)!.orders[0].order, {
+    marketplaceStatus: 'SHIPPED',
+    marketplaceHold: false,
+    statusVerifiedAt: recent,
+  });
+});
 
 test('a forward starting date cannot discard a newly observed sale using an old review', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-01T08:00:00Z') });
@@ -902,10 +1102,7 @@ for (const cleanFirst of [false, true]) {
       s.f.store.update((state) => {
         state.listings[0].itemId = wheelId;
       });
-      await assert.rejects(
-        s.available({}, wheelId),
-        /Order matching, choose Review starting stock/,
-      );
+      await assert.rejects(s.available({}, wheelId), /Order matching, choose Change tracking date/);
     } else {
       s.orders.set('seller-0', [{ ...cancelled, quantity: 2 }]);
       await assert.rejects(s.available({}, wheelId), /recorded order changed/);
@@ -1107,7 +1304,7 @@ test('source balance, changed conversions, baseline dates and changed order iden
     state.listings[0].packSize = 2;
   });
   assert.throws(check.verify, /changed/);
-  await assert.rejects(s.available(), /Order matching, choose Review starting stock/);
+  await assert.rejects(s.available(), /Order matching, choose Change tracking date/);
   assert.throws(() => s.confirm(), /after those sales/);
   s.f.store.update((state) => {
     state.listings[0].packSize = 1;
@@ -1205,7 +1402,7 @@ test('an unmapped order is retained, then reserved across sibling listings and m
   s.f.store.update((state) => {
     state.listings.find((l) => l.id === row.id)!.packSize = 3;
   });
-  await assert.rejects(s.available(), /Order matching, choose Review starting stock/);
+  await assert.rejects(s.available(), /Order matching, choose Change tracking date/);
 });
 
 test('a paused first mapping retries its initial proposal after restart with sync off', async (t) => {
@@ -1344,11 +1541,11 @@ test('a stale tracking baseline holds the initial order proposal even below one 
     sourceScope: 'company',
     tyreFloor: false,
   });
-  await assert.rejects(s.scan(), /Review starting stock/);
+  await assert.rejects(s.scan(), /Change tracking date/);
   const state = s.f.store.read();
   assert.equal(state.proposals.length, 0);
   assert.equal(state.listings[0].orderProposalPending, true);
-  assert.match(state.listings[0].proposalIssue!, /Review starting stock/);
+  assert.match(state.listings[0].proposalIssue!, /Change tracking date/);
   assert.equal(s.f.store.readStockCoverage(s.companyId)?.signature, 'previous-stock-setup');
 });
 

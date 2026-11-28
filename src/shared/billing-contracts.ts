@@ -4,11 +4,35 @@ export type OrderReference = 'orderId' | 'orderItemId' | 'invoiceNumber';
 export const billingFulfilments = ['standard', 'selfShip', 'express', 'smart', 'fbf'] as const;
 export type BillingFulfilment = (typeof billingFulfilments)[number];
 
+export interface MarketplaceOrderLookup {
+  orderId: string;
+  checkedAt: string;
+  items: {
+    orderItemId: string;
+    shipmentId?: string;
+    sku: string;
+    orderDate: string;
+    quantity: number;
+    locationId: string | null;
+    marketplaceStatus: string | null;
+    marketplaceHold?: boolean;
+    fulfilment?: BillingFulfilment;
+  }[];
+}
+
+export interface ReturnReceiptAction {
+  quantity: number;
+  unit: string;
+  token: string;
+}
+
 export interface FulfilmentCheck {
   id: string;
   from: string;
   to: string;
   complete: boolean;
+  lastCompleteAt?: string;
+  billingIssue?: string;
   /** Count reflects this seller's order search. Invoice and other sellers' checks can still need a retry. */
   groups: { group: BillingFulfilment; count: number | null; error?: string }[];
 }
@@ -106,10 +130,11 @@ export interface PendingListings {
 
 export interface PendingOrderResult {
   orderItemId: string;
-  status: 'matched' | 'reserved' | 'review' | 'cancelled' | 'unmapped';
+  status: 'matched' | 'reserved' | 'review' | 'cancelled' | 'unmapped' | 'received' | 'accounted';
   reason: string;
   baseUnits: number | null;
   bill?: BillCandidate;
+  returnReceipt?: ReturnReceiptAction;
 }
 
 export interface TrackedBillOrder {
@@ -118,6 +143,12 @@ export interface TrackedBillOrder {
   orderDate: string;
   sku: string;
   fulfilment?: BillingFulfilment;
+  marketplaceStatus?: string;
+  marketplaceHold?: boolean;
+  statusVerifiedAt?: string;
+  savedOnly?: boolean;
+  reserved?: { quantity: number; unit: string };
+  returnReceipt?: ReturnReceiptAction;
   mapping?: { listingId: string; location: string; purpose: 'stock' | 'billing' };
   status: PendingOrderResult['status'] | 'unmatched';
   reason: string;

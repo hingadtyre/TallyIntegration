@@ -211,6 +211,35 @@ export class Store {
     }
   }
 
+  readLastBillingCheck(
+    companyId: string,
+    accountId: string,
+    signature: string,
+  ): string | undefined {
+    const row = this.database
+      .prepare(
+        'SELECT completed_at FROM billing_check_receipts WHERE company_id = ? AND account_id = ? AND signature = ?',
+      )
+      .get(companyId, accountId, signature);
+    return row && String(row.completed_at);
+  }
+
+  saveLastBillingCheck(
+    companyId: string,
+    accountId: string,
+    signature: string,
+    completedAt: string,
+  ): void {
+    this.database
+      .prepare(
+        `
+      INSERT INTO billing_check_receipts (company_id, account_id, signature, completed_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(company_id, account_id) DO UPDATE SET signature = excluded.signature, completed_at = excluded.completed_at
+    `,
+      )
+      .run(companyId, accountId, signature, completedAt);
+  }
+
   readBillingOrders(
     companyId: string,
     accountId: string,

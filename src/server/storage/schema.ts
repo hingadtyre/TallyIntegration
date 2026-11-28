@@ -1,12 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 17;
+export const CURRENT_SCHEMA_VERSION = 18;
 
 /** Each managed record has an explicit table. Array order is presentation state,
  * so sort_order is retained without making names or positions into identities. */
 export function createSchema(
   database: DatabaseSync,
-  version: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 = CURRENT_SCHEMA_VERSION,
+  version: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 = CURRENT_SCHEMA_VERSION,
 ): void {
   database.exec(`
     CREATE TABLE app_metadata (
@@ -119,6 +119,18 @@ export function createSchema(
   if (version >= 14) createBillingOrdersSchema(database);
   if (version >= 15) addKeepBackPreviousUnit(database);
   if (version >= 17) addProposalResumeOnPublish(database);
+  if (version >= 18) createBillingCheckReceipts(database);
+}
+
+export function createBillingCheckReceipts(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE billing_check_receipts (
+      company_id TEXT NOT NULL, account_id TEXT NOT NULL, signature TEXT NOT NULL,
+      completed_at TEXT NOT NULL CHECK (completed_at GLOB '????-??-??T??:??:??.???Z' AND julianday(completed_at) IS NOT NULL),
+      PRIMARY KEY (company_id, account_id),
+      FOREIGN KEY (company_id, account_id) REFERENCES billing_rules(company_id, account_id) ON DELETE CASCADE
+    ) STRICT
+  `);
 }
 
 export function addProposalResumeOnPublish(database: DatabaseSync): void {

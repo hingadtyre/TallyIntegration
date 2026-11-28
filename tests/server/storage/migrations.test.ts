@@ -65,6 +65,23 @@ function createLegacy(file: string, value: unknown): void {
   }
 }
 
+test('schema 17 upgrades without inventing a previous successful billing check', (t) => {
+  const f = fixture(t);
+  const state = legacyState(f.directory);
+  queryFile(f.file, (db) => {
+    createSchema(db, 17);
+    db.exec('PRAGMA user_version = 17');
+    writeSnapshot(db, state);
+  });
+  const store = f.open();
+  assert.ok(store.migrationBackupPath);
+  assert.deepEqual(store.read(), state);
+  assert.equal(store.readLastBillingCheck('demo-a', 'flipkart-primary', 'signature'), undefined);
+  queryFile(store.migrationBackupPath, (db) =>
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version, 17),
+  );
+});
+
 test('legacy migration preserves policies, drafts, identities and history with a verified safety copy', (t) => {
   const f = fixture(t);
   const original = legacyState(f.directory);

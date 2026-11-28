@@ -834,6 +834,7 @@ async function verifyPilot(zip) {
             require('node:assert/strict').equal(row.keep_back_units, 1.25);
             require('node:assert/strict').equal(row.keep_back_previous_unit, null);
             if (db.prepare('PRAGMA table_info(proposals)').all().some(row => row.name === 'resume_on_publish')) db.exec('ALTER TABLE proposals DROP COLUMN resume_on_publish');
+            db.exec('DROP TABLE IF EXISTS billing_check_receipts');
             db.exec('PRAGMA user_version = 15');
             db.close();
           `;
@@ -880,7 +881,7 @@ async function verifyPilot(zip) {
           if (db.prepare('PRAGMA table_info(stock_items)').all().some(row => row.name === 'keep_back_previous_unit')) db.exec('ALTER TABLE stock_items DROP COLUMN keep_back_previous_unit');
           if (db.prepare('PRAGMA table_info(listings)').all().some(row => row.name === 'order_proposal_pending')) db.exec('ALTER TABLE listings DROP COLUMN order_proposal_pending');
           if (db.prepare('PRAGMA table_info(proposals)').all().some(row => row.name === 'resume_on_publish')) db.exec('ALTER TABLE proposals DROP COLUMN resume_on_publish');
-          db.exec('DROP TABLE IF EXISTS billing_orders; DROP TABLE IF EXISTS billing_tracking_dates');
+          db.exec('DROP TABLE IF EXISTS billing_check_receipts; DROP TABLE IF EXISTS billing_orders; DROP TABLE IF EXISTS billing_tracking_dates');
           db.exec('DROP TABLE sku_mappings; PRAGMA user_version = 10');
           db.close();
         `;

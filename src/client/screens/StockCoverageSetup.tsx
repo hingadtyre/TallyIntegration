@@ -13,6 +13,8 @@ const indiaDay = new Intl.DateTimeFormat('en-CA', {
 export function StockCoverageSetup({
   companyId,
   accountId,
+  companyName,
+  trackedFrom,
   disabled = false,
   onStart,
   onSavingChange,
@@ -20,6 +22,8 @@ export function StockCoverageSetup({
 }: {
   companyId: string;
   accountId: string;
+  companyName?: string;
+  trackedFrom?: string;
   disabled?: boolean;
   onStart: (from: string) => void;
   onSavingChange?: (saving: boolean) => void;
@@ -51,7 +55,7 @@ export function StockCoverageSetup({
   const today = new Date();
   const latest = indiaDay.format(today);
   const earliest = indiaDay.format(new Date(today.getTime() - 29 * 86_400_000));
-  const savedFrom = status?.from ?? status?.billingFrom;
+  const savedFrom = status?.from ?? status?.billingFrom ?? trackedFrom;
   const savedDate = savedFrom ? indiaDay.format(new Date(savedFrom)) : '';
   const dirty = !!editing && (fromDate !== savedDate || confirmed);
   useEffect(() => {
@@ -118,32 +122,46 @@ export function StockCoverageSetup({
     }
   }
   return (
-    <section className="panel settings-panel billing-panel">
-      <h2>Order tracking</h2>
-      <p>
-        This date applies to all participating sellers for this Tally company.
-        {status &&
-          !status.from &&
-          ' To reserve units for mapped sales awaiting a Tally bill, set the starting stock for this company.'}
-      </p>
+    <section
+      className={trackedFrom ? 'tracked-date' : 'panel settings-panel billing-panel'}
+      aria-label="Order tracking"
+    >
+      {trackedFrom ? (
+        <div className="billing-actions">
+          <p>Orders placed since {formatIndiaDay(trackedFrom)} (India)</p>
+          {status && !editing && (
+            <button
+              className="text-button"
+              disabled={disabled}
+              onClick={() => edit(status.from ? 'stock' : 'billing')}
+            >
+              Change tracking date
+            </button>
+          )}
+        </div>
+      ) : (
+        <h2>Order tracking</h2>
+      )}
       {!status && !error && <p role="status">Checking order coverage…</p>}
       {status && (
         <>
-          <p role="status">
-            {status.from
-              ? status.current
-                ? `Stockbridge checks orders for this company from ${formatIndiaDay(savedDate)} (India).`
-                : (status.issue ?? 'Review the starting stock for this company.')
-              : savedDate
-                ? `Bill matching starts on ${formatIndiaDay(savedDate)} (India).`
-                : 'Choose the date to start matching marketplace orders to Tally bills.'}
-          </p>
-          {!status.current && status.from && (
+          {(!trackedFrom || (status.from && !status.current)) && (
+            <p role="status">
+              {status.from
+                ? status.current
+                  ? `Stockbridge checks orders for this company from ${formatIndiaDay(savedDate)} (India).`
+                  : (status.issue ?? 'Review the starting stock for this company.')
+                : savedDate
+                  ? `Bill matching starts on ${formatIndiaDay(savedDate)} (India).`
+                  : 'Choose the date to start matching marketplace orders to Tally bills.'}
+            </p>
+          )}
+          {!trackedFrom && !status.current && status.from && (
             <p>The saved tracking start date is {formatIndiaDay(savedDate)} (India).</p>
           )}
           {!editing ? (
             <div className="billing-actions">
-              {!status.from && (
+              {!trackedFrom && !status.from && (
                 <button
                   className="button secondary"
                   disabled={disabled}
@@ -152,13 +170,15 @@ export function StockCoverageSetup({
                   {savedDate ? 'Change billing start date' : 'Set billing start date'}
                 </button>
               )}
-              <button
-                className="button secondary"
-                disabled={disabled}
-                onClick={() => edit('stock')}
-              >
-                {status.from ? 'Review starting stock' : 'Set starting stock'}
-              </button>
+              {(!trackedFrom || !status.from) && (
+                <button
+                  className="button secondary"
+                  disabled={disabled}
+                  onClick={() => edit('stock')}
+                >
+                  {status.from ? 'Review starting stock' : 'Set starting stock'}
+                </button>
+              )}
             </div>
           ) : (
             <form
@@ -168,6 +188,10 @@ export function StockCoverageSetup({
                 void save();
               }}
             >
+              <p>
+                Saving this date changes tracking for all participating sellers in{' '}
+                {companyName ?? 'this Tally company'}.
+              </p>
               <label className="field billing-period">
                 <span>
                   {editing === 'billing'

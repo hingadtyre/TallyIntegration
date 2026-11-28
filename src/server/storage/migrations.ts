@@ -16,6 +16,7 @@ import {
   createPackSchema,
   createBillingSchema,
   createBillingOrdersSchema,
+  createBillingCheckReceipts,
   createStockCoverageSchema,
   addCompanyStockIssue,
   addProposalIssue,
@@ -125,6 +126,7 @@ export function prepareDatabase(
       if (version < 14) createBillingOrdersSchema(database);
       if (version < 15) addKeepBackPreviousUnit(database);
       if (version < 17) addProposalResumeOnPublish(database);
+      if (version < 18) createBillingCheckReceipts(database);
     }
     database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION};`);
     // The old-schema reader converted holds to pauses with their drafts and queued work.

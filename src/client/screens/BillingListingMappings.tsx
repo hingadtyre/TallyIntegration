@@ -97,6 +97,8 @@ const resultLabels: Record<PendingOrderResult['status'], string> = {
   reserved: 'Reserved for this order',
   review: 'Needs review',
   cancelled: 'Cancelled',
+  received: 'Received back and sellable',
+  accounted: 'Previously billed',
   unmapped: 'Needs mapping',
 };
 
@@ -404,6 +406,8 @@ function checkSummary(rows: PendingOrderResult[]) {
   }
   if (review) parts.push(`${review} ${review === 1 ? 'needs' : 'need'} review`);
   if (count('cancelled')) parts.push(`${count('cancelled')} cancelled`);
+  if (count('received')) parts.push(`${count('received')} received back and sellable`);
+  if (count('accounted')) parts.push(`${count('accounted')} previously billed`);
   return parts.join(' · ');
 }
 

@@ -1,17 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import type { BillLookup, TrackedBillHistory } from '../shared/billing-contracts.js';
+import type { FlipkartBillingOrder } from '../adapters/flipkart-billing.js';
 import { isVerifiedSale } from '../shared/stock-coverage.js';
 import {
   fingerprint,
   isInspectedBillLink,
   matchBills,
+  mappedUnits,
   storeReviewedBillLink,
   type BillingScope,
 } from './billing-matcher.js';
 import type { BillingService } from './billing-service.js';
 import { invalidateReservationDrafts } from './proposals.js';
 import type { CompanyBillEvidence, StockAvailabilityService } from './stock-availability.js';
-import { mappedSaleItem } from './stock-configuration.js';
+import { mappedSaleItem, mappedSaleListing } from './stock-configuration.js';
 import type { ExpandedBillEvidence, TrackedBillingService } from './tracked-billing.js';
 import type { BillingData, BillingLink } from './storage/billing-records.js';
 import type { Snapshot } from '../shared/contracts.js';
@@ -35,6 +37,19 @@ function invalidateBillStock(state: Snapshot, link: BillingLink) {
     (i) => i.companyId === link.companyId && i.externalId === link.itemId,
   );
   if (item) invalidateReservationDrafts(state, new Set([item.id]));
+}
+
+function inspectableShipment(order: FlipkartBillingOrder) {
+  return (
+    !!order.postDispatchWithoutCourierReturn &&
+    !!order.stockDispatchObserved &&
+    !order.stockReturnObserved &&
+    !order.stockReturnConflict &&
+    !order.stockReconciliationRequired &&
+    !order.stockIdentityConflict &&
+    order.marketplaceHold !== true &&
+    ['SHIPPED', 'DELIVERED', 'PICKUP_COMPLETE'].includes(order.marketplaceStatus ?? '')
+  );
 }
 
 function trackedOrders(
@@ -70,11 +85,16 @@ function trackedOrders(
       sku: order.sku,
     };
     const groups = expanded?.groupsByOrder.get(order.orderItemId);
+    const tallyIssue = expanded?.unreadableBills.has(accountId)
+      ? expanded.check.billingIssue
+      : undefined;
     // Legacy stock receipts did not distinguish standard from self-ship.
-    const checked = groups?.size
-      ? expanded!.observed.has(order.orderItemId) ||
-        [...groups].every((group) => !failed?.has(group))
-      : !failed?.has('standard') && !failed?.has('selfShip');
+    const checked =
+      !tallyIssue &&
+      (groups?.size
+        ? expanded!.observed.has(order.orderItemId) ||
+          [...groups].every((group) => !failed?.has(group))
+        : !failed?.has('standard') && !failed?.has('selfShip'));
     const saved = links.get(order.orderItemId);
     const uncheckedClaim =
       result.status === 'matched' &&
@@ -98,8 +118,38 @@ function trackedOrders(
     const stockMapping =
       !expanded ||
       (expanded.stockCoverageFrom && order.orderDate >= expanded.stockCoverageFrom && stockGroup);
+    const item = itemId && ctx.items.get(itemId);
+    const observed = expanded?.observed.has(order.orderItemId);
+    const returnReceipt =
+      result.returnReceipt &&
+      expanded?.check.complete &&
+      observed &&
+      stockMapping &&
+      itemId &&
+      !expanded.uncheckedItems.has(itemId) &&
+      mappedSaleItem(ctx, accountId, order) &&
+      result.returnReceipt;
+    const inspectOnly =
+      inspectableShipment(order) &&
+      !!observed &&
+      !isVerifiedSale(order) &&
+      mappedUnits(order, mappedSaleListing(ctx, accountId, order, 'billing') ?? undefined) !== null;
     history.orders.push({
       ...identity,
+      ...(!order.stockIdentityConflict &&
+        order.marketplaceStatus && {
+          marketplaceStatus: order.marketplaceStatus,
+          statusVerifiedAt: order.statusVerifiedAt,
+          marketplaceHold: order.marketplaceHold,
+        }),
+      ...(expanded && !observed && { savedOnly: true }),
+      ...(checked &&
+        !billingOnly &&
+        !(itemId && expanded?.uncheckedItems.has(itemId)) &&
+        result.status === 'reserved' &&
+        item &&
+        result.baseUnits && { reserved: { quantity: result.baseUnits, unit: item.unit } }),
+      ...(returnReceipt && { returnReceipt }),
       ...(groups?.size === 1 && { fulfilment: [...groups][0] }),
       ...(checked &&
         !saved &&
@@ -114,28 +164,34 @@ function trackedOrders(
           },
         }),
       status: !checked || uncheckedClaim ? 'review' : billingOnly ? 'unmatched' : result.status,
-      reason: !checked
-        ? 'The current fulfilment check is incomplete. Retry to verify this saved order.'
-        : uncheckedClaim
-          ? uncheckedClaim
-          : expanded && !order.locationId
-            ? 'The marketplace did not provide the location needed to verify the listing. Check the order location in the seller account, then refresh tracked orders.'
-            : expanded && (!order.listingId || !order.sku)
-              ? 'Check the listing ID and seller SKU for this order in the seller account, then refresh tracked orders.'
-              : result.status === 'unmapped' && !isVerifiedSale(order)
-                ? 'Verify the sale status and listing identity in the seller account before mapping this order.'
-                : billingOnly
-                  ? 'No verified Tally bill was found for this sale.'
-                  : expanded && result.status === 'cancelled'
-                    ? 'The marketplace confirmed this order was cancelled before dispatch.'
-                    : result.reason,
+      reason:
+        tallyIssue ??
+        (!checked
+          ? 'The current fulfilment check is incomplete. Retry to verify this saved order.'
+          : uncheckedClaim
+            ? uncheckedClaim
+            : expanded && !order.locationId
+              ? 'The marketplace did not provide the location needed to verify the listing. Check the order location in the seller account, then refresh tracked orders.'
+              : expanded && (!order.listingId || !order.sku)
+                ? 'Check the listing ID and seller SKU for this order in the seller account, then refresh tracked orders.'
+                : result.status === 'unmapped' && !isVerifiedSale(order)
+                  ? 'Verify the sale status and listing identity in the seller account before mapping this order.'
+                  : billingOnly
+                    ? 'No verified Tally bill was found for this sale.'
+                    : expanded && result.status === 'cancelled'
+                      ? 'The marketplace confirmed this order was cancelled before dispatch.'
+                      : inspectOnly
+                        ? 'Flipkart confirms this shipment. Its return status is unverified. You can inspect a Tally bill while stock and billing await verification.'
+                        : result.reason),
       canFindBill:
         checked &&
+        !expanded?.check.billingIssue &&
         !saved &&
         !!itemId &&
-        isVerifiedSale(order) &&
-        result.baseUnits !== null &&
-        (result.status === 'reserved' || result.status === 'review'),
+        ((isVerifiedSale(order) &&
+          result.baseUnits !== null &&
+          (result.status === 'reserved' || result.status === 'review')) ||
+          inspectOnly),
       ...(saved && { manualBillId: saved.billId, linkToken: fingerprint(saved) }),
       ...(bill && { manualBillNumber: bill.number, manualBillDate: bill.date }),
     });
@@ -168,7 +224,12 @@ function inspectBill(
       'This order item could not be verified for this seller and company in the reviewed period.',
     );
   const item = target.itemId ? ctx.items.get(target.itemId) : undefined;
-  if (!item || !isVerifiedSale(target.order)) throw conflict(target.result.reason);
+  const inspectOnly =
+    !isVerifiedSale(target.order) &&
+    inspectableShipment(target.order) &&
+    expanded?.observed.has(search.orderItemId);
+  if (!item || (!isVerifiedSale(target.order) && !inspectOnly))
+    throw conflict(target.result.reason);
   const incomplete = expanded?.check.complete === false;
   const uncheckedClaim = expanded?.uncheckedItems.get(item.id);
   const { rows, voucherMatches } = matchBills(
@@ -186,7 +247,15 @@ function inspectBill(
     search,
   );
   const row = rows.find((r) => r.orderItemId === search.orderItemId);
-  if (!row || row.baseUnits === null)
+  const baseUnits =
+    row?.baseUnits ??
+    (inspectOnly
+      ? mappedUnits(
+          target.order,
+          mappedSaleListing(ctx, search.accountId, target.order, 'billing') ?? undefined,
+        )
+      : null);
+  if (!row || baseUnits === null)
     throw conflict('Verify the stock item, pickup location and Set of for this order first.');
   const expectedReference = row.referenceValue ?? null;
   const itemNames = new Map(
@@ -199,6 +268,9 @@ function inspectBill(
     .sort((a, b) => a.bill.id.localeCompare(b.bill.id))
     .map((m) => {
       const issue =
+        (inspectOnly
+          ? 'Flipkart has not verified this shipment’s return status. This bill can be inspected only.'
+          : null) ??
         m.reason ??
         uncheckedClaim ??
         (incomplete
@@ -228,7 +300,7 @@ function inspectBill(
     ledgerName: rule.ledgerName,
     itemName: item.name,
     unit: item.unit,
-    baseUnits: row.baseUnits,
+    baseUnits,
     expectedReference,
     field: rule.field,
     bills,
@@ -287,6 +359,10 @@ export class BillLookupService {
     const { id: companyId } = requireCompany(this.store.read(), input.companyId);
     const scope = { companyId, accountId };
     const key = JSON.stringify([companyId, accountId]);
+    if (path === '/api/billing/lookup-order' || path === '/api/billing/pickup-count') {
+      if (!this.tracked) throw new InputError('Marketplace order lookups are unavailable.', 502);
+      return this.tracked.lookup(scope, input, path.endsWith('/pickup-count'));
+    }
     if (path === '/api/billing/tracked-bills') {
       if (
         !this.store.readBillingTrackingStart(companyId) ||

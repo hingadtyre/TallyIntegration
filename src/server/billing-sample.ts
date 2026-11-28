@@ -42,6 +42,7 @@ function integrationOrders(
   bills: TallySalesBill[],
 ) {
   const outlet = accountId === 'demo-outlet';
+  const statusVerifiedAt = new Date().toISOString();
   const order = (id: number, extra: Partial<FlipkartBillingOrder> = {}): FlipkartBillingOrder => ({
     orderId: `DEMO-ORDER-${id}`,
     orderItemId: `DEMO-LINE-${id}`,
@@ -52,6 +53,9 @@ function integrationOrders(
     locationId: 'Demo pickup',
     quantity: 1,
     orderDate: at,
+    marketplaceStatus: 'APPROVED',
+    marketplaceHold: false,
+    statusVerifiedAt,
     ...extra,
   });
   if (outlet) {
@@ -63,6 +67,7 @@ function integrationOrders(
       quantity,
       invoiceNumber: `DEMO-BILL-${id}`,
       stockDispatchObserved: true,
+      marketplaceStatus: 'SHIPPED',
     });
     bills.push({
       externalId: `demo-bill-${id}`,
@@ -76,8 +81,8 @@ function integrationOrders(
   };
   orders.standard.push(
     billed(1001),
-    order(1002, { preDispatchWithoutCourierReturn: true }),
-    order(1005, { stockDisposition: 'cancelled' }),
+    order(1002, { preDispatchWithoutCourierReturn: true, marketplaceStatus: 'READY_TO_DISPATCH' }),
+    order(1005, { stockDisposition: 'cancelled', marketplaceStatus: 'CANCELLED' }),
   );
   orders.selfShip.push(
     billed(1003, 2, 'DEMO-ORDRE-1003'),

@@ -3,7 +3,11 @@ import { saleDay } from '../domain/sale-day.js';
 import type { FlipkartBillingOrder } from '../adapters/flipkart-billing.js';
 import type { TallySalesBill, TallyStockItem } from '../adapters/tally.js';
 import { availableForMarketplaces } from '../domain/stock-policy.js';
-import { isVerifiedCancellation, isVerifiedSale } from '../shared/stock-coverage.js';
+import {
+  isVerifiedCancellation,
+  isVerifiedReturn,
+  isVerifiedSale,
+} from '../shared/stock-coverage.js';
 import type {
   BillCandidate,
   BillingReport,
@@ -54,7 +58,7 @@ export function billItemKey(billId: string, itemExternalId: string) {
 export const competingInvoiceMessage =
   'Another order could claim this Tally bill. Retry the invoice check to verify the matching sale.';
 
-function mappedUnits(order: FlipkartBillingOrder, mapping?: Listing) {
+export function mappedUnits(order: FlipkartBillingOrder, mapping?: Listing) {
   if (
     !mapping?.verified ||
     !mapping.packSize ||
@@ -136,7 +140,7 @@ function sameOrderIdentity(left: FlipkartBillingOrder, right: FlipkartBillingOrd
 }
 
 function unresolvedSale(order: FlipkartBillingOrder) {
-  return !isVerifiedSale(order) || !!order.stockReturnConflict;
+  return !(isVerifiedSale(order) || isVerifiedReturn(order) || isVerifiedCancellation(order));
 }
 
 interface VoucherOrder {
@@ -160,6 +164,7 @@ function inspectVoucher(
   knownBills: ReadonlyArray<TallySalesBill>,
   knownOrders: KnownVoucherOrder[],
   owner: BillingLink | undefined,
+  previouslyLinked: boolean,
 ): VoucherMatch {
   const { order, row, item, mapping } = target;
   const candidate: VoucherMatch = {
@@ -174,9 +179,13 @@ function inspectVoucher(
     (entry) => entry.accountId === scope.accountId && entry.order.orderItemId === order.orderItemId,
   );
   if (
+    (!previouslyLinked && !isVerifiedSale(order)) ||
     unresolvedSale(order) ||
     targetIdentities.some(
-      (entry) => unresolvedSale(entry.order) || !sameOrderIdentity(order, entry.order),
+      (entry) =>
+        (!previouslyLinked && !isVerifiedSale(entry.order)) ||
+        unresolvedSale(entry.order) ||
+        !sameOrderIdentity(order, entry.order),
     )
   ) {
     candidate.reason = 'The order has an unverified or conflicting sale status or identity.';
@@ -205,7 +214,7 @@ function inspectVoucher(
     candidate.reason = 'The voucher’s stock item is already assigned to another order.';
   } else if (
     knownOrders.some(
-      ({ order: known }) => known.invoiceLookup === 'failed' && isVerifiedSale(known),
+      ({ order: known }) => known.invoiceLookup === 'failed' && !unresolvedSale(known),
     )
   ) {
     // Inspecting a voucher checks all its reference fields against the other
@@ -464,7 +473,10 @@ export function matchBills(
     const recorded = retained.get(order.orderItemId);
     if (
       unresolvedSale(order) ||
-      (recorded && (unresolvedSale(recorded) || !sameOrderIdentity(order, recorded)))
+      (recorded &&
+        (unresolvedSale(recorded) ||
+          (isVerifiedSale(order) && !isVerifiedSale(recorded)) ||
+          !sameOrderIdentity(order, recorded)))
     ) {
       row.status = 'review';
       row.reason =
@@ -667,7 +679,16 @@ export function matchBills(
         const recorded = restoring && prior.billId === bill.externalId;
         if (!selected && !recorded) continue;
         const owner = item && used.get(billItemKey(bill.externalId, item.externalId));
-        const result = inspectVoucher(target, bill, scope, rule, knownBills, knownOrders, owner);
+        const result = inspectVoucher(
+          target,
+          bill,
+          scope,
+          rule,
+          knownBills,
+          knownOrders,
+          owner,
+          recorded,
+        );
         if (
           recorded &&
           result.link?.fingerprint === storedProof(prior) &&
